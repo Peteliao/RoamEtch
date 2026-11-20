@@ -1,0 +1,151 @@
+// GPX / GeoJSON / KML import-export. Output is always strict WGS-84.
+import { createTrip, addSegment, appendPoints, addWaypoint, updateTrip } from './store.js';
+import { uuid } from './geo.js';
+
+export function parseGPX(text) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('XML parse error');
+  const name = doc.querySelector('metadata > name')?.textContent
+    || doc.querySelector('trk > name')?.textContent
+    || doc.querySelector('rte > name')?.textContent || '';
+  const segments = [];
+  const pushPoint = (el, seg) => {
+    const lat = parseFloat(el.getAttribute('lat'));
+    const lon = parseFloat(el.getAttribute('lon'));
+    if (!isFinite(lat) || !isFinite(lon)) return;
+    const ele = el.querySelector('ele')?.textContent;
+    const time = el.querySelector('time')?.textContent;
+    seg.push({
+      lat, lon,
+      alt: ele != null && isFinite(parseFloat(ele)) ? parseFloat(ele) : null,
+      altSrc: ele != null ? 'svc' : null,
+      t: time ? Date.parse(time) : null,
+      acc: null, speed: null
+    });
+  };
+  const trks = doc.querySelectorAll('trk');
+  if (trks.length) {
+    trks.forEach((trk) => {
+      const segs = trk.querySelectorAll('trkseg');
+      if (segs.length) segs.forEach((s) => { const pts = []; s.querySelectorAll('trkpt').forEach((p) => pushPoint(p, pts)); if (pts.length) segments.push(pts); });
+      else { const pts = []; trk.querySelectorAll('trkpt').forEach((p) => pushPoint(p, pts)); if (pts.length) segments.push(pts); }
+    });
+  } else {
+    doc.querySelectorAll('rte').forEach((rte) => {
+      const pts = [];
+      rte.querySelectorAll('rtept').forEach((p) => pushPoint(p, pts));
+      if (pts.length) segments.push(pts);
+    });
+  }
+  const waypoints = [];
+  doc.querySelectorAll('wpt').forEach((w) => {
+    const lat = parseFloat(w.getAttribute('lat')), lon = parseFloat(w.getAttribute('lon'));
+    if (!isFinite(lat) || !isFinite(lon)) return;
+    waypoints.push({
+      lat, lon,
+      name: w.querySelector('name')?.textContent || '',
+      desc: w.querySelector('desc')?.textContent || '',
+      type: 'custom',
+      alt: parseFloat(w.querySelector('ele')?.textContent) || null,
+      time: Date.parse(w.querySelector('time')?.textContent) || null
+    });
+  });
+  if (!segments.length && !waypoints.length) throw new Error('no track data');
+  const hasTime = segments.some((s) => s.some((p) => p.t != null));
+  return { name, segments, waypoints, hasTime };
+}
+
+export async function importGPX(text, fallbackName = 'GPX import') {
+  const parsed = parseGPX(text);
+  const trip = await createTrip({ name: parsed.name || fallbackName, status: 'finished' });
+  for (const pts of parsed.segments) {
+    const seg = await addSegment(trip.id, pts[0]?.t || Date.now());
+    await appendPoints(seg.id, trip.id, pts);
+  }
+  if (!parsed.segments.length) await addSegment(trip.id);
+  for (const w of parsed.waypoints) await addWaypoint({ ...w, tripId: trip.id });
+  await updateTrip(trip.id, { hasTime: parsed.hasTime });
+  return trip;
+}
+
+const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const iso = (t) => (t ? new Date(t).toISOString() : '');
+
+export function buildGPX(full) {
+  const { trip, segments, waypoints } = full;
+  let out = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="TrackMint" xmlns="http://www.topografix.com/GPX/1/1">\n`;
+  out += `  <metadata><name>${esc(trip.name)}</name><time>${iso(trip.createdAt)}</time></metadata>\n`;
+  for (const w of waypoints) {
+    if (w.hidden) continue;
+    out += `  <wpt lat="${w.lat.toFixed(7)}" lon="${w.lon.toFixed(7)}">${w.alt != null ? `<ele>${w.alt.toFixed(1)}</ele>` : ''}<name>${esc(w.name)}</name><desc>${esc(w.desc)}</desc>${w.time ? `<time>${iso(w.time)}</time>` : ''}</wpt>\n`;
+  }
+  out += `  <trk><name>${esc(trip.name)}</name><trkseg>\n`;
+  // segments separated by closing/opening trkseg (standard multi-segment GPX)
+  segments.forEach((seg, i) => {
+    if (i > 0) out += `  </trkseg>\n  <trkseg>\n`;
+    for (const p of seg.points) {
+      out += `    <trkpt lat="${p.lat.toFixed(7)}" lon="${p.lon.toFixed(7)}">${p.alt != null ? `<ele>${p.alt.toFixed(1)}</ele>` : ''}${p.t ? `<time>${iso(p.t)}</time>` : ''}</trkpt>\n`;
+    }
+  });
+  out += `  </trkseg></trk>\n</gpx>\n`;
+  return out;
+}
+
+export function buildGeoJSON(full, { simplified = null } = {}) {
+  const { trip, segments, waypoints } = full;
+  const features = [];
+  segments.forEach((seg, i) => {
+    const pts = simplified ? simplified[i] : seg.points;
+    if (pts.length < 2) return;
+    features.push({
+      type: 'Feature',
+      properties: { kind: 'segment', index: i, name: trip.name },
+      geometry: { type: 'LineString', coordinates: pts.map((p) => (p.alt != null ? [p.lon, p.lat, p.alt] : [p.lon, p.lat])) }
+    });
+  });
+  for (const w of waypoints) {
+    if (w.hidden) continue;
+    features.push({
+      type: 'Feature',
+      properties: { kind: 'waypoint', name: w.name, desc: w.desc, wpType: w.type, time: w.time },
+      geometry: { type: 'Point', coordinates: [w.lon, w.lat] }
+    });
+  }
+  return { type: 'FeatureCollection', name: trip.name, features };
+}
+
+export function buildKML(full) {
+  const { trip, segments, waypoints } = full;
+  let out = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${esc(trip.name)}</name>\n`;
+  out += `<Style id="track"><LineStyle><color>ff a7d42d</color><width>4</width></LineStyle></Style>\n`;
+  segments.forEach((seg, i) => {
+    if (seg.points.length < 2) return;
+    out += `<Placemark><name>${esc(trip.name)} #${i + 1}</name><styleUrl>#track</styleUrl><LineString><tessellate>1</tessellate><coordinates>\n`;
+    out += seg.points.map((p) => `${p.lon.toFixed(7)},${p.lat.toFixed(7)}${p.alt != null ? ',' + p.alt.toFixed(1) : ''}`).join(' ');
+    out += `\n</coordinates></LineString></Placemark>\n`;
+  });
+  for (const w of waypoints) {
+    if (w.hidden) continue;
+    out += `<Placemark><name>${esc(w.name)}</name><description>${esc(w.desc)}</description><Point><coordinates>${w.lon.toFixed(7)},${w.lat.toFixed(7)}${w.alt != null ? ',' + w.alt.toFixed(1) : ''}</coordinates></Point></Placemark>\n`;
+  }
+  out += `</Document></kml>\n`;
+  return out;
+}
+
+export function downloadText(text, filename, mime = 'application/octet-stream') {
+  const blob = new Blob([text], { type: mime });
+  triggerDownload(blob, filename);
+}
+
+export function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+export { uuid };

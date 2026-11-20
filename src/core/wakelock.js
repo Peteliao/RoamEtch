@@ -1,0 +1,42 @@
+// Screen Wake Lock with auto release on hidden / low battery.
+import { get } from './settings.js';
+import { emit } from './events.js';
+
+let sentinel = null;
+let wantActive = false;
+
+export async function requestWakeLock() {
+  wantActive = true;
+  if (!get('wakeLock') || !('wakeLock' in navigator)) return false;
+  if (sentinel) return true;
+  try {
+    sentinel = await navigator.wakeLock.request('screen');
+    sentinel.addEventListener('release', () => { sentinel = null; });
+    emit('wakelock:changed', true);
+    return true;
+  } catch {
+    emit('wakelock:changed', false);
+    return false;
+  }
+}
+
+export async function releaseWakeLock() {
+  wantActive = false;
+  if (sentinel) { try { await sentinel.release(); } catch { /* ignore */ } sentinel = null; }
+  emit('wakelock:changed', false);
+}
+
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState === 'visible' && wantActive) await requestWakeLock();
+});
+
+// low battery auto-release
+if (navigator.getBattery) {
+  navigator.getBattery().then((bat) => {
+    const check = () => {
+      if (!bat.charging && bat.level < 0.15 && sentinel) releaseWakeLock();
+    };
+    bat.addEventListener('levelchange', check);
+    bat.addEventListener('chargingchange', check);
+  }).catch(() => {});
+}
