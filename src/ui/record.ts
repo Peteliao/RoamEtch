@@ -5,7 +5,7 @@ import { on, emit } from '../core/events';
 import { rec, startRecording, pauseRecording, resumeRecording, stopRecording, continueTrip, findRecoverableTrip, createManualTrip, retryGeolocation } from '../core/recorder';
 import { regionState } from '../core/region';
 import { availableBasemaps } from '../core/providers';
-import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude } from '../core/geo';
+import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel } from '../core/geo';
 import { altSourceShortKey, altSourceTagClass } from '../core/elevation';
 import { loadTripFull, updateTrip, getTrip } from '../core/store';
 import { onBroadcast } from '../core/locks';
@@ -39,7 +39,7 @@ export function createRecordView() {
     const { center, zoom } = initialCenter();
     map = new TrackMap(mapContainer, {
       fallbackText: t('map.fallback'),
-      onWaypointClick: (wp) => openWaypointModal(wp),
+      onWaypointClick: (wp) => openWaypointModal(wp, recEditOpts()),
       onWaypointMove: (wp, lon, lat) => moveWaypoint(wp, lon, lat),
       onMapClick: (lon, lat) => { if (appState.editMode && appState.activeTripId) openWaypointModal({ lat, lon }); },
       onVertexMove: (segId, idx, lon, lat) => moveVertex(segId, idx, lon, lat),
@@ -106,9 +106,8 @@ export function createRecordView() {
   // ---------- live panel ----------
   const panel = el('div', { class: 'live-panel' + (get('panelCollapsed') ? ' collapsed' : '') });
   const pStatus = el('span', { class: 'st idle' }, t('record.statusIdle'));
-  const pAcc = el('span', { class: 'acc' }, '');
   const pHead = el('div', { class: 'lp-head', onclick: () => { panel.classList.toggle('collapsed'); set('panelCollapsed', panel.classList.contains('collapsed')); } },
-    pStatus, el('span', { class: 'rec-dot', id: 'panel-rec-dot' }), pAcc, icon('chevron', 16));
+    pStatus, el('span', { class: 'rec-dot', id: 'panel-rec-dot' }), icon('chevron', 16));
   const grid = el('div', { class: 'live-grid' });
   function cell(key, hero = false) {
     const v = el('div', { class: 'v' }, '--');
@@ -119,6 +118,7 @@ export function createRecordView() {
   }
   const cDist = cell('panel.distance', true);
   const cDur = cell('panel.duration');
+  const cSig = cell('panel.signal');
   const cSpeed = cell('panel.speed');
   const cAlt = cell('panel.altitude');
   const cAsc = cell('panel.ascent');
@@ -130,8 +130,17 @@ export function createRecordView() {
     set('speedDisplay', cur === 'speed' ? 'pace' : 'speed');
     if (rec.live) renderPanel(rec.live);
   };
-  const detail = el('div', { class: 'small muted', style: { padding: '6px 12px', display: 'flex', gap: '12px', flexWrap: 'wrap', fontFamily: 'var(--mono)', fontSize: '11px' } });
+  const detail = el('div', { class: 'lp-detail' });
   panel.append(pHead, grid, detail);
+
+  const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
+  function renderSignal(host, acc) {
+    const lv = signalLevel(acc);
+    host.innerHTML = '';
+    const bars = el('span', { class: `sig-bars lv${lv}` });
+    for (let i = 0; i < 4; i++) bars.append(el('i'));
+    host.append(bars, el('small', { class: 'sig-txt' }, lv ? t(`panel.sig${SIG_KEYS[lv]}`) : '--'));
+  }
 
   function currentActivity() {
     return appState.activeTripFull?.trip?.activity || get('activity');
@@ -162,7 +171,8 @@ export function createRecordView() {
     cAlt.v.innerHTML = `${a.v}<small>${a.u}</small> <span class="tag ${altSourceTagClass(L.altSrc)}">${t(altSourceShortKey(L.altSrc))}</span>`;
     cAsc.v.innerHTML = `${Math.round(L.ascent)}<small>m</small>`;
     cDesc.v.innerHTML = `${Math.round(L.descent)}<small>m</small>`;
-    pAcc.textContent = L.acc != null ? `±${Math.round(L.acc)}m` : '';
+    renderSignal(cSig.v, L.acc);
+    cSig.k.textContent = L.acc != null ? `${t('panel.signal')} ±${Math.round(L.acc)}m` : t('panel.signal');
     const slopeTxt = L.slope != null ? `${L.slope > 0 ? '+' : ''}${L.slope.toFixed(1)}%` : '--';
     detail.innerHTML = '';
     detail.append(...[
@@ -322,25 +332,30 @@ export function createRecordView() {
     renderStatus();
     if (rec.status === 'idle' || rec.status === 'finished') {
       renderAutoTag();
-      actRow.append(activitySel, autoTag);
+      activitySel.className = 'rec-pill select';
       btnRow.append(
-        el('button', { class: 'rec-btn start', onclick: onStart }, icon('play', 26), t('record.start')),
-        el('button', { class: 'rec-btn small', onclick: onManual }, icon('plus', 18), t('record.manualCreate'))
+        activitySel,
+        el('button', { class: 'rec-pill start', onclick: onStart }, icon('play', 17), t('record.start')),
+        el('button', { class: 'rec-pill ghost', onclick: onManual }, icon('plus', 15), t('record.manualShort'))
       );
     } else if (rec.status === 'recording') {
       renderAutoTag();
       liveActSel.value = liveActivity;
+      liveActSel.className = 'rec-pill select live';
       actRow.append(liveActSel, autoTag);
       btnRow.append(
+        el('button', { class: 'rec-btn node', onclick: openRecWaypoint }, icon('pin', 20), t('record.node')),
         el('button', { class: 'rec-btn pause', onclick: () => pauseRecording() }, icon('pause', 22), t('record.pause')),
         el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop'))
       );
     } else if (rec.status === 'paused') {
       renderAutoTag();
       liveActSel.value = liveActivity;
+      liveActSel.className = 'rec-pill select live';
       actRow.append(liveActSel, autoTag);
       btnRow.append(
-        el('button', { class: 'rec-btn start', onclick: () => resumeRecording() }, icon('play', 24), t('record.resume')),
+        el('button', { class: 'rec-btn node', onclick: openRecWaypoint }, icon('pin', 20), t('record.node')),
+        el('button', { class: 'rec-btn resume', onclick: () => resumeRecording() }, icon('play', 22), t('record.resume')),
         el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop'))
       );
     }
@@ -404,6 +419,23 @@ export function createRecordView() {
     toast(t('record.stopped'), 'ok');
   }
 
+  // ---------- waypoints mid-recording ----------
+  function recEditOpts() {
+    return (rec.status === 'recording' || rec.status === 'paused') && rec.tripId
+      ? { tripId: rec.tripId, onSaved: refreshRecordingWaypoints }
+      : {};
+  }
+  async function refreshRecordingWaypoints() {
+    if (!rec.tripId) return;
+    const full = await loadTripFull(rec.tripId);
+    if (full && map && !psActive) map.setWaypoints(full.waypoints);
+  }
+  function openRecWaypoint() {
+    const L = rec.live;
+    if (!L || L.lat == null || L.lon == null) { toast(t('record.nodeNoFix'), 'warn'); return; }
+    openWaypointModal({ lat: L.lat, lon: L.lon }, recEditOpts());
+  }
+
   // ---------- banners ----------
   function geoBanner(msg, onRetry) {
     return el('div', { class: 'debug-banner', style: { display: 'flex', gap: '8px', alignItems: 'center' } },
@@ -456,6 +488,7 @@ export function createRecordView() {
   }
   const odDist = odCell('panel.distance', true);
   const odDur = odCell('panel.duration');
+  const odSig = odCell('panel.signal');
   const odSpeed = odCell('panel.speed');
   const odAlt = odCell('panel.altitude');
   const odAsc = odCell('panel.ascent');
@@ -531,6 +564,7 @@ export function createRecordView() {
     odAlt.innerHTML = `${a.v}<small>${a.u}</small>`;
     odAsc.innerHTML = `${Math.round(L.ascent)}<small>m</small>`;
     odDesc.innerHTML = `${Math.round(L.descent)}<small>m</small>`;
+    renderSignal(odSig, L.acc);
   }
 
   async function setPowerLock(on) {

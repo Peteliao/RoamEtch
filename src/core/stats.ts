@@ -14,6 +14,7 @@ export function computeStats(segments, opts: any = {}) {
   const segStats = [];
   let distance = 0, movingMs = 0, maxSpeed = 0;
   let maxAlt = null, minAlt = null;
+  let accSum = 0, accN = 0;
   let firstT = null, lastT = null;
   const dSeries = [], altSeries = [], speedSeries = [], slopeSeries = [], tSeries = [];
   let cumD = 0;
@@ -42,6 +43,7 @@ export function computeStats(segments, opts: any = {}) {
       if (speed != null && speed > maxSpeed && speed < 80) maxSpeed = speed;
       segDist += stepD;
       cumD += stepD;
+      if (p.acc != null && isFinite(p.acc) && p.acc > 0) { accSum += p.acc; accN++; }
       if (p.alt != null && isFinite(p.alt)) {
         segAlts.push(p.alt);
         if (maxAlt == null || p.alt > maxAlt) maxAlt = p.alt;
@@ -79,6 +81,7 @@ export function computeStats(segments, opts: any = {}) {
     distance, duration, movingMs, stillMs, avgSpeed, maxSpeed,
     avgPace: avgSpeed > 0.3 ? 1000 / avgSpeed : null,
     ascent, descent, maxAlt, minAlt,
+    avgAcc: accN ? accSum / accN : null,
     pointCount: all.length, segCount: segments.length, hasTime,
     segments: segStats,
     series: { d: dSeries, alt: smoothAlt, rawAlt: altSeries, speed: smoothSpeed, slope: slopeSeries, t: tSeries }

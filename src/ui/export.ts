@@ -84,9 +84,9 @@ export function createExportView(getRecordMap) {
   // ---- poster ----
   let posterBlob = null;
   let posterSize = 'vertical';
-  const sizeToggle = el('div', { class: 'seg-toggle' });
+  const sizeToggle = el('div', { class: 'seg-toggle sm' });
   for (const s of ['vertical', 'square']) {
-    const b = el('button', { class: s === posterSize ? 'active' : '' }, t(s === 'vertical' ? 'export.posterVertical' : 'export.posterSquare'));
+    const b = el('button', { class: s === posterSize ? 'active' : '' }, t(s === 'vertical' ? 'export.posterVShort' : 'export.posterSShort'));
     b.onclick = () => {
       posterSize = s;
       sizeToggle.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
@@ -95,9 +95,9 @@ export function createExportView(getRecordMap) {
     sizeToggle.append(b);
   }
   const previewBox = el('div', { class: 'poster-preview', style: { display: 'none' } });
-  const genBtn = el('button', { class: 'btn primary' }, icon('photo', 16), t('export.generatePoster'));
-  const dlBtn = el('button', { class: 'btn', style: { display: 'none' } }, icon('download', 16), t('export.downloadPoster'));
-  const posterShareBtn = el('button', { class: 'btn', style: { display: 'none' } }, icon('share', 16), t('export.shareImage'));
+  const genBtn = el('button', { class: 'btn primary sm' }, icon('photo', 15), t('export.generateShort'));
+  const dlBtn = el('button', { class: 'btn sm icon-only', title: t('export.downloadPoster'), 'aria-label': t('export.downloadPoster'), style: { display: 'none' } }, icon('download', 16));
+  const posterShareBtn = el('button', { class: 'btn sm icon-only', title: t('export.shareImage'), 'aria-label': t('export.shareImage'), style: { display: 'none' } }, icon('share', 16));
   posterShareBtn.onclick = () => { if (posterBlob) shareMedia(posterBlob, `localtrace-poster-${Date.now()}.png`, 'image'); };
   const posterNote = el('div', { class: 'small faint', style: { marginTop: '6px' } });
   genBtn.onclick = async () => {
@@ -127,7 +127,7 @@ export function createExportView(getRecordMap) {
     }
     genBtn.disabled = false;
     genBtn.innerHTML = '';
-    genBtn.append(icon('photo', 16), t('export.generatePoster'));
+    genBtn.append(icon('photo', 15), t('export.generateShort'));
   };
   dlBtn.onclick = async () => {
     if (!posterBlob) return;
@@ -147,8 +147,7 @@ export function createExportView(getRecordMap) {
   };
   const posterCard = el('div', { class: 'card' },
     el('h3', {}, '🖼 ' + t('export.poster')),
-    el('div', { class: 'row wrap', style: { marginBottom: '10px' } }, sizeToggle),
-    el('div', { class: 'row wrap' }, genBtn, dlBtn, posterShareBtn),
+    el('div', { class: 'card-line' }, sizeToggle, genBtn, dlBtn, posterShareBtn),
     posterNote,
     el('div', { style: { marginTop: '10px' } }, previewBox)
   );
@@ -157,7 +156,7 @@ export function createExportView(getRecordMap) {
   const videoOk = videoSupported();
   let videoBlob = null, videoExt = 'webm', videoAbort = null, videoUrl = null;
   let videoSeconds = 15;
-  const durToggle = el('div', { class: 'seg-toggle' });
+  const durToggle = el('div', { class: 'seg-toggle sm' });
   for (const s of [10, 15, 30]) {
     const b = el('button', { class: s === videoSeconds ? 'active' : '' }, t('export.videoSeconds', { s }));
     b.onclick = () => {
@@ -167,10 +166,10 @@ export function createExportView(getRecordMap) {
     };
     durToggle.append(b);
   }
-  const vGenBtn = el('button', { class: 'btn primary' }, icon('play', 16), t('export.videoGenerate'));
-  const vCancelBtn = el('button', { class: 'btn ghost', style: { display: 'none' } }, t('common.cancel'));
-  const vDlBtn = el('button', { class: 'btn', style: { display: 'none' } }, icon('download', 16), t('export.videoDownload'));
-  const vShareBtn = el('button', { class: 'btn', style: { display: 'none' } }, icon('share', 16), t('export.shareVideo'));
+  const vGenBtn = el('button', { class: 'btn primary sm' }, icon('play', 15), t('export.generateShort'));
+  const vCancelBtn = el('button', { class: 'btn ghost sm icon-only', title: t('common.cancel'), 'aria-label': t('common.cancel'), style: { display: 'none' } }, icon('x', 16));
+  const vDlBtn = el('button', { class: 'btn sm icon-only', title: t('export.videoDownload'), 'aria-label': t('export.videoDownload'), style: { display: 'none' } }, icon('download', 16));
+  const vShareBtn = el('button', { class: 'btn sm icon-only', title: t('export.shareVideo'), 'aria-label': t('export.shareVideo'), style: { display: 'none' } }, icon('share', 16));
   vShareBtn.onclick = () => { if (videoBlob) shareMedia(videoBlob, `localtrace-video-${Date.now()}.${videoExt}`, 'video'); };
   const vPreview = el('video', { controls: true, playsinline: true, 'webkit-playsinline': '', preload: 'metadata', style: { width: '100%', display: 'none', marginTop: '10px', borderRadius: '10px', background: '#000' } });
   const vNote = el('div', { class: 'small faint', style: { marginTop: '6px' } });
@@ -217,7 +216,7 @@ export function createExportView(getRecordMap) {
     vGenBtn.disabled = !videoOk;
     tripSel.disabled = false;
     vGenBtn.innerHTML = '';
-    vGenBtn.append(icon('play', 16), t('export.videoGenerate'));
+    vGenBtn.append(icon('play', 15), t('export.generateShort'));
     vCancelBtn.style.display = 'none';
     durToggle.querySelectorAll('button').forEach((x) => { x.disabled = false; });
   };
@@ -232,8 +231,7 @@ export function createExportView(getRecordMap) {
     el('div', { class: 'small faint', style: { marginBottom: '8px' } }, t('export.videoHint')),
     videoOk ? null : el('div', { class: 'debug-banner' }, '⚠ ' + t('export.videoUnsupported')),
     isWeChat() ? el('div', { class: 'small', style: { color: 'var(--warn)', marginBottom: '8px' } }, t('export.videoWechatHint')) : null,
-    el('div', { class: 'row wrap', style: { marginBottom: '10px' } }, durToggle),
-    el('div', { class: 'row wrap' }, vGenBtn, vCancelBtn, vDlBtn, vShareBtn),
+    el('div', { class: 'card-line' }, durToggle, vGenBtn, vCancelBtn, vDlBtn, vShareBtn),
     vNote,
     vPreview
   );

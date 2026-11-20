@@ -135,6 +135,15 @@ export function fmtAltitude(m, units = 'metric') {
   return units === 'imperial' ? { v: Math.round(m * 3.28084).toString(), u: 'ft' } : { v: Math.round(m).toString(), u: 'm' };
 }
 
+/** GPS fix quality from reported horizontal accuracy (metres) → 1..4 bars, 0 unknown. */
+export function signalLevel(acc) {
+  if (acc == null || !isFinite(acc) || acc <= 0) return 0;
+  if (acc <= 8) return 4;
+  if (acc <= 15) return 3;
+  if (acc <= 30) return 2;
+  return 1;
+}
+
 export function uuid() {
   if (crypto.randomUUID) return crypto.randomUUID();
   return 'xxxx-xxxx-4xxx-yxxx'.replace(/[xy]/g, (c) => {

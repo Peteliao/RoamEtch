@@ -3,15 +3,18 @@
 // degrades to a pure-vector poster when tiles fail / offline / vector-only.
 import { applyPrivacy } from './privacy';
 import { computeStats } from './stats';
-import { fmtDistance, fmtDuration } from './geo';
+import { fmtDistance, fmtDuration, signalLevel } from './geo';
 import { get } from './settings';
 import { prepareMap, paintTrack } from './mapPaint';
 import { computeTripScore, drawScoreBadge, fitText, roundRectPath } from './tripScore';
 import { canvasPalette } from './palette';
+import { loadBrandFonts, drawBrandBlock, SPORT_FONT } from './brand';
 import { t } from './i18n';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
 const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
+const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
+const signalText = (lv) => (lv ? t(`panel.sig${SIG_KEYS[lv]}`) : '--');
 
 function drawProfile(ctx, stats, x, y, w, h, P) {
   const alts = stats.series.alt;
@@ -44,7 +47,19 @@ function drawProfile(ctx, stats, x, y, w, h, P) {
   ctx.fillText(`${Math.round(minA)}m`, x + 4, y + h - 6);
 }
 
-function drawInfoPanel(ctx, full, stats, x, y, w, h, { basemapLabel, score }, P) {
+function drawSignalStat(ctx, x, baseline, avgAcc, P) {
+  const lv = signalLevel(avgAcc);
+  const hs = [18, 28, 38, 48], bw = 10, gap = 5;
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = i < lv ? P.accent : P.grid;
+    ctx.fillRect(x + i * (bw + gap), baseline - hs[i], bw, hs[i]);
+  }
+  ctx.fillStyle = lv ? P.accent : P.muted;
+  ctx.font = `700 36px ${SPORT_FONT}`;
+  ctx.fillText(signalText(lv), x + 4 * (bw + gap) + 10, baseline - 4);
+}
+
+function drawInfoPanel(ctx, full, stats, x, y, w, h, { score }, P) {
   const units = get('units');
   ctx.textAlign = 'left';
   ctx.fillStyle = P.text;
@@ -68,7 +83,7 @@ function drawInfoPanel(ctx, full, stats, x, y, w, h, { basemapLabel, score }, P)
     [fmtDuration(stats.duration, { compact: true }), '', t('panel.duration')],
     [`${Math.round(stats.ascent)}`, 'm', t('panel.ascent')]
   ];
-  const cw = w / 3;
+  const cw = w / 4;
   cells.forEach(([v, u, k], i) => {
     const cx = x + i * cw;
     ctx.fillStyle = P.accent;
@@ -80,14 +95,14 @@ function drawInfoPanel(ctx, full, stats, x, y, w, h, { basemapLabel, score }, P)
     if (u) ctx.fillText(u, cx + vw + 8, y + 196);
     ctx.fillText(k, cx, y + 232);
   });
+  drawSignalStat(ctx, x + 3 * cw, y + 196, stats.avgAcc, P);
+  ctx.fillStyle = P.muted;
+  ctx.font = `24px ${FONT}`;
+  ctx.fillText(`${t('panel.signal')}${stats.avgAcc != null ? ` ±${Math.round(stats.avgAcc)}m` : ''}`, x + 3 * cw, y + 232);
 
-  drawProfile(ctx, stats, x, y + 260, w, Math.max(120, h - 360), P);
-
-  ctx.fillStyle = P.faint;
-  ctx.font = `20px ${FONT}`;
-  ctx.fillText(`${t('app.name')} · ${basemapLabel || 'vector'} · WGS-84`, x, y + h - 44);
-  ctx.font = `17px ${FONT}`;
-  ctx.fillText(t('analysis.disclaimer').slice(0, 60), x, y + h - 14);
+  const brandY = y + h - 150;
+  drawProfile(ctx, stats, x, y + 260, w, Math.max(120, brandY - 30 - (y + 260)), P);
+  drawBrandBlock(ctx, x, brandY, 150, P, w - 170);
 }
 
 function rgba(hex, a) {
@@ -123,7 +138,7 @@ function drawStatCard(ctx, x, y, w, h, v, u, label, P) {
   ctx.fillText(label, x + 22, y + 82);
 }
 
-function drawSquarePanel(ctx, full, stats, m, score, W, H, mapH, P) {
+function drawSquarePanel(ctx, full, stats, score, W, H, mapH, P) {
   const units = get('units');
   const py = mapH;
   ctx.fillStyle = P.panel;
@@ -159,14 +174,23 @@ function drawSquarePanel(ctx, full, stats, m, score, W, H, mapH, P) {
     [fmtDuration(stats.duration, { compact: true }), '', t('panel.duration')],
     [`${Math.round(stats.ascent)}`, 'm', t('panel.ascent')]
   ];
-  const gap = 16, cw = (W - 120 - gap * 2) / 3, ch = 104, cy = py + 190;
+  const gap = 16, cw = (W - 120 - gap * 3) / 4, ch = 92, cy = py + 186;
   cells.forEach(([v, u, k], i) => drawStatCard(ctx, 60 + i * (cw + gap), cy, cw, ch, v, u, k, P));
 
-  drawProfile(ctx, stats, 60, cy + ch + 24, W - 120, 100, P);
+  const sx = 60 + 3 * (cw + gap);
+  roundRectPath(ctx, sx, cy, cw, ch, 18);
+  ctx.fillStyle = P.cellBg;
+  ctx.fill();
+  ctx.strokeStyle = P.grid;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  drawSignalStat(ctx, sx + 22, cy + 58, stats.avgAcc, P);
+  ctx.fillStyle = P.muted;
+  ctx.font = `22px ${FONT}`;
+  ctx.textAlign = 'left';
+  ctx.fillText(t('panel.signal'), sx + 22, cy + 84);
 
-  ctx.fillStyle = P.faint;
-  ctx.font = `19px ${FONT}`;
-  ctx.fillText(`${t('app.name')} · ${m.label || 'vector'} · WGS-84`, 60, H - 24);
+  drawBrandBlock(ctx, 60, H - 160, 130, P, W - 120 - 150);
 }
 
 /**
@@ -180,6 +204,7 @@ export async function generatePoster(full, {
   onProgress
 }: any = {}): Promise<any> {
   const P = canvasPalette();
+  await loadBrandFonts();
   const cropped = applyPrivacy(full, privacy);
   const stats = computeStats(cropped.segments, { ascentThreshold: get('ascentThreshold') });
   const score = computeTripScore(stats, full.trip.activity);
@@ -198,7 +223,7 @@ export async function generatePoster(full, {
     ctx.drawImage(m.bg, 0, 0);
     paintTrack(ctx, m.fit, m.segments, m.waypoints, { lineWidth: 7, dotRadius: 13 });
     blendSeam(ctx, mapH - 170, mapH, W, P);
-    drawSquarePanel(ctx, full, stats, m, score, W, H, mapH, P);
+    drawSquarePanel(ctx, full, stats, score, W, H, mapH, P);
     const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
     return { canvas, blob, usedVectorFallback: m.vector };
   }
@@ -215,7 +240,7 @@ export async function generatePoster(full, {
   ctx.fillRect(0, mapH, W, H - mapH);
   ctx.fillStyle = P.accent;
   ctx.fillRect(60, mapH + 36, 64, 6);
-  drawInfoPanel(ctx, full, stats, 60, mapH + 60, W - 120, H - mapH - 100, { basemapLabel: m.label, score }, P);
+  drawInfoPanel(ctx, full, stats, 60, mapH + 60, W - 120, H - mapH - 100, { score }, P);
 
   const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
   return { canvas, blob, usedVectorFallback: m.vector };

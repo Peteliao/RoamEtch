@@ -21,9 +21,9 @@ async function afterEdit() {
 }
 
 // ---------------- waypoints ----------------
-export function openWaypointModal(wpOrPos) {
+export function openWaypointModal(wpOrPos, opts: any = {}) {
   const isNew = !wpOrPos.id;
-  const tripId = appState.activeTripId;
+  const tripId = opts.tripId || appState.activeTripId;
   if (!tripId) { toast(t('analysis.noTrip'), 'warn'); return; }
   const wp = isNew
     ? { lat: wpOrPos.lat, lon: wpOrPos.lon, name: '', desc: '', type: 'custom', time: Date.now(), hidden: false, mediaIds: [], alt: null }
@@ -105,7 +105,7 @@ export function openWaypointModal(wpOrPos) {
     title: isNew ? t('wp.add') : t('wp.edit'),
     body,
     footer: [
-      !isNew ? el('button', { class: 'btn danger', onclick: async () => { m.close(); await deleteWaypointAction(wp); } }, icon('trash', 15), t('common.delete')) : null,
+      !isNew ? el('button', { class: 'btn danger', onclick: async () => { m.close(); await deleteWaypointAction(wp); opts.onSaved?.(); } }, icon('trash', 15), t('common.delete')) : null,
       el('button', { class: 'btn ghost', onclick: () => m.close() }, t('common.cancel')),
       el('button', { class: 'btn primary', onclick: save }, t('common.save'))
     ]
@@ -146,6 +146,7 @@ export function openWaypointModal(wpOrPos) {
     m.close();
     toast(t('wp.saved'), 'ok');
     await afterEdit();
+    opts.onSaved?.();
   }
 }
 

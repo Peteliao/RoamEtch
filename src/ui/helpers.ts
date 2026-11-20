@@ -35,6 +35,7 @@ export function icon(name, size = 20) {
     pause: '<path d="M6 4h4v16H6zM14 4h4v16h-4z" fill="currentColor"/>',
     stop: '<rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor"/>',
     plus: '<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
+    pin: '<path d="M12 21s-6.5-5.32-6.5-10.5a6.5 6.5 0 0 1 13 0C18.5 15.68 12 21 12 21Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><circle cx="12" cy="10.5" r="2.3" fill="currentColor"/>',
     trash: '<path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     undo: '<path d="M8 5 3 10l5 5M3 10h11a7 7 0 0 1 0 14h-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     redo: '<path d="m16 5 5 5-5 5m5-5H10a7 7 0 0 0 0 14h3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',

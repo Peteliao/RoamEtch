@@ -6,13 +6,16 @@ import { computeStats } from './stats';
 import { prepareMap, paintTrack } from './mapPaint';
 import { computeTripScore, drawScoreBadge, fitText } from './tripScore';
 import { canvasPalette } from './palette';
-import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude } from './geo';
+import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel } from './geo';
+import { loadBrandFonts, drawQr, SITE_URL, SPORT_FONT } from './brand';
 import { get } from './settings';
 import { t } from './i18n';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
 const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
+const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
 const W = 1080, H = 1920, MAP_H = 1080;
+const INTRO_MS = 2800, FADE_MS = 500;
 
 export const videoSupported = () =>
   typeof MediaRecorder !== 'undefined' && typeof HTMLCanvasElement !== 'undefined' && !!HTMLCanvasElement.prototype.captureStream;
@@ -73,7 +76,7 @@ function cumulativeAscentDescent(alts, threshold) {
 
 function drawCell(ctx, x, y, v, u, label, P) {
   ctx.fillStyle = P.accent;
-  ctx.font = `800 52px ${MONO}`;
+  ctx.font = `700 52px ${SPORT_FONT}`;
   ctx.textAlign = 'left';
   ctx.fillText(v, x, y);
   const vw = ctx.measureText(v).width;
@@ -81,6 +84,22 @@ function drawCell(ctx, x, y, v, u, label, P) {
   ctx.font = `22px ${FONT}`;
   if (u) ctx.fillText(u, x + vw + 8, y);
   ctx.fillText(label, x, y + 34);
+}
+
+function drawSignalCell(ctx, x, y, avgAcc, P) {
+  const lv = signalLevel(avgAcc);
+  const hs = [16, 24, 32, 40], bw = 9, gap = 5;
+  for (let i = 0; i < 4; i++) {
+    ctx.fillStyle = i < lv ? P.accent : P.grid;
+    ctx.fillRect(x + i * (bw + gap), y - hs[i], bw, hs[i]);
+  }
+  ctx.fillStyle = lv ? P.accent : P.muted;
+  ctx.font = `700 34px ${SPORT_FONT}`;
+  ctx.textAlign = 'left';
+  ctx.fillText(lv ? t(`panel.sig${SIG_KEYS[lv]}`) : '--', x + 4 * (bw + gap) + 8, y - 4);
+  ctx.fillStyle = P.muted;
+  ctx.font = `22px ${FONT}`;
+  ctx.fillText(`${t('panel.signal')}${avgAcc != null ? ` ±${Math.round(avgAcc)}m` : ''}`, x, y + 34);
 }
 
 function drawProfileCursor(ctx, prof, meta, curD, curA, x, y, w, h, P) {
@@ -143,6 +162,7 @@ export async function generateTrackVideo(full, {
   if (N < 2) throw new Error('no-track');
   const score = computeTripScore(stats, full.trip.activity);
   const P = canvasPalette();
+  await loadBrandFonts();
 
   const m = await prepareMap({
     w: W, h: MAP_H, pad: 80, segments: cropped.segments, waypoints: cropped.waypoints,
@@ -210,11 +230,12 @@ export async function generateTrackVideo(full, {
     const alt = fmtAltitude(stats.series.alt[idx] ?? stats.series.rawAlt[idx], units);
     const asc = fmtAltitude(cumAsc[idx], units);
     const desc = fmtAltitude(cumDesc[idx], units);
-    const cw = (W - 120) / 3;
+    const cw = (W - 120) / 4;
     const row1 = py0 + 228, row2 = py0 + 354;
     drawCell(ctx, 60, row1, d.v, d.u, t('panel.distance'), P);
     drawCell(ctx, 60 + cw, row1, fmtDuration(span > 0 ? u * span : null), '', t('export.videoElapsed'), P);
     drawCell(ctx, 60 + cw * 2, row1, sp.v, sp.u, t('panel.speed'), P);
+    drawSignalCell(ctx, 60 + cw * 3, row1, stats.avgAcc, P);
     drawCell(ctx, 60, row2, alt.v, alt.u, t('panel.altitude'), P);
     drawCell(ctx, 60 + cw, row2, asc.v, asc.u, t('panel.ascent'), P);
     drawCell(ctx, 60 + cw * 2, row2, desc.v, desc.u, t('panel.descent'), P);
@@ -232,7 +253,37 @@ export async function generateTrackVideo(full, {
 
     ctx.fillStyle = P.faint;
     ctx.font = `20px ${FONT}`;
-    ctx.fillText(`${t('app.name')} · ${m.label} · WGS-84`, 60, H - 36);
+    ctx.fillText(`${t('app.name')} · ${SITE_URL}`, 60, H - 36);
+  }
+
+  // Opening title card: brand, slogan, QR + URL — played before the replay.
+  function drawIntro() {
+    ctx.fillStyle = P.panel;
+    ctx.fillRect(0, 0, W, H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = P.accent;
+    ctx.font = `700 84px ${SPORT_FONT}`;
+    ctx.fillText(t('app.name'), W / 2, 556);
+    ctx.fillStyle = P.muted;
+    ctx.font = `600 34px ${FONT}`;
+    ctx.fillText(t('app.tagline'), W / 2, 618);
+    ctx.fillStyle = P.accent;
+    ctx.fillRect(W / 2 - 32, 700, 64, 6);
+    ctx.fillStyle = P.text;
+    ctx.font = `700 58px ${SPORT_FONT}`;
+    ctx.fillText(t('app.slogan'), W / 2, 792);
+    const qr = 320;
+    drawQr(ctx, SITE_URL, (W - qr) / 2, 860, qr);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = P.muted;
+    ctx.font = `600 34px ${SPORT_FONT}`;
+    ctx.fillText(t('app.scan'), W / 2, 1256);
+    ctx.fillStyle = P.text;
+    ctx.font = `600 30px ${SPORT_FONT}`;
+    ctx.fillText(SITE_URL, W / 2, 1306);
+    ctx.fillStyle = P.faint;
+    ctx.font = `500 26px ${SPORT_FONT}`;
+    ctx.fillText(t('app.brandLine'), W / 2, 1356);
   }
 
   const mime = pickMime();
@@ -244,9 +295,10 @@ export async function generateTrackVideo(full, {
   rec.start(250);
 
   const playMs = seconds * 1000;
-  const totalMs = playMs + 800; // hold the final frame briefly
+  const totalMs = INTRO_MS + playMs + 800; // intro, replay, then hold the final frame briefly
   let idx = 0, aborted = false;
   drawFrame(0, 0);
+  drawIntro();
   let cover = '';
   try { cover = canvas.toDataURL('image/jpeg', 0.82); } catch { /* canvas tainted by tiles */ }
   await new Promise<void>((resolve) => {
@@ -254,9 +306,16 @@ export async function generateTrackVideo(full, {
     const step = (now) => {
       if (signal?.aborted) { aborted = true; resolve(); return; }
       const el = now - t0;
-      const u = Math.min(1, el / playMs);
+      const u = el <= INTRO_MS ? 0 : Math.min(1, (el - INTRO_MS) / playMs);
+      const introA = el >= INTRO_MS ? 0 : el > INTRO_MS - FADE_MS ? (INTRO_MS - el) / FADE_MS : 1;
       while (idx < N - 1 && pointU[idx + 1] <= u) idx++;
       drawFrame(idx, u);
+      if (introA > 0) {
+        ctx.save();
+        ctx.globalAlpha = introA;
+        drawIntro();
+        ctx.restore();
+      }
       onProgress?.(0.1 + 0.9 * Math.min(1, el / totalMs));
       if (el >= totalMs) { resolve(); return; }
       requestAnimationFrame(step);

@@ -1,5 +1,7 @@
 // TrackMint迹刻 bootstrap — pure frontend, offline-first, dual-region adaptive.
 import './styles/main.css';
+import '@fontsource/barlow-condensed/600.css';
+import '@fontsource/barlow-condensed/700.css';
 import { initI18n, t } from './core/i18n';
 import { initRegion, regionState } from './core/region';
 import * as themeCore from './core/theme';

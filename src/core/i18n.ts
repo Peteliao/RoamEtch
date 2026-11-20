@@ -4,7 +4,12 @@ import { get, resolvedLanguage, set } from './settings';
 import { emit } from './events';
 
 const zh = {
-  app: { name: 'TrackMint迹刻', tagline: '行程记录 · 分析 · 分享' },
+  app: {
+    name: 'TrackMint迹刻', tagline: '行程记录 · 分析 · 分享',
+    slogan: '把每一段旅程，刻在地图上',
+    scan: '扫码体验 TrackMint迹刻',
+    brandLine: '免费使用 · 无需注册 · 数据只存本机'
+  },
   boot: { init: '正在初始化…', region: '识别服务环境…' },
   tabs: { record: '记录', trips: '行程', analysis: '分析', export: '分享', settings: '设置' },
   common: {
@@ -36,7 +41,8 @@ const zh = {
     permissionPrompt: '正在请求定位权限…',
     searching: '正在搜索 GPS 信号…',
     firstFix: '已定位，开始记录',
-    manualCreate: '手动创建行程',
+    manualCreate: '手动创建行程', manualShort: '手动',
+    node: '节点', nodeNoFix: '暂未定位，无法添加节点',
     wakeLockOn: '屏幕常亮已开启', wakeLockOff: '屏幕常亮已释放',
     powerLock: '省电锁屏',
     lockHint: '长按圆圈 1.5 秒解锁',
@@ -68,6 +74,7 @@ const zh = {
   },
   panel: {
     distance: '里程', duration: '总时长', moving: '移动时间', still: '静止时间',
+    signal: '搜星', sigStrong: '强', sigGood: '良', sigFair: '中', sigWeak: '弱',
     speed: '速度', pace: '配速', altitude: '海拔', ascent: '累计爬升', descent: '累计下降',
     slope: '坡度', accuracy: '定位精度', coords: '坐标', points: '轨迹点', segments: '分段',
     altGps: 'GPS 海拔', altSvc: '高程服务', altCache: '缓存', altNone: '海拔不可用',
@@ -169,6 +176,8 @@ const zh = {
     vectorOnly: '纯矢量模式（无底图）',
     preview: '导出预览', poster: '图片海报', posterSize: '海报尺寸',
     posterVertical: '竖版 1080×1920', posterSquare: '方形 1080×1080',
+    posterVShort: '竖版', posterSShort: '方版',
+    generateShort: '生成',
     generatePoster: '生成海报', downloadPoster: '下载海报',
     posterVectorFallback: '底图 CORS 受限或离线，已降级为纯矢量海报',
     wechatHint: '长按图片保存到相册',
@@ -253,7 +262,12 @@ const zh = {
 };
 
 const en = {
-  app: { name: 'TrackMint', tagline: 'Record · Analyze · Share' },
+  app: {
+    name: 'TrackMint', tagline: 'Record · Analyze · Share',
+    slogan: 'Carve every journey onto the map',
+    scan: 'Scan to try TrackMint',
+    brandLine: 'Free · No sign-up · Data stays on this device'
+  },
   boot: { init: 'Initializing…', region: 'Detecting service region…' },
   tabs: { record: 'Record', trips: 'Trips', analysis: 'Analysis', export: 'Share', settings: 'Settings' },
   common: {
@@ -285,7 +299,8 @@ const en = {
     permissionPrompt: 'Requesting location permission…',
     searching: 'Searching for GPS signal…',
     firstFix: 'Position acquired — recording',
-    manualCreate: 'Create manually',
+    manualCreate: 'Create manually', manualShort: 'Manual',
+    node: 'Node', nodeNoFix: 'No GPS fix yet — cannot add a node',
     wakeLockOn: 'Screen wake lock on', wakeLockOff: 'Wake lock released',
     powerLock: 'Power-save lock',
     lockHint: 'Hold the ring for 1.5 s to unlock',
@@ -317,6 +332,7 @@ const en = {
   },
   panel: {
     distance: 'Distance', duration: 'Duration', moving: 'Moving time', still: 'Stopped time',
+    signal: 'GPS signal', sigStrong: 'Strong', sigGood: 'Good', sigFair: 'Fair', sigWeak: 'Weak',
     speed: 'Speed', pace: 'Pace', altitude: 'Altitude', ascent: 'Ascent', descent: 'Descent',
     slope: 'Slope', accuracy: 'GPS accuracy', coords: 'Coordinates', points: 'Points', segments: 'Segments',
     altGps: 'GPS altitude', altSvc: 'Elevation service', altCache: 'Cached', altNone: 'Altitude unavailable',
@@ -418,6 +434,8 @@ const en = {
     vectorOnly: 'Vector-only (no basemap)',
     preview: 'Preview', poster: 'Poster', posterSize: 'Poster size',
     posterVertical: 'Vertical 1080×1920', posterSquare: 'Square 1080×1080',
+    posterVShort: 'Portrait', posterSShort: 'Square',
+    generateShort: 'Generate',
     generatePoster: 'Generate poster', downloadPoster: 'Download poster',
     posterVectorFallback: 'Basemap CORS blocked or offline — vector fallback used',
     wechatHint: 'Long-press the image to save',

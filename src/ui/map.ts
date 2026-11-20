@@ -259,6 +259,12 @@ export class TrackMap {
     else this.map.once('style.load', doDraw);
   }
 
+  /** Repaint waypoint markers only (mid-recording adds, without resetting the live track). */
+  setWaypoints(waypoints = []) {
+    this.waypoints = waypoints;
+    this._renderWaypoints();
+  }
+
   _renderWaypoints() {
     for (const [, mk] of this.wpMarkers) mk.remove();
     this.wpMarkers.clear();
