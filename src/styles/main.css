@@ -114,6 +114,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .topbar .brand { font-weight: 800; font-size: 16px; color: var(--text); white-space: nowrap; }
 .topbar .brand em { color: var(--accent); font-style: normal; }
 .topbar .spacer { flex: 1; }
+.topbar .fs-btn { width: 32px; height: 32px; }
+.topbar .fs-btn svg { width: 18px; height: 18px; }
 .region-chip {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 11.5px; color: var(--text-dim);
@@ -143,7 +145,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .views { flex: 1; position: relative; min-height: 0; }
 .view { position: absolute; inset: 0; display: none; flex-direction: column; overflow: hidden; }
 .view.active { display: flex; }
-.view-scroll { flex: 1; overflow-y: auto; padding: 14px; padding-bottom: 24px; }
+.view-scroll { flex: 1; overflow-y: auto; padding: 14px; padding-bottom: 24px; overflow-wrap: break-word; }
+.page-title { margin: 0 0 12px; font-size: 18px; font-weight: 800; letter-spacing: 0.2px; }
 
 .tabbar {
   flex: none;
@@ -230,7 +233,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .switch input:checked + .slider { background: var(--accent); border-color: var(--accent); }
 .switch input:checked + .slider::before { transform: translateX(18px); background: var(--accent-ink); }
 
-.setting-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.setting-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .setting-row:last-child { border-bottom: none; }
 .setting-row .txt { flex: 1; min-width: 0; }
 .setting-row .txt .t { font-size: 14px; }
@@ -325,7 +328,9 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   pointer-events: none;
 }
 .rec-controls > * { pointer-events: auto; }
-.rec-buttons { display: flex; gap: 10px; justify-content: center; align-items: center; }
+.rec-activity { display: flex; justify-content: center; align-items: center; gap: 8px; }
+.rec-activity select { max-width: 44vw; }
+.rec-buttons { display: flex; flex-wrap: wrap; gap: 8px 10px; justify-content: center; align-items: center; }
 .rec-btn {
   width: 66px; height: 66px; border-radius: 50%; border: none; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
@@ -358,37 +363,30 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .live-cell.hero .v { font-size: 24px; color: var(--accent); }
 .live-panel.collapsed .live-grid { display: none; }
 
-/* OLED dashboard */
+/* power-save lock: dim dashboard + hold-to-unlock */
 #oled-dash {
   position: fixed; inset: 0; z-index: 300; background: #000; color: #fff;
   display: none; flex-direction: column; padding: calc(16px + var(--safe-t)) 18px calc(16px + var(--safe-b));
+  touch-action: none; overscroll-behavior: none; user-select: none; -webkit-user-select: none;
 }
 #oled-dash.active { display: flex; }
 #oled-dash .od-top { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #888; }
+#oled-dash .ps-mode { display: inline-flex; align-items: center; gap: 5px; color: #9a9a9a; font-size: 12px; }
 #oled-dash .od-grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; align-content: center; }
 #oled-dash .od-cell .v { font-family: var(--mono); font-size: clamp(30px, 9vw, 56px); font-weight: 800; line-height: 1.1; }
 #oled-dash .od-cell.hero { grid-column: 1 / -1; }
 #oled-dash .od-cell.hero .v { font-size: clamp(52px, 16vw, 96px); color: var(--accent); }
 #oled-dash .od-cell .k { font-size: 12px; color: #777; margin-top: 2px; }
 #oled-dash .od-cell .v small { font-size: 0.4em; color: #999; }
-#oled-dash .od-bottom { display: flex; gap: 10px; justify-content: center; padding-top: 12px; }
-#oled-dash .rec-btn { box-shadow: none; }
-
-/* touch lock */
-#touch-lock {
-  position: fixed; inset: 0; z-index: 350; display: none;
-  background: rgba(0,0,0,0.88); color: #fff;
-  align-items: center; justify-content: center; flex-direction: column; gap: 18px;
-  touch-action: none; user-select: none; -webkit-user-select: none;
-}
-#touch-lock.active { display: flex; }
-#touch-lock .lock-ring { position: relative; width: 120px; height: 120px; }
-#touch-lock .lock-ring svg { transform: rotate(-90deg); }
-#touch-lock .lock-ring .bgc { stroke: #2a2a2a; }
-#touch-lock .lock-ring .fgc { stroke: var(--accent); stroke-dasharray: 339.292; stroke-dashoffset: 339.292; }
-#touch-lock .lock-icon { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 34px; }
-#touch-lock .hint { color: #aaa; font-size: 14px; text-align: center; padding: 0 30px; }
-#touch-lock .sub { color: #666; font-size: 12px; }
+#oled-dash .od-bottom { display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 12px; }
+#oled-dash .ps-ring { position: relative; width: 104px; height: 104px; touch-action: none; cursor: pointer; }
+#oled-dash .ps-ring svg { transform: rotate(-90deg); }
+#oled-dash .ps-ring .bgc { stroke: #262626; }
+#oled-dash .ps-ring .fgc { stroke: var(--accent); stroke-dasharray: 289.03; stroke-dashoffset: 289.03; opacity: 0; }
+#oled-dash .ps-ring.holding .fgc { opacity: 1; }
+#oled-dash .ps-lock { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #bbb; }
+#oled-dash .ps-hint { color: #aaa; font-size: 14px; text-align: center; }
+#oled-dash .ps-sub { color: #666; font-size: 12px; text-align: center; }
 
 /* ---------- trips list ---------- */
 .trip-item { display: flex; gap: 12px; align-items: center; padding: 12px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; cursor: pointer; }
@@ -399,7 +397,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .trip-item .info .name { font-weight: 700; font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trip-item .info .meta { font-size: 11.5px; color: var(--text-faint); margin-top: 2px; }
 .trip-item .info .stats { font-size: 12px; color: var(--text-dim); margin-top: 3px; font-family: var(--mono); }
-.trip-item .acts { display: flex; flex-direction: column; gap: 4px; }
+.trip-item .acts { display: grid; grid-template-columns: repeat(2, auto); gap: 4px; }
 
 /* ---------- analysis ---------- */
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
@@ -488,13 +486,24 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .debug-banner {
   background: var(--bg-elev); border: 1px solid var(--warn); color: var(--warn);
   font-size: 12px; padding: 7px 12px; border-radius: 9px; margin-bottom: 10px;
-  box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.35); overflow-wrap: anywhere;
 }
 .probe-table { width: 100%; font-size: 12px; border-collapse: collapse; }
 .probe-table td { padding: 5px 6px; border-bottom: 1px solid var(--border); }
 .probe-table .ok { color: var(--accent); }
 .probe-table .bad { color: var(--danger); }
 .probe-table .pending { color: var(--text-faint); }
+
+/* ---------- narrow screens ---------- */
+@media (max-width: 640px) {
+  .region-chip { max-width: 38vw; }
+  .setting-row.stack { flex-direction: column; align-items: stretch; gap: 7px; }
+  .setting-row.stack .txt { flex: none; }
+  .setting-row.stack .seg-toggle { width: 100%; flex-wrap: wrap; }
+  .setting-row.stack .seg-toggle button { flex: 1 1 auto; text-align: center; padding: 7px 9px; font-size: 12.5px; }
+  .modal .m-foot { flex-wrap: wrap; }
+  .modal .m-foot .btn { flex: 1 1 0; }
+}
 
 /* ---------- desktop ---------- */
 @media (min-width: 900px) {

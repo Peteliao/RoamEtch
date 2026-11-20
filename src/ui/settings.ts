@@ -31,7 +31,7 @@ export function createSettingsView(navigate) {
       };
       toggle.append(b);
     }
-    return el('div', { class: 'setting-row', style: { flexWrap: 'wrap' } },
+    return el('div', { class: 'setting-row stack', style: { flexWrap: 'wrap' } },
       el('div', { class: 'txt' }, el('div', { class: 't' }, label), note ? el('div', { class: 'd' }, note) : null), toggle);
   }
   function switchRow(label, desc, key, onChange = null) {
@@ -80,8 +80,15 @@ export function createSettingsView(navigate) {
   on('region:changed', renderProbe);
   on('region:probing', renderProbe);
 
-  const reprobeBtn = el('button', { class: 'btn sm' }, '↻ ' + t('region.probing'));
-  reprobeBtn.onclick = async () => { await runProbe(); renderProbe(); };
+  const reprobeBtn = el('button', { class: 'btn sm' }, '↻ ' + t('region.reprobe'));
+  reprobeBtn.onclick = async () => {
+    reprobeBtn.disabled = true;
+    reprobeBtn.textContent = t('region.probing') + '…';
+    await runProbe();
+    renderProbe();
+    reprobeBtn.disabled = false;
+    reprobeBtn.textContent = '↻ ' + t('region.reprobe');
+  };
 
   const regionCard = card(t('settings.region'),
     segRow(t('region.title'), [
@@ -236,7 +243,7 @@ export function createSettingsView(navigate) {
     el('div', { class: 'small faint', style: { marginTop: '6px' } }, '⚠ ' + t('settings.disclaimer')));
 
   scroll.append(
-    el('h2', { style: { margin: '0 0 12px', fontSize: '18px' } }, t('settings.title')),
+    el('h2', { class: 'page-title' }, t('settings.title')),
     regionCard, langCard, recCard, advCard, debugCard, dataCard, aboutCard
   );
 

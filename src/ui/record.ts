@@ -1,4 +1,4 @@
-// Record view: map + live panel + controls + OLED power saver + touch lock.
+// Record view: map + live panel + controls + power-save lock (dim dashboard + touch guard).
 import { t } from '../core/i18n';
 import { get, set } from '../core/settings';
 import { on, emit } from '../core/events';
@@ -25,9 +25,8 @@ export function createRecordView() {
   view.append(mapContainer, styleBar, tools, controls);
 
   let map = null;
-  let oledActive = false;
+  let psActive = false;
   let viewingTrip = null;
-  let locked = false;
   let recoverable = null;
   let readOnly = false;
 
@@ -83,9 +82,8 @@ export function createRecordView() {
   const editBtn = el('button', { class: 'iconbtn', title: t('record.editMode'), onclick: toggleEdit }, icon('edit'));
   const undoBtn = el('button', { class: 'iconbtn', title: t('edit.undo'), onclick: undoEdit, style: { display: 'none' } }, icon('undo'));
   const redoBtn = el('button', { class: 'iconbtn', title: t('edit.redo'), onclick: redoEdit, style: { display: 'none' } }, icon('redo'));
-  const oledBtn = el('button', { class: 'iconbtn', title: t('record.oled'), onclick: () => setOled(true) }, icon('oled'));
-  const lockBtn = el('button', { class: 'iconbtn', title: t('record.lock'), onclick: () => setLocked(true) }, icon('lock'));
-  tools.append(followBtn, fitBtn, editBtn, undoBtn, redoBtn, oledBtn, lockBtn);
+  const psBtn = el('button', { class: 'iconbtn', title: t('record.powerLock'), onclick: () => setPowerLock(true) }, icon('powerlock'));
+  tools.append(followBtn, fitBtn, editBtn, undoBtn, redoBtn, psBtn);
   on('map:followoff', () => followBtn.classList.remove('active'));
   on('history:changed', (s) => {
     undoBtn.style.display = appState.editMode ? '' : 'none';
@@ -192,6 +190,7 @@ export function createRecordView() {
   }
 
   // ---------- buttons ----------
+  const actRow = el('div', { class: 'rec-activity' });
   const btnRow = el('div', { class: 'rec-buttons' });
   const activitySel = el('select', { class: 'btn sm', style: { maxWidth: '130px' } });
   for (const a of ['auto', 'hike', 'drive', 'bike', 'run', 'travel']) {
@@ -261,6 +260,7 @@ export function createRecordView() {
     const on = rewalk.active;
     rewalkBox.style.display = on ? '' : 'none';
     panel.style.display = on ? 'none' : '';
+    actRow.style.display = on ? 'none' : '';
     btnRow.style.display = on ? 'none' : '';
     if (!on) return;
     rwName.textContent = `${t('rewalk.title')} · ${rewalk.name}`;
@@ -275,12 +275,12 @@ export function createRecordView() {
   on('rewalk:started', ({ segments, waypoints }) => {
     viewingTrip = null;
     renderViewBar();
-    if (map && !oledActive) { map.setTrackData(segments, waypoints); setTimeout(() => map.fitTrack(), 300); }
+    if (map && !psActive) { map.setTrackData(segments, waypoints); setTimeout(() => map.fitTrack(), 300); }
     renderRewalk();
     toast(t('rewalk.hint'), 'info', 5000);
   });
   on('rewalk:fix', (f) => {
-    if (map && !oledActive) {
+    if (map && !psActive) {
       map.updatePosition(f.lat, f.lon, f.acc, f.heading);
       if (rwFollowOn) map.setFollow(true);
     }
@@ -289,14 +289,14 @@ export function createRecordView() {
   on('rewalk:finished', () => { toast(t('rewalk.finished'), 'ok', 4000); renderRewalk(); });
   on('rewalk:stopped', () => {
     renderRewalk();
-    if (map && !oledActive) { map.setTrackData([], []); map.clearPosition(); }
+    if (map && !psActive) { map.setTrackData([], []); map.clearPosition(); }
     renderButtons(); renderBanners();
   });
   on('rewalk:mute', () => renderRewalk());
   on('rewalk:sim', () => renderRewalk());
   on('rewalk:geoerror', ({ code }) => toast(geoErrorMsg(code), 'warn', 4500));
 
-  controls.append(rewalkBox, viewBar, bannerBox, panel, btnRow);
+  controls.append(rewalkBox, viewBar, bannerBox, panel, actRow, btnRow);
 
   function renderViewBar() {
     viewBar.innerHTML = '';
@@ -318,32 +318,33 @@ export function createRecordView() {
 
   function renderButtons() {
     btnRow.innerHTML = '';
+    actRow.innerHTML = '';
     renderStatus();
     if (rec.status === 'idle' || rec.status === 'finished') {
       renderAutoTag();
+      actRow.append(activitySel, autoTag);
       btnRow.append(
-        activitySel, autoTag,
         el('button', { class: 'rec-btn start', onclick: onStart }, icon('play', 26), t('record.start')),
         el('button', { class: 'rec-btn small', onclick: onManual }, icon('plus', 18), t('record.manualCreate'))
       );
     } else if (rec.status === 'recording') {
       renderAutoTag();
       liveActSel.value = liveActivity;
+      actRow.append(liveActSel, autoTag);
       btnRow.append(
-        liveActSel, autoTag,
         el('button', { class: 'rec-btn pause', onclick: () => pauseRecording() }, icon('pause', 22), t('record.pause')),
         el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop'))
       );
     } else if (rec.status === 'paused') {
       renderAutoTag();
       liveActSel.value = liveActivity;
+      actRow.append(liveActSel, autoTag);
       btnRow.append(
-        liveActSel, autoTag,
         el('button', { class: 'rec-btn start', onclick: () => resumeRecording() }, icon('play', 24), t('record.resume')),
         el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop'))
       );
     }
-    renderOledButtons();
+    renderPsTop();
   }
 
   // One-shot fix when the view opens idle: triggers the permission prompt on first
@@ -442,11 +443,11 @@ export function createRecordView() {
     }
   }
 
-  // ---------- OLED power saver ----------
-  const oled = el('div', { id: 'oled-dash' });
-  const odTop = el('div', { class: 'od-top' });
+  // ---------- power-save lock: dim dashboard + hold-to-unlock ----------
+  const ps = el('div', { id: 'oled-dash' });
+  const psTop = el('div', { class: 'od-top' });
   const odGrid = el('div', { class: 'od-grid' });
-  const odBottom = el('div', { class: 'od-bottom' });
+  const psBottom = el('div', { class: 'od-bottom' });
   function odCell(key, hero = false) {
     const v = el('div', { class: 'v' }, '--');
     const c = el('div', { class: 'od-cell' + (hero ? ' hero' : '') }, v, el('div', { class: 'k' }, t(key)));
@@ -459,31 +460,62 @@ export function createRecordView() {
   const odAlt = odCell('panel.altitude');
   const odAsc = odCell('panel.ascent');
   const odDesc = odCell('panel.descent');
-  oled.append(odTop, odGrid, odBottom);
-  document.body.append(oled);
+  psBottom.innerHTML = `
+    <div class="ps-ring" role="button" aria-label="${t('record.lockHint')}">
+      <svg width="104" height="104" viewBox="0 0 104 104">
+        <circle class="bgc" cx="52" cy="52" r="46" fill="none" stroke-width="6"/>
+        <circle class="fgc" cx="52" cy="52" r="46" fill="none" stroke-width="6" stroke-linecap="round"/>
+      </svg>
+      <div class="ps-lock"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 11V7a4 4 0 0 1 8 0v4" stroke="currentColor" stroke-width="2" fill="none"/></svg></div>
+    </div>
+    <div class="ps-hint">${t('record.lockHint')}</div>
+    <div class="ps-sub">${t('record.lockSub')}</div>`;
+  ps.append(psTop, odGrid, psBottom);
+  document.body.append(ps);
 
-  function renderOledButtons() {
-    odBottom.innerHTML = '';
-    if (rec.status === 'recording') {
-      odBottom.append(el('button', { class: 'rec-btn pause', onclick: () => pauseRecording() }, icon('pause', 20), t('record.pause')));
-    } else if (rec.status === 'paused') {
-      odBottom.append(el('button', { class: 'rec-btn start', onclick: () => resumeRecording() }, icon('play', 20), t('record.resume')));
-    }
-    if (rec.status === 'recording' || rec.status === 'paused') {
-      odBottom.append(el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 20), t('record.stop')));
-    }
-    odBottom.append(el('button', { class: 'rec-btn small', onclick: () => setOled(false) }, t('record.oledExit')));
-    odTop.innerHTML = '';
-    odTop.append(
+  function renderPsTop() {
+    psTop.innerHTML = '';
+    psTop.append(
       el('span', { class: `rec-dot ${rec.status}` }),
       el('span', {}, t(`record.${rec.status === 'recording' ? 'statusRecording' : rec.status === 'paused' ? 'statusPaused' : 'statusIdle'}`)),
       el('span', { class: 'grow' }),
-      el('span', {}, 'OLED')
+      el('span', { class: 'ps-mode' }, icon('powerlock', 15), t('record.powerLock'))
     );
   }
 
+  const ring = psBottom.querySelector('.ps-ring') as HTMLElement;
+  const ringFg = psBottom.querySelector('.fgc') as SVGCircleElement;
+  const RING_C = 2 * Math.PI * 46;
+  let holdStart = 0;
+  let holdRaf = 0;
+  function holdLoop(ts) {
+    if (!holdStart) return;
+    const p = Math.min(1, (ts - holdStart) / 1500);
+    ringFg.style.strokeDashoffset = String(RING_C * (1 - p));
+    if (p >= 1) { setPowerLock(false); return; }
+    holdRaf = requestAnimationFrame(holdLoop);
+  }
+  function resetHold() {
+    holdStart = 0;
+    ring.classList.remove('holding');
+    cancelAnimationFrame(holdRaf);
+    ringFg.style.strokeDashoffset = String(RING_C);
+  }
+  ring.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    try { ring.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+    ring.classList.add('holding');
+    holdStart = performance.now();
+    holdRaf = requestAnimationFrame(holdLoop);
+  });
+  ring.addEventListener('pointerup', resetHold);
+  ring.addEventListener('pointercancel', resetHold);
+  ring.addEventListener('pointerleave', resetHold);
+  ps.addEventListener('pointerdown', (e) => e.preventDefault());
+  ps.addEventListener('contextmenu', (e) => e.preventDefault());
+
   function renderOled(L) {
-    if (!L || !oledActive) return;
+    if (!L || !psActive) return;
     const units = get('units');
     const d = fmtDistance(L.distance, units);
     odDist.innerHTML = `${d.v}<small> ${d.u}</small>`;
@@ -501,9 +533,10 @@ export function createRecordView() {
     odDesc.innerHTML = `${Math.round(L.descent)}<small>m</small>`;
   }
 
-  async function setOled(on) {
-    if (on === oledActive) return;
-    oledActive = on;
+  async function setPowerLock(on) {
+    if (on === psActive) return;
+    psActive = on;
+    resetHold();
     if (on) {
       // truly stop WebGL rendering while in power saver
       const center = map.map.getCenter();
@@ -512,15 +545,15 @@ export function createRecordView() {
       map.destroy();
       map = null;
       mapContainer.style.display = 'none';
-      oled.classList.add('active');
-      renderOledButtons();
+      ps._restore = { center, zoom, basemap };
+      ps.classList.add('active');
+      renderPsTop();
       renderOled(rec.live);
-      oled._restore = { center, zoom, basemap };
     } else {
-      oled.classList.remove('active');
+      ps.classList.remove('active');
       mapContainer.style.display = '';
       buildMap();
-      const r = oled._restore;
+      const r = ps._restore;
       if (r) {
         map.map.once('load', () => {
           if (r.basemap && map.basemapId !== r.basemap) map.setBasemap(r.basemap);
@@ -548,53 +581,6 @@ export function createRecordView() {
     } else if (viewingTrip) {
       map.setTrackData(viewingTrip.segments, viewingTrip.waypoints);
     }
-  }
-
-  // ---------- touch lock ----------
-  const lockOverlay = el('div', { id: 'touch-lock' });
-  const RING_C = 2 * Math.PI * 54;
-  lockOverlay.innerHTML = `
-    <div class="lock-ring">
-      <svg width="120" height="120" viewBox="0 0 120 120">
-        <circle class="bgc" cx="60" cy="60" r="54" fill="none" stroke-width="7"/>
-        <circle class="fgc" cx="60" cy="60" r="54" fill="none" stroke-width="7" stroke-linecap="round"/>
-      </svg>
-      <div class="lock-icon">🔒</div>
-    </div>
-    <div class="hint">${t('record.lockHint')}</div>
-    <div class="sub">${t('record.lockSub')}</div>`;
-  document.body.append(lockOverlay);
-  const ringFg = lockOverlay.querySelector('.fgc');
-  let lockStart = 0;
-  let lockRaf = 0;
-
-  function lockLoop(ts) {
-    if (!lockStart) return;
-    const p = Math.min(1, (ts - lockStart) / 1500);
-    ringFg.style.strokeDashoffset = String(RING_C * (1 - p));
-    if (p >= 1) { setLocked(false); return; }
-    lockRaf = requestAnimationFrame(lockLoop);
-  }
-  lockOverlay.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    lockStart = performance.now();
-    lockRaf = requestAnimationFrame(lockLoop);
-  });
-  const cancelLock = () => {
-    lockStart = 0;
-    cancelAnimationFrame(lockRaf);
-    ringFg.style.strokeDashoffset = String(RING_C);
-  };
-  lockOverlay.addEventListener('pointerup', cancelLock);
-  lockOverlay.addEventListener('pointercancel', cancelLock);
-  lockOverlay.addEventListener('pointerleave', cancelLock);
-  lockOverlay.addEventListener('contextmenu', (e) => e.preventDefault());
-
-  function setLocked(on) {
-    locked = on;
-    lockOverlay.classList.toggle('active', on);
-    lockBtn.classList.toggle('active', on);
-    if (on) { cancelLock(); toast(t('toast.lockEngaged'), 'info', 1800); }
   }
 
   // ---------- recorder events ----------
@@ -636,7 +622,7 @@ export function createRecordView() {
     toast(t('record.bgReturn', { s: Math.round(gapMs / 1000) }), 'warn', 6000);
   });
   on('recorder:point', ({ point, live }) => {
-    if (map && !oledActive) map.appendLive(point, rec.segmentId);
+    if (map && !psActive) map.appendLive(point, rec.segmentId);
     renderPanel(live);
     renderOled(live);
     if (live.pointCount === 1 && !rec.simulated) { renderStatus(); toast(t('record.firstFix'), 'ok', 2500); }
@@ -649,7 +635,7 @@ export function createRecordView() {
 
   // ---------- active trip display ----------
   on('trip:active', (full) => {
-    if (!map || oledActive) return;
+    if (!map || psActive) return;
     if (rec.status === 'recording' || rec.status === 'paused') return;
     if (!full) { viewingTrip = null; renderViewBar(); map.setTrackData([], []); return; }
     // only explicit "open on map" from the trips list paints a finished trip here
@@ -757,8 +743,7 @@ export function createRecordView() {
       offBroadcast();
       map?.destroy();
       map = null;
-      oled.remove();
-      lockOverlay.remove();
+      ps.remove();
     }
   };
 }

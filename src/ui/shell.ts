@@ -32,7 +32,33 @@ export function createShell(root) {
   renderBrand();
   const regionChip = el('button', { class: 'region-chip', title: t('region.title') });
   const recDot = el('span', { class: 'rec-dot' });
-  topbar.append(brand, el('span', { class: 'spacer' }), recDot, regionChip);
+  const fsBtn = el('button', { class: 'iconbtn fs-btn' });
+  const fsDoc = document as any;
+  function fsElement() { return fsDoc.fullscreenElement || fsDoc.webkitFullscreenElement || null; }
+  function renderFsBtn() {
+    const on = !!fsElement();
+    fsBtn.innerHTML = '';
+    fsBtn.append(icon(on ? 'compress' : 'expand'));
+    fsBtn.title = t(on ? 'common.exitFullscreen' : 'common.fullscreen');
+    fsBtn.setAttribute('aria-label', fsBtn.title);
+  }
+  fsBtn.onclick = async () => {
+    try {
+      if (fsElement()) await (fsDoc.exitFullscreen || fsDoc.webkitExitFullscreen)?.call(fsDoc);
+      else {
+        const de = document.documentElement as any;
+        await (de.requestFullscreen || de.webkitRequestFullscreen)?.call(de);
+      }
+    } catch { /* browser refused */ }
+    renderFsBtn();
+  };
+  document.addEventListener('fullscreenchange', renderFsBtn);
+  document.addEventListener('webkitfullscreenchange', renderFsBtn);
+  if (!(fsDoc.fullscreenEnabled || fsDoc.webkitFullscreenEnabled || document.documentElement.requestFullscreen || (document.documentElement as any).webkitRequestFullscreen)) {
+    fsBtn.style.display = 'none';
+  }
+  renderFsBtn();
+  topbar.append(brand, el('span', { class: 'spacer' }), recDot, fsBtn, regionChip);
 
   const viewsBox = el('div', { class: 'views' });
   const tabbar = el('div', { class: 'tabbar' });
@@ -115,6 +141,7 @@ export function createShell(root) {
     buildViews();
     renderRegionChip();
     renderBrand();
+    renderFsBtn();
   });
 
   buildViews();

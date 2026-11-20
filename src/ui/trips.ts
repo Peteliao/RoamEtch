@@ -18,13 +18,15 @@ export function createTripsView(navigate) {
   const scroll = el('div', { class: 'view-scroll' });
   view.append(scroll);
 
-  const header = el('div', { class: 'row wrap', style: { marginBottom: '12px', gap: '8px' } },
-    el('h2', { style: { margin: 0, fontSize: '18px', flex: '1' } }, t('trips.title')),
-    el('button', { class: 'btn sm', onclick: onImport }, icon('plus', 14), t('trips.importGpx')),
-    el('button', { class: 'btn sm', onclick: onBatchImport }, icon('batch', 14), t('trips.batchImport')),
-    el('button', { class: 'btn sm', onclick: onBatchExport }, icon('batch', 14), t('trips.batchExport')),
-    el('button', { class: 'btn sm', onclick: onBackup }, icon('download', 14), t('trips.backup')),
-    el('button', { class: 'btn sm', onclick: onRestore }, icon('export', 14), t('trips.restore'))
+  const header = el('div', { style: { marginBottom: '12px' } },
+    el('h2', { class: 'page-title' }, t('trips.title')),
+    el('div', { class: 'row wrap', style: { gap: '6px' } },
+      el('button', { class: 'btn sm', onclick: onImport }, icon('plus', 14), t('trips.importGpx')),
+      el('button', { class: 'btn sm', onclick: onBatchImport }, icon('batch', 14), t('trips.batchImport')),
+      el('button', { class: 'btn sm', onclick: onBatchExport }, icon('batch', 14), t('trips.batchExport')),
+      el('button', { class: 'btn sm', onclick: onBackup }, icon('download', 14), t('trips.backup')),
+      el('button', { class: 'btn sm', onclick: onRestore }, icon('export', 14), t('trips.restore'))
+    )
   );
   const storageBar = el('div', { class: 'small muted', style: { marginBottom: '10px' } });
   const listBox = el('div', {});

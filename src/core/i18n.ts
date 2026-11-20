@@ -12,13 +12,14 @@ const zh = {
     back: '返回', done: '完成', retry: '重试', loading: '加载中…', none: '无', auto: '自动',
     confirm: '确认', clear: '清空', copy: '复制', copied: '已复制', open: '打开', export: '导出',
     import: '导入', preview: '预览', apply: '应用', reset: '重置', yes: '是', no: '否',
-    unavailable: '不可用', offline: '离线', online: '在线', seconds: '秒', meters: '米', km: '公里'
+    unavailable: '不可用', offline: '离线', online: '在线', seconds: '秒', meters: '米', km: '公里',
+    fullscreen: '全屏', exitFullscreen: '退出全屏'
   },
   region: {
     title: '服务环境', cn: '国内方案', global: '海外方案',
     autoCn: '自动 · 已识别中国大陆', autoGlobal: '自动 · 已识别海外',
     manualCn: '手动 · 国内方案', manualGlobal: '手动 · 海外方案',
-    probing: '探测中', probeOk: '通畅', probeFail: '不可达', probePending: '待探测',
+    probing: '探测中', reprobe: '重新探测', probeOk: '通畅', probeFail: '不可达', probePending: '待探测',
     switched: '网络环境变化，已自动切换至{{profile}}',
     switchHint: '切换服务环境不影响本地已存数据与界面语言',
     modeAuto: '自动识别', modeCn: '国内方案', modeGlobal: '海外方案',
@@ -37,9 +38,9 @@ const zh = {
     firstFix: '已定位，开始记录',
     manualCreate: '手动创建行程',
     wakeLockOn: '屏幕常亮已开启', wakeLockOff: '屏幕常亮已释放',
-    oled: '省电仪表盘', oledExit: '退出省电模式',
-    lock: '防误触锁', locked: '已锁定 · 长按解锁', lockHint: '长按圆圈 1.5 秒解锁',
-    lockSub: '防止口袋或雨滴误触',
+    powerLock: '省电锁屏',
+    lockHint: '长按圆圈 1.5 秒解锁',
+    lockSub: '省电显示 · 防口袋或雨滴误触',
     tabLocked: '另一个标签页正在记录，本页为只读模式',
     gapNewSegment: '间隔超限，已自动新建分段',
     invalidPoint: '已过滤 {{n}} 个漂移/异常点',
@@ -215,7 +216,7 @@ const zh = {
     themeAuto: '自动', themeAutoHint: '按参考地日出日落自动切换：日出后浅色、日落后深色',
     activity: '默认活动类型', speedDisplay: '速度/配速显示',
     activityAuto: '自动识别',
-    activityAutoHint: '按速度特征自动判断徒步/跑步/骑行/自驾/旅行，记录中可随时手动改',
+    activityAutoHint: '按速度自动识别活动类型，可随时手动修改',
     speedAuto: '按活动自动', speedSpeed: '始终速度', speedPace: '始终配速',
     recordQuality: '记录频率', qHigh: '高精度（耗电）', qBalanced: '均衡', qLow: '省电',
     wakeLock: '记录时屏幕常亮', ascentThreshold: '爬升滞回阈值',
@@ -243,7 +244,7 @@ const zh = {
   toast: {
     regionSwitched: '已切换服务环境', offlineMode: '当前离线：记录/编辑/导出可用，在线服务已降级',
     backOnline: '网络已恢复', elevBatch: '已补全 {{n}} 个点的高程',
-    wakeLockFail: '屏幕常亮不可用', lockEngaged: '防误触已锁定',
+    wakeLockFail: '屏幕常亮不可用',
     pointFiltered: '异常跳点已过滤', saved: '已保存',
     workerBusy: '后台计算中…', copied: '已复制到剪贴板',
     copyFail: '复制失败，请手动复制', downloadBlocked: '下载被拦截，请长按保存或在浏览器打开'
@@ -260,13 +261,14 @@ const en = {
     back: 'Back', done: 'Done', retry: 'Retry', loading: 'Loading…', none: 'None', auto: 'Auto',
     confirm: 'Confirm', clear: 'Clear', copy: 'Copy', copied: 'Copied', open: 'Open', export: 'Export',
     import: 'Import', preview: 'Preview', apply: 'Apply', reset: 'Reset', yes: 'Yes', no: 'No',
-    unavailable: 'Unavailable', offline: 'Offline', online: 'Online', seconds: 's', meters: 'm', km: 'km'
+    unavailable: 'Unavailable', offline: 'Offline', online: 'Online', seconds: 's', meters: 'm', km: 'km',
+    fullscreen: 'Fullscreen', exitFullscreen: 'Exit fullscreen'
   },
   region: {
     title: 'Service region', cn: 'China profile', global: 'Global profile',
     autoCn: 'Auto · Mainland China', autoGlobal: 'Auto · Global',
     manualCn: 'Manual · China', manualGlobal: 'Manual · Global',
-    probing: 'Probing', probeOk: 'Reachable', probeFail: 'Unreachable', probePending: 'Pending',
+    probing: 'Probing', reprobe: 'Re-probe', probeOk: 'Reachable', probeFail: 'Unreachable', probePending: 'Pending',
     switched: 'Network changed — switched to {{profile}}',
     switchHint: 'Switching region never affects local data or UI language',
     modeAuto: 'Auto detect', modeCn: 'China', modeGlobal: 'Global',
@@ -285,9 +287,9 @@ const en = {
     firstFix: 'Position acquired — recording',
     manualCreate: 'Create manually',
     wakeLockOn: 'Screen wake lock on', wakeLockOff: 'Wake lock released',
-    oled: 'Power saver', oledExit: 'Exit power saver',
-    lock: 'Touch lock', locked: 'Locked · hold to unlock', lockHint: 'Hold the ring for 1.5 s to unlock',
-    lockSub: 'Prevents pocket / raindrop touches',
+    powerLock: 'Power-save lock',
+    lockHint: 'Hold the ring for 1.5 s to unlock',
+    lockSub: 'Low-power display · guards against pocket or rain touches',
     tabLocked: 'Another tab is recording — this tab is read-only',
     gapNewSegment: 'Gap exceeded — new segment created',
     invalidPoint: 'Filtered {{n}} drift/outlier points',
@@ -463,7 +465,7 @@ const en = {
     themeAuto: 'Auto', themeAutoHint: 'Follows local sunrise & sunset: light by day, dark after sunset',
     activity: 'Default activity', speedDisplay: 'Speed / pace display',
     activityAuto: 'Auto-detect',
-    activityAutoHint: 'Classifies hike/run/bike/drive/travel from speed patterns; override manually anytime',
+    activityAutoHint: 'Detects activity from speed; override anytime',
     speedAuto: 'Auto by activity', speedSpeed: 'Always speed', speedPace: 'Always pace',
     recordQuality: 'Recording rate', qHigh: 'High (battery heavy)', qBalanced: 'Balanced', qLow: 'Power saver',
     wakeLock: 'Keep screen on while recording', ascentThreshold: 'Ascent hysteresis',
@@ -491,7 +493,7 @@ const en = {
   toast: {
     regionSwitched: 'Service region switched', offlineMode: 'Offline: record/edit/export work; online services degraded',
     backOnline: 'Back online', elevBatch: 'Filled altitude for {{n}} points',
-    wakeLockFail: 'Wake lock unavailable', lockEngaged: 'Touch lock engaged',
+    wakeLockFail: 'Wake lock unavailable',
     pointFiltered: 'Outlier point filtered', saved: 'Saved',
     workerBusy: 'Computing in background…', copied: 'Copied to clipboard',
     copyFail: 'Copy failed — copy manually', downloadBlocked: 'Download blocked — long-press to save or open in browser'
@@ -510,6 +512,7 @@ export async function initI18n() {
     returnNull: false
   });
   ready = true;
+  document.documentElement.lang = currentLang() === 'zh' ? 'zh-CN' : 'en';
 }
 
 export function t(key: string, opts: any = {}): string {

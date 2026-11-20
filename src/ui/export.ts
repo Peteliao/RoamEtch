@@ -19,7 +19,7 @@ export function createExportView(getRecordMap) {
   const scroll = el('div', { class: 'view-scroll' });
   view.append(scroll);
 
-  const title = el('h2', { style: { margin: '0 0 12px', fontSize: '18px' } }, t('export.title'));
+  const title = el('h2', { class: 'page-title' }, t('export.title'));
   let curFull = null;
   const tripSel = el('select', { style: { width: '100%' } });
   const tripLabel = el('div', { class: 'small muted', style: { marginTop: '6px' } });
@@ -172,7 +172,7 @@ export function createExportView(getRecordMap) {
   const vDlBtn = el('button', { class: 'btn', style: { display: 'none' } }, icon('download', 16), t('export.videoDownload'));
   const vShareBtn = el('button', { class: 'btn', style: { display: 'none' } }, icon('share', 16), t('export.shareVideo'));
   vShareBtn.onclick = () => { if (videoBlob) shareMedia(videoBlob, `localtrace-video-${Date.now()}.${videoExt}`, 'video'); };
-  const vPreview = el('video', { controls: true, playsinline: true, style: { width: '100%', display: 'none', marginTop: '10px', borderRadius: '10px', background: '#000' } });
+  const vPreview = el('video', { controls: true, playsinline: true, 'webkit-playsinline': '', preload: 'metadata', style: { width: '100%', display: 'none', marginTop: '10px', borderRadius: '10px', background: '#000' } });
   const vNote = el('div', { class: 'small faint', style: { marginTop: '6px' } });
   vCancelBtn.onclick = () => videoAbort?.abort();
   vGenBtn.onclick = async () => {
@@ -200,6 +200,7 @@ export function createExportView(getRecordMap) {
       videoExt = r.mime.includes('mp4') ? 'mp4' : 'webm';
       if (videoUrl) URL.revokeObjectURL(videoUrl);
       videoUrl = URL.createObjectURL(r.blob);
+      if (r.cover) vPreview.poster = r.cover; else vPreview.removeAttribute('poster');
       vPreview.src = videoUrl;
       vPreview.style.display = '';
       vDlBtn.style.display = '';
@@ -352,6 +353,7 @@ export function createExportView(getRecordMap) {
     posterNote.textContent = '';
     if (videoUrl) { URL.revokeObjectURL(videoUrl); videoUrl = null; }
     vPreview.removeAttribute('src');
+    vPreview.removeAttribute('poster');
     vPreview.style.display = 'none';
     vDlBtn.style.display = 'none';
     vShareBtn.style.display = 'none';

@@ -247,6 +247,8 @@ export async function generateTrackVideo(full, {
   const totalMs = playMs + 800; // hold the final frame briefly
   let idx = 0, aborted = false;
   drawFrame(0, 0);
+  let cover = '';
+  try { cover = canvas.toDataURL('image/jpeg', 0.82); } catch { /* canvas tainted by tiles */ }
   await new Promise<void>((resolve) => {
     const t0 = performance.now();
     const step = (now) => {
@@ -268,5 +270,5 @@ export async function generateTrackVideo(full, {
 
   const type = (mime || 'video/webm').split(';')[0];
   const blob = new Blob(chunks, { type });
-  return { blob, mime: type, width: W, height: H, seconds, usedVectorFallback: m.vector };
+  return { blob, mime: type, width: W, height: H, seconds, usedVectorFallback: m.vector, cover };
 }
