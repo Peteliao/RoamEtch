@@ -1,28 +1,43 @@
 # TrackMint迹刻
 
-**Track（轨迹）+ Mint（铸造/焕新）**；中文“迹刻”谐音**“即刻”**——打开网页即刻记录、当场生成海报。PWA 桌面图标短名：**TrackMint**。
+简体中文 | [English](README.en.md)
 
-纯前端、离线优先的行程记录与分析分享工具：无后端、数据只存在本机浏览器（IndexedDB），支持国内/海外双区域自适应地图服务，安装为 PWA 后离线可用。
+**Track（轨迹）+ Mint（铸造/焕新）**；中文名“迹刻”谐音**“即刻”**——打开网页即刻记录，当场生成可分享的海报与轨迹视频。PWA 桌面图标短名：**TrackMint**。
 
-**在线体验（GitHub Pages）：<https://peteliao.github.io/TrackMint/>**
+TrackMint迹刻 是一个纯前端、离线优先的行程记录与分析分享工具：无后端、无需注册，轨迹与照片只保存在本机浏览器（IndexedDB）；国内/海外地图服务自动切换，安装为 PWA 后可离线使用。
 
-![TrackMint迹刻 · 分析页](docs/screenshot.png)
+**在线体验：<https://peteliao.github.io/TrackMint/>**
 
-> TrackMint is a pure-frontend, offline-first trip recorder & sharer (PWA). All data stays in your browser; nothing is uploaded. Licensed under GPL-3.0.
+## 界面预览
+
+<table>
+  <tr>
+    <td align="center" width="50%"><img src="docs/screenshots/zh/record.png" width="280" alt="实时记录"><br><sub><b>实时记录</b> · 活动自动识别、GPS 信号</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/zh/trips.png" width="280" alt="行程列表"><br><sub><b>行程管理</b> · 本地优先、批量导入</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/zh/analysis.png" width="390" alt="行程分析"><br><sub><b>行程分析</b> · 高程/速度曲线、坡度分布</sub></td>
+    <td align="center"><img src="docs/screenshots/zh/poster.png" width="292" alt="分享海报"><br><sub><b>分享海报</b> · 主题感知、品牌二维码</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/zh/share.png" width="280" alt="分享与导出"><br><sub><b>分享与隐私</b> · 隐私圈裁剪、海报与视频</sub></td>
+    <td align="center"><img src="docs/screenshots/zh/settings.png" width="280" alt="设置"><br><sub><b>个性化</b> · 中英双语、三套主题</sub></td>
+  </tr>
+</table>
 
 ## 功能
 
-- **记录**：实时轨迹、省电仪表盘、防误触锁定；定位关闭/后台中断即时提示；活动类型自动识别（步行/跑步/骑行/驾车等）
-- **分析**：高程剖面、速度曲线，悬停曲线地图同步定位；分段间隙识别
-- **节点**：起点/终点/观光/餐饮/补给/危险等类型，含说明与照片；照片 EXIF 在本地剥离后再存储
-- **隐私**：起终点隐私圈裁剪；分享链接数据只放在 URL `#` 片段，永不经过服务器
-- **分享**：主题感知海报（方形/竖版）、轨迹视频、自动评分与评语、系统分享、微信内打开引导
+- **记录**：实时轨迹、距离/时长/速度/海拔/爬升、GPS 信号强度；活动类型自动识别，结束时可命名并自动生成默认名称；支持防误触与省电锁屏模式
+- **分析**：高程剖面、速度曲线，悬停曲线地图同步定位；坡度分布、分段间隙识别、时间线与难度参考
+- **节点**：起点/终点/观光/餐饮/补给/危险等类型，可添加说明与照片；照片 EXIF 在本地剥离后再存储
+- **隐私**：起终点隐私圈裁剪、敏感节点隐藏；分享链接中的行程数据只放在 URL `#` 片段，永不经过服务器
+- **分享**：主题感知的方形/竖版海报、轨迹回顾视频、行程评分与评语、系统分享；海报与视频二维码中心带品牌标志
 - **重走行程**：沿参考轨迹跟随导航，偏离提醒；到达节点时语音播报类型、名称与说明
-- **行程管理**：批量导入/导出（GPX / GeoJSON / ZIP）、整库备份与恢复、损坏数据自动隔离
+- **行程管理**：GPX / GeoJSON / ZIP 批量导入导出、整库备份与恢复、损坏数据自动隔离
 - **双区自适应**：国内优先高德/天地图，海外使用 OSM/OpenTopo/Esri 等服务；按网络环境自动探测切换，也可手动选择图源
-- **坐标策略**：存储、分析、导出始终 WGS-84；仅当底图为 GCJ-02（如高德）时在渲染层做本地偏移，数据本身绝不污染
-- **主题**：深色 / 浅色 / 阳光高对比，可跟随日出日落自动切换；地图始终为全彩底图
-- **PWA**：离线应用外壳、瓦片缓存、可安装到桌面/主屏
+- **坐标策略**：存储、分析、导出始终使用 WGS-84；仅当底图为 GCJ-02（如高德）时在渲染层做本地偏移，数据本身绝不污染
+- **主题与语言**：深色 / 浅色 / 阳光高对比，可跟随日出日落自动切换；界面支持简体中文与 English
+- **PWA**：离线应用外壳、瓦片缓存，可安装到桌面或主屏
 
 ## 技术栈
 
@@ -50,15 +65,16 @@ npm run preview   # 预览生产构建
 
 ```
 src/
-  core/       存储、定位引擎、坐标、区域探测、分享、导出、重走等核心逻辑
-  ui/         外壳、记录、行程、分析、分享、设置各视图与地图封装
-  styles/     主题与组件样式
-public/icons/ PWA 图标
+  core/        存储、定位引擎、坐标转换、区域探测、分享导出、重走等核心逻辑
+  ui/          外壳、记录、行程、分析、分享、设置各视图与地图封装
+  styles/      主题与组件样式
+public/icons/  PWA 图标
+docs/          README 截图
 ```
 
 ## 隐私
 
-数据仅保存在本机浏览器中，不上传、不采集；分享海报/视频在本地生成；分享链接的行程数据只存在于 URL `#` 片段中，不会到达任何服务器。清除浏览器数据或使用整库备份自行迁移。
+数据仅保存在本机浏览器中，不上传、不采集；海报、视频与评分均在本地生成。分享链接的行程数据只存在于 URL `#` 片段中，不会到达任何服务器。照片在写入前会剥离 EXIF 位置信息；如需迁移数据，请使用整库备份功能。
 
 ## 许可
 

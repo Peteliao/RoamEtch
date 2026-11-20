@@ -1,5 +1,5 @@
 // Record view: map + live panel + controls + power-save lock (dim dashboard + touch guard).
-import { t } from '../core/i18n';
+import { t, currentLang } from '../core/i18n';
 import { get, set } from '../core/settings';
 import { on, emit } from '../core/events';
 import { rec, startRecording, pauseRecording, resumeRecording, stopRecording, continueTrip, findRecoverableTrip, createManualTrip, retryGeolocation } from '../core/recorder';
@@ -13,7 +13,7 @@ import { TrackMap, WP_ICONS } from './map';
 import { rewalk, stopRewalk, toggleMute, startSim, stopSim } from '../core/rewalk';
 import { appState, setActiveTrip } from './state';
 import { openWaypointModal, moveWaypoint, moveVertex, insertVertex, deleteVertex, undoEdit, redoEdit, histState } from './editor';
-import { el, icon, toast, modal } from './helpers';
+import { el, icon, toast, modal, promptModal } from './helpers';
 import { confirmModal } from './helpers';
 
 export function createRecordView() {
@@ -242,14 +242,15 @@ export function createRecordView() {
     cSig.k.textContent = L.acc != null ? `${t('panel.signal')} ±${Math.round(L.acc)}m` : t('panel.signal');
     const slopeTxt = L.slope != null ? `${L.slope > 0 ? '+' : ''}${L.slope.toFixed(1)}%` : '--';
     detail.innerHTML = '';
-    detail.append(...[
+    const items = [
       el('span', {}, `${t('panel.slope')} ${slopeTxt}`),
       el('span', {}, `${t('panel.moving')} ${fmtDuration(L.movingMs, { compact: true })}`),
       el('span', {}, `${t('panel.still')} ${fmtDuration(L.stillMs, { compact: true })}`),
-      el('span', {}, `${t('panel.points')} ${L.pointCount}`),
-      el('span', {}, `${t('panel.segments')} ${L.segCount}`),
-      L.lat != null ? el('span', {}, `${L.lat.toFixed(5)}, ${L.lon.toFixed(5)}`) : null
-    ].filter(Boolean));
+      el('span', {}, `${t('panel.points')} ${L.pointCount}`)
+    ];
+    if (L.segCount > 1) items.push(el('span', {}, `${t('panel.segments')} ${L.segCount}`));
+    if (L.lat != null) items.push(el('span', { class: 'lp-coords' }, `${L.lat.toFixed(5)}, ${L.lon.toFixed(5)}`));
+    detail.append(...items);
   }
 
   function renderStatus() {
@@ -275,12 +276,17 @@ export function createRecordView() {
   }
   activitySel.value = get('activity');
   activitySel.onchange = () => set('activity', activitySel.value);
-  const autoTag = el('span', { class: 'small faint', style: { maxWidth: '110px' } });
+  const autoTag = el('span', { class: 'live-auto-tag' });
   let liveActivity = 'auto';
-  const liveActSel = el('select', { class: 'btn sm', style: { maxWidth: '110px' } });
+  const liveActSel = el('select', { class: 'live-act-select' });
   for (const a of ['auto', 'hike', 'drive', 'bike', 'run', 'travel']) {
     liveActSel.append(el('option', { value: a }, a === 'auto' ? t('record.activityAuto') : t(`record.activities.${a}`)));
   }
+  const liveActWrap = el('div', { class: 'live-act-mode' },
+    icon('compass', 14),
+    el('span', { class: 'la-k' }, t('record.activityLabel')),
+    liveActSel,
+    el('span', { class: 'la-chev' }, icon('chevron', 13)));
   liveActSel.onchange = async () => {
     liveActivity = liveActSel.value;
     if (rec.tripId) await updateTrip(rec.tripId, { activity: liveActivity });
@@ -291,9 +297,14 @@ export function createRecordView() {
     const mode = (rec.status === 'recording' || rec.status === 'paused') ? liveActivity : get('activity');
     if (mode !== 'auto') { autoTag.style.display = 'none'; return; }
     autoTag.style.display = '';
-    autoTag.textContent = rec.activityGuess
-      ? t('record.autoDetected', { a: t(`record.activities.${rec.activityGuess}`) })
-      : t('record.autoDetecting');
+    autoTag.classList.toggle('detected', !!rec.activityGuess);
+    autoTag.innerHTML = '';
+    if (rec.activityGuess) {
+      autoTag.append(icon('sparkles', 12),
+        el('span', {}, t('record.autoDetectedShort', { a: t(`record.activities.${rec.activityGuess}`) })));
+    } else {
+      autoTag.append(el('span', { class: 'la-pulse' }), el('span', {}, t('record.autoDetecting')));
+    }
   }
   renderAutoTag();
 
@@ -408,8 +419,7 @@ export function createRecordView() {
     } else if (rec.status === 'recording') {
       renderAutoTag();
       liveActSel.value = liveActivity;
-      liveActSel.className = 'rec-pill select live';
-      actRow.append(liveActSel, autoTag);
+      actRow.append(liveActWrap, autoTag);
       btnRow.append(
         el('button', { class: 'rec-btn node', onclick: openRecWaypoint }, icon('pin', 20), t('record.node')),
         el('button', { class: 'rec-btn pause', onclick: () => pauseRecording() }, icon('pause', 22), t('record.pause')),
@@ -418,8 +428,7 @@ export function createRecordView() {
     } else if (rec.status === 'paused') {
       renderAutoTag();
       liveActSel.value = liveActivity;
-      liveActSel.className = 'rec-pill select live';
-      actRow.append(liveActSel, autoTag);
+      actRow.append(liveActWrap, autoTag);
       btnRow.append(
         el('button', { class: 'rec-btn node', onclick: openRecWaypoint }, icon('pin', 20), t('record.node')),
         el('button', { class: 'rec-btn resume', onclick: () => resumeRecording() }, icon('play', 22), t('record.resume')),
@@ -475,15 +484,44 @@ export function createRecordView() {
     toast(t('record.permissionDenied'), 'info', 4000);
     renderButtons();
   }
+  function suggestedTripName(full) {
+    const tr = full?.trip;
+    const activity = tr?.activity && tr.activity !== 'auto'
+      ? t(`record.activities.${tr.activity}`)
+      : t('record.newTripName');
+    const locale = currentLang().startsWith('zh') ? 'zh-CN' : 'en-US';
+    const when = new Date(tr?.createdAt || Date.now()).toLocaleString(locale, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+    return `${activity} · ${when}`;
+  }
   async function onStop() {
     const ok = await confirmModal({ title: t('record.stop'), message: t('record.stopConfirm'), confirmText: t('record.stop') });
     if (!ok) return;
     const id = await stopRecording();
     map.endLive();
     map.setTrackData([], []);
-    if (id) await setActiveTrip(id);
+    let defaultName = '';
+    if (id) {
+      const full = await loadTripFull(id);
+      defaultName = suggestedTripName(full);
+      await updateTrip(id, { name: defaultName });
+      await setActiveTrip(id);
+    }
     renderButtons();
     toast(t('record.stopped'), 'ok');
+    if (!id) return;
+    const name = await promptModal({
+      title: t('record.nameTrip'),
+      label: t('record.tripName'),
+      value: defaultName,
+      hint: t('record.nameTripHint')
+    });
+    if (name && name !== defaultName) {
+      await updateTrip(id, { name });
+      await setActiveTrip(id);
+      toast(t('record.tripNamed'), 'ok');
+    }
   }
 
   // ---------- waypoints mid-recording ----------

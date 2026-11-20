@@ -38,17 +38,17 @@ export function createExportView(getRecordMap) {
   const cropInfo = el('div', { class: 'small', style: { color: 'var(--warn)', marginTop: '8px' } });
   const privacyCard = el('div', { class: 'card' },
     el('h3', {}, icon('shield', 18), t('export.privacy')),
-    el('div', { class: 'field' }, el('label', {}, t('export.privacyRadius')), radiusInput,
-      el('div', { class: 'hint' }, t('export.privacyRadiusHint'))),
+    el('div', { class: 'setting-row' },
+      el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.privacyRadius')), el('div', { class: 'd' }, t('export.privacyRadiusHint'))),
+      el('div', { class: 'inline-num' }, radiusInput, el('span', { class: 'small faint' }, 'm'))),
     el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.hideSensitive'))), labelSwitch(hideCb)),
     el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.vectorOnly'))), labelSwitch(vectorCb)),
     cropInfo,
-    el('div', { class: 'sep' }),
-    el('div', { class: 'small muted' },
-      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 14)), t('export.checkCircle')),
-      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 14)), t('export.checkNodes')),
-      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 14)), t('export.checkExif')),
-      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 14)), t('export.checkCoords')))
+    el('div', { class: 'privacy-checks' },
+      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 13)), t('export.checkCircle')),
+      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 13)), t('export.checkNodes')),
+      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 13)), t('export.checkExif')),
+      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 13)), t('export.checkCoords')))
   );
 
   function labelSwitch(input) {

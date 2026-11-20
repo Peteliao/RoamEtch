@@ -465,9 +465,30 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 :root[data-theme="light"] .rec-controls { background: linear-gradient(transparent, rgba(245, 247, 246, 0.55) 32%); }
 :root[data-theme="contrast"] .rec-controls { background: linear-gradient(transparent, rgba(255, 255, 255, 0.7) 32%); }
 .rec-controls > * { pointer-events: auto; }
-.rec-activity { display: flex; justify-content: center; align-items: center; gap: 8px; }
+.rec-activity { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px 8px; }
 .rec-activity:empty { display: none; }
-.rec-activity select { max-width: 44vw; }
+.live-act-mode {
+  display: inline-flex; align-items: center; gap: 6px; height: 38px;
+  padding: 0 10px 0 12px; border-radius: 999px;
+  background: var(--bg-elev); border: 1px solid var(--border); color: var(--text-dim);
+  box-shadow: var(--shadow-1);
+}
+.live-act-mode .la-k { font-size: 11.5px; font-weight: 600; color: var(--text-faint); }
+.live-act-select {
+  appearance: none; -webkit-appearance: none; height: 36px; max-width: 108px;
+  padding: 0 2px; border: 0; background: transparent; cursor: pointer;
+  color: var(--text); font: inherit; font-size: 13px; font-weight: 650;
+}
+.live-act-mode .la-chev { display: inline-flex; color: var(--text-faint); margin-left: -3px; }
+.live-auto-tag {
+  display: inline-flex; align-items: center; gap: 5px; height: 30px;
+  padding: 0 11px; border-radius: 999px; white-space: nowrap;
+  background: rgba(147, 161, 172, 0.14); color: var(--text-dim);
+  font-size: 12px; font-weight: 600;
+}
+.live-auto-tag.detected { background: var(--accent-soft); color: var(--accent); }
+.live-auto-tag .la-pulse { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: livePulse 1.2s ease-in-out infinite; }
+@keyframes livePulse { 50% { opacity: 0.35; transform: scale(0.8); } }
 .rec-buttons { display: flex; flex-wrap: wrap; gap: 8px 10px; justify-content: center; align-items: center; }
 
 .rec-pill {
@@ -488,7 +509,6 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   background-position: calc(100% - 15px) 50%, calc(100% - 10px) 50%;
   background-size: 5px 5px; background-repeat: no-repeat;
 }
-.rec-pill.live { height: 40px; font-size: 12.5px; background: var(--bg-elev); }
 
 .rec-btn {
   width: 64px; height: 64px; border-radius: 50%; border: none; cursor: pointer;
@@ -592,7 +612,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 #oled-dash .sig-txt { font-size: 14px; color: #999; }
 #oled-dash .od-bottom { display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 12px; }
 #oled-dash .ps-ring { position: relative; width: 104px; height: 104px; touch-action: none; cursor: pointer; }
-#oled-dash .ps-ring svg { transform: rotate(-90deg); }
+#oled-dash .ps-ring > svg { transform: rotate(-90deg); }
 #oled-dash .ps-ring .bgc { stroke: #262626; }
 #oled-dash .ps-ring .fgc { stroke: var(--accent); stroke-dasharray: 289.03; stroke-dashoffset: 289.03; opacity: 0; }
 #oled-dash .ps-ring.holding .fgc { opacity: 1; }
@@ -757,8 +777,10 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 /* ---------- export / poster ---------- */
 .poster-preview { background: var(--bg-input); border-radius: var(--radius); padding: 10px; display: flex; justify-content: center; }
 .poster-preview img, .poster-preview canvas { max-width: 100%; max-height: 52vh; border-radius: var(--radius-sm); box-shadow: var(--shadow-2); }
-.privacy-check { display: flex; align-items: flex-start; gap: 9px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
-.privacy-check:last-child { border-bottom: none; }
+.inline-num { display: flex; align-items: center; gap: 6px; }
+.inline-num input { width: 82px; text-align: right; }
+.privacy-checks { display: flex; flex-wrap: wrap; gap: 5px 14px; margin-top: 8px; }
+.privacy-check { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-dim); }
 .privacy-check .ok { color: var(--accent); }
 .link-input {
   width: 100%; padding: 9px 10px;
@@ -801,6 +823,12 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   .modal .m-foot { flex-wrap: wrap; }
   .modal .m-foot .btn { flex: 1 1 0; }
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 430px) {
+  .topbar .fs-btn { display: none; }
+  .region-chip { max-width: 52vw; }
+  .lp-detail .lp-coords { display: none; }
 }
 
 /* ---------- desktop ---------- */

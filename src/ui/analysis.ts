@@ -96,7 +96,7 @@ export function createAnalysisView() {
       statBox(t('analysis.descent'), `↓${Math.round(stats.descent)}<small> m</small>`),
       statBox(t('analysis.maxAlt'), `${ha.v}<small> ${ha.u}</small>`),
       statBox(t('analysis.minAlt'), `${la.v}<small> ${la.u}</small>`),
-      statBox(t('analysis.points'), `${stats.pointCount}<small> / ${stats.segCount} seg</small>`)
+      statBox(t('analysis.points'), `${stats.pointCount}<small> / ${stats.segCount} ${t('analysis.segShort')}</small>`)
     );
     // difficulty (indicative only)
     const score = Math.max(1, Math.min(5, Math.round(stats.distance / 8000 + stats.ascent / 600)));

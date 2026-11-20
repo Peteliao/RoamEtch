@@ -63,7 +63,8 @@ export function icon(name, size = 20) {
     calendar: '<rect x="3.5" y="5" width="17" height="16" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 3v4m8-4v4M3.5 10h17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     clock: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 7v5l3.2 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
     star: '<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.2 1.1 5.9L12 17l-5.3 2.8 1.1-5.9L3.5 9.7l5.9-.8L12 3.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',
-    compass: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><path d="m15.5 8.5-2 5-5 2 2-5 5-2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>'
+    compass: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><path d="m15.5 8.5-2 5-5 2 2-5 5-2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',
+    sparkles: '<path d="m10 3 1.4 4.1L15.5 8.5l-4.1 1.4L10 14l-1.4-4.1L4.5 8.5l4.1-1.4L10 3Zm7.5 9 .9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9.9-2.6Z" fill="currentColor"/>'
   };
   const span = el('span', { html: `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true">${paths[name] || paths.info}</svg>`, style: { display: 'inline-flex' } });
   return span;
@@ -122,21 +123,21 @@ export function confirmModal({ title, message, confirmText, danger = false }) {
   });
 }
 
-export function promptModal({ title, label, value = '', placeholder = '' }) {
+export function promptModal({ title, label, value = '', placeholder = '', hint = '' }) {
   return new Promise((resolve) => {
     let settled = false;
     const done = (v) => { if (!settled) { settled = true; resolve(v); } };
     const input = el('input', { type: 'text', value, placeholder });
     const m = modal({
       title,
-      body: el('div', { class: 'field' }, el('label', {}, label), input),
+      body: el('div', { class: 'field' }, el('label', {}, label), input, hint ? el('div', { class: 'hint' }, hint) : null),
       footer: [
         el('button', { class: 'btn ghost', onclick: () => { done(null); m.close(); } }, t('common.cancel')),
         el('button', { class: 'btn primary', onclick: () => { done(input.value.trim()); m.close(); } }, t('common.ok'))
       ],
       onClose: () => done(null)
     });
-    setTimeout(() => input.focus(), 60);
+    setTimeout(() => { input.focus(); input.select(); }, 60);
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { done(input.value.trim()); m.close(); } });
   });
 }

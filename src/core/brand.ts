@@ -16,12 +16,49 @@ export function loadBrandFonts() {
   return fontsLoading;
 }
 
+function drawQrLogo(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) {
+  const pad = size * 0.12;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(cx - size / 2 - pad, cy - size / 2 - pad, size + pad * 2, size + pad * 2);
+  const x = cx - size / 2;
+  const y = cy - size / 2;
+  const r = size * 0.24;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, size, size, r);
+  else ctx.rect(x, y, size, size);
+  ctx.fillStyle = '#101820';
+  ctx.fill();
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(size / 512, size / 512);
+  ctx.strokeStyle = '#2bcda7';
+  ctx.lineWidth = 30;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(120, 392);
+  ctx.bezierCurveTo(168, 300, 150, 232, 216, 208);
+  ctx.bezierCurveTo(282, 184, 320, 260, 352, 196);
+  ctx.bezierCurveTo(368, 162, 372, 128, 400, 112);
+  ctx.stroke();
+  const dot = (dx: number, dy: number, radius: number, color: string) => {
+    ctx.beginPath();
+    ctx.arc(dx, dy, radius, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  };
+  dot(120, 392, 34, '#2bcda7');
+  dot(400, 112, 34, '#f5b942');
+  dot(216, 208, 18, '#f2f5f7');
+  dot(352, 196, 18, '#f2f5f7');
+  ctx.restore();
+}
+
 /**
  * Draw a scannable QR code (quiet zone included) at an exact pixel size.
- * Uses dark-on-white regardless of theme for reliable scanning.
+ * Uses dark-on-white and H-level correction so the centred brand mark stays scannable.
  */
 export function drawQr(ctx: CanvasRenderingContext2D, url: string, x: number, y: number, size: number) {
-  const qr = qrcode(0, 'M');
+  const qr = qrcode(0, 'H');
   qr.addData(url);
   qr.make();
   const n = qr.getModuleCount();
@@ -35,6 +72,7 @@ export function drawQr(ctx: CanvasRenderingContext2D, url: string, x: number, y:
       if (qr.isDark(r, c)) ctx.fillRect(x + (c + quiet) * cell, y + (r + quiet) * cell, cell + 0.4, cell + 0.4);
     }
   }
+  drawQrLogo(ctx, x + size / 2, y + size / 2, size * 0.2);
 }
 
 const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
