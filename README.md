@@ -26,7 +26,7 @@
 
 ## 技术栈
 
-- 构建：[Vite 6](https://vite.dev/) + 原生 ES Modules（无框架）
+- 构建：[Vite 6](https://vite.dev/) + TypeScript + 原生 ES Modules（无框架）
 - 地图：[MapLibre GL JS](https://maplibre.org/)（栅格底图，样式自包含，无外部样式/字体依赖）
 - 存储：[Dexie](https://dexie.org/)（IndexedDB）
 - 图表：[uPlot](https://github.com/leeoniya/uPlot)
@@ -39,7 +39,8 @@
 ```bash
 npm install
 npm run dev       # 开发服务器
-npm run build     # 生产构建（dist/）
+npm run typecheck # TypeScript 类型检查
+npm run build     # 类型检查 + 生产构建（dist/）
 npm run preview   # 预览生产构建
 ```
 
