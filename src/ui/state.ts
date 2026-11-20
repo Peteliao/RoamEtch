@@ -51,7 +51,7 @@ export async function recalcNow() {
   emit('stats:busy');
   const stats = await computeStatsAsync(
     full.segments.map((s) => ({ id: s.id, points: s.points })),
-    { ascentThreshold: get('ascentThreshold') }
+    { ascentThreshold: get('ascentThreshold'), activity: full.trip.activity, weightKg: get('weightKg') }
   );
   appState.stats = stats;
   await updateTrip(full.trip.id, { statsCache: { ...stats, series: undefined, segments: stats.segments } });

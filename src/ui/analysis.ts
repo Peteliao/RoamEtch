@@ -94,6 +94,7 @@ export function createAnalysisView() {
       statBox(t('analysis.maxSpeed'), `${mx.v}<small> ${mx.u}</small>`),
       statBox(t('analysis.avgPace'), `${pc.v}<small> ${pc.u}</small>`),
       statBox(t('analysis.descent'), `↓${Math.round(stats.descent)}<small> m</small>`),
+      statBox(t('analysis.calories'), stats.calories != null ? `${Math.round(stats.calories)}<small> kcal</small>` : '—'),
       statBox(t('analysis.maxAlt'), `${ha.v}<small> ${ha.u}</small>`),
       statBox(t('analysis.minAlt'), `${la.v}<small> ${la.u}</small>`),
       statBox(t('analysis.points'), `${stats.pointCount}<small> / ${stats.segCount} ${t('analysis.segShort')}</small>`)

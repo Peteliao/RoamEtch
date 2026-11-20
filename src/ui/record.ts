@@ -5,7 +5,8 @@ import { on, emit } from '../core/events';
 import { rec, startRecording, pauseRecording, resumeRecording, stopRecording, continueTrip, findRecoverableTrip, createManualTrip, retryGeolocation } from '../core/recorder';
 import { regionState } from '../core/region';
 import { availableBasemaps } from '../core/providers';
-import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel } from '../core/geo';
+import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine, bearing } from '../core/geo';
+import { estimateCalories } from '../core/calories';
 import { altSourceShortKey, altSourceTagClass } from '../core/elevation';
 import { loadTripFull, updateTrip, getTrip } from '../core/store';
 import { onBroadcast } from '../core/locks';
@@ -187,7 +188,7 @@ export function createRecordView() {
     return { v, k, c };
   }
   const cAvg = moreCell('panel.avgSpeed');
-  const cMax = moreCell('panel.maxSpeed');
+  const cCal = moreCell('panel.calories');
   const cAlt = moreCell('panel.altitude');
   const cAsc = moreCell('panel.ascent');
   const cDesc = moreCell('panel.descent');
@@ -232,8 +233,10 @@ export function createRecordView() {
     const avg = L.movingMs > 0 ? L.distance / (L.movingMs / 1000) : 0;
     const av = fmtSpeed(avg, units);
     cAvg.v.innerHTML = `${av.v}<small>${av.u}</small>`;
-    const mx = fmtSpeed(L.maxSpeed || 0, units);
-    cMax.v.innerHTML = `${mx.v}<small>${mx.u}</small>`;
+    const baseAct = currentActivity();
+    const act = baseAct === 'auto' ? rec.activityGuess : baseAct;
+    const cal = act ? estimateCalories(act, L.movingMs, avg, get('weightKg')) : null;
+    cCal.v.innerHTML = cal != null ? `${cal}<small> kcal</small>` : '—';
     const a = fmtAltitude(L.alt, units);
     cAlt.v.innerHTML = `${a.v}<small>${a.u}</small> <span class="tag ${altSourceTagClass(L.altSrc)}">${t(altSourceShortKey(L.altSrc))}</span>`;
     cAsc.v.innerHTML = `${Math.round(L.ascent)}<small>m</small>`;
@@ -242,8 +245,10 @@ export function createRecordView() {
     cSig.k.textContent = L.acc != null ? `${t('panel.signal')} ±${Math.round(L.acc)}m` : t('panel.signal');
     const slopeTxt = L.slope != null ? `${L.slope > 0 ? '+' : ''}${L.slope.toFixed(1)}%` : '--';
     detail.innerHTML = '';
+    const mx = fmtSpeed(L.maxSpeed || 0, units);
     const items = [
       el('span', {}, `${t('panel.slope')} ${slopeTxt}`),
+      el('span', {}, `${t('panel.maxSpeed')} ${mx.v}${mx.u}`),
       el('span', {}, `${t('panel.moving')} ${fmtDuration(L.movingMs, { compact: true })}`),
       el('span', {}, `${t('panel.still')} ${fmtDuration(L.stillMs, { compact: true })}`),
       el('span', {}, `${t('panel.points')} ${L.pointCount}`)
@@ -315,9 +320,12 @@ export function createRecordView() {
   let rwFollowOn = true;
   const rewalkBox = el('div', { class: 'rewalk-card', style: { display: 'none' } });
   const rwName = el('div', { class: 'rw-name' });
+  const rwPhase = el('span', { class: 'rw-phase' }, t('rewalk.phaseLocating'));
   const rwPct = el('span', { class: 'rw-pct mono' }, '0%');
   const rwBarFill = el('div', { class: 'rw-fill' });
+  const rwLeftK = el('span', { class: 'rw-k' }, t('rewalk.remaining'));
   const rwLeft = el('span', { class: 'mono' }, '--');
+  const rwDir = el('span', { class: 'rw-dir', style: { display: 'none' } }, icon('chevronRight', 15));
   const rwOff = el('span', { class: 'rw-off' }, t('rewalk.onTrack'));
   const rwNext = el('div', { class: 'rw-next small' });
   const rwFollow = el('button', { class: 'btn sm active', onclick: () => { rwFollowOn = !rwFollowOn; rwFollow.classList.toggle('active', rwFollowOn); } }, icon('follow', 14), t('record.follow'));
@@ -325,21 +333,56 @@ export function createRecordView() {
   const rwSim = el('button', { class: 'btn sm', onclick: () => (rewalk.sim ? stopSim() : startSim()) }, t('rewalk.simWalk'));
   const rwExit = el('button', { class: 'btn sm danger', onclick: () => { stopRewalk(); toast(t('rewalk.exited'), 'info', 2000); } }, icon('x', 14), t('rewalk.exit'));
   rewalkBox.append(
-    el('div', { class: 'row', style: { alignItems: 'center', gap: '8px' } }, rwName, rwPct),
+    el('div', { class: 'row rw-head', style: { alignItems: 'center', gap: '8px' } }, rwName, rwPhase, rwPct),
     el('div', { class: 'rw-bar' }, rwBarFill),
-    el('div', { class: 'rw-stats small' }, el('span', {}, `${t('rewalk.remaining')} `, rwLeft), rwOff),
+    el('div', { class: 'rw-stats small' }, el('span', {}, rwLeftK, ' ', rwLeft), rwDir, rwOff),
     rwNext,
     el('div', { class: 'row wrap', style: { gap: '8px', marginTop: '8px' } }, rwFollow, rwMute, rwSim, rwExit)
   );
+  function targetLabel(type) {
+    return t(type === 'start' ? 'wp.types.start' : 'wp.types.end');
+  }
   function updateRewalk(f) {
-    const pct = Math.round((f.progress || 0) * 100);
+    const phase = f.phase || 'follow';
+    const done = phase === 'finished' || f.finished;
+    rwPhase.textContent = t(done ? 'rewalk.phaseDone'
+      : phase === 'locating' ? 'rewalk.phaseLocating'
+        : phase === 'approach' ? 'rewalk.phaseApproach'
+          : 'rewalk.phaseFollow');
+    rwPhase.className = `rw-phase ${done ? 'done' : phase}`;
+    const pct = done ? 100 : Math.round((f.progress || 0) * 100);
     rwBarFill.style.width = `${pct}%`;
     rwPct.textContent = `${pct}%`;
+    if (phase === 'locating' && !done) {
+      rwLeftK.textContent = t('rewalk.remaining');
+      rwLeft.textContent = '--';
+      rwOff.textContent = t('rewalk.waitingGps');
+      rwOff.classList.remove('bad');
+      rwDir.style.display = 'none';
+      rwNext.textContent = '';
+      return;
+    }
+    if (phase === 'approach' && !done) {
+      const d = fmtDistance(f.navDist ?? f.remaining ?? 0, get('units'));
+      const target = targetLabel(f.navTargetType || f.targetType);
+      rwLeftK.textContent = t('rewalk.navDist');
+      rwLeft.textContent = `${d.v}${d.u}`;
+      rwOff.textContent = `${t('rewalk.navTo')} ${target}`;
+      rwOff.classList.remove('bad');
+      rwDir.style.display = '';
+      const rel = (f.navBearing ?? 0) - (f.heading ?? 0);
+      rwDir.style.transform = `rotate(${rel - 90}deg)`;
+      rwNext.textContent = `${t('rewalk.target')} ${target}`;
+      return;
+    }
+    rwDir.style.display = 'none';
+    rwLeftK.textContent = t('rewalk.remaining');
     const d = fmtDistance(f.remaining, get('units'));
     rwLeft.textContent = `${d.v}${d.u}`;
-    const off = f.offTrack > 60;
-    rwOff.textContent = off ? t('rewalk.offTrack', { m: Math.round(f.offTrack) }) : t('rewalk.onTrack');
-    rwOff.classList.toggle('bad', off);
+    const off = (f.offTrack || 0) > 60;
+    rwOff.textContent = done ? t('rewalk.phaseDone')
+      : off ? t('rewalk.offTrack', { m: Math.round(f.offTrack) }) : t('rewalk.onTrack');
+    rwOff.classList.toggle('bad', off && !done);
     rwNext.textContent = f.finished ? t('rewalk.finished')
       : f.nextWp ? `${t('rewalk.nextWp')} ${WP_ICONS[f.nextWp.type] || '📍'} ${f.nextWp.name || t(`wp.types.${f.nextWp.type}`)} · ${Math.round(f.nextWp.dist)} m`
         : t('rewalk.noWp');
@@ -354,30 +397,55 @@ export function createRecordView() {
     rwName.textContent = `${t('rewalk.title')} · ${rewalk.name}`;
     rwMute.textContent = rewalk.muted ? t('rewalk.unmute') : t('rewalk.mute');
     rwSim.textContent = rewalk.sim ? t('rewalk.simStop') : t('rewalk.simWalk');
+    const along = rewalk.cum[rewalk.maxIdx] || 0;
+    const span = Math.max(1e-6, rewalk.total - rewalk.entryAlong);
+    const navTarget = rewalk.navTarget;
+    let navDist = null;
+    let navBearing = null;
+    if (rewalk.phase === 'approach' && navTarget && rewalk.lastFix) {
+      navDist = haversine(rewalk.lastFix.lat, rewalk.lastFix.lon, navTarget.lat, navTarget.lon);
+      navBearing = bearing(rewalk.lastFix.lat, rewalk.lastFix.lon, navTarget.lat, navTarget.lon);
+    }
     updateRewalk({
-      progress: rewalk.total ? rewalk.cum[rewalk.maxIdx] / rewalk.total : 0,
-      remaining: Math.max(0, rewalk.total - rewalk.cum[rewalk.maxIdx]),
-      offTrack: rewalk.offTrack, nextWp: null, finished: rewalk.finished
+      progress: Math.max(0, Math.min(1, (along - rewalk.entryAlong) / span)),
+      remaining: Math.max(0, rewalk.total - along),
+      offTrack: rewalk.offTrack, nextWp: null, finished: rewalk.finished,
+      phase: rewalk.phase, mode: rewalk.mode, targetType: rewalk.targetType,
+      navTargetType: rewalk.navTargetType,
+      navDist, navBearing, heading: null
     });
   }
   on('rewalk:started', ({ segments, waypoints }) => {
     viewingTrip = null;
     renderViewBar();
-    if (map && !psActive) { map.setTrackData(segments, waypoints); setTimeout(() => map.fitTrack(), 300); }
+    if (map && !psActive) {
+      map.clearNavGuide();
+      map.setTrackData(segments, waypoints);
+      setTimeout(() => map.fitTrack(), 300);
+    }
     renderRewalk();
     toast(t('rewalk.hint'), 'info', 5000);
   });
   on('rewalk:fix', (f) => {
     if (map && !psActive) {
       map.updatePosition(f.lat, f.lon, f.acc, f.heading);
+      if (f.phase === 'approach' && f.targetLat != null) {
+        map.setNavGuide(f.lat, f.lon, f.targetLat, f.targetLon, targetLabel(f.navTargetType || f.targetType));
+      } else {
+        map.clearNavGuide();
+      }
       if (rwFollowOn) map.setFollow(true);
     }
     updateRewalk(f);
   });
-  on('rewalk:finished', () => { toast(t('rewalk.finished'), 'ok', 4000); renderRewalk(); });
+  on('rewalk:finished', () => {
+    if (map && !psActive) map.clearNavGuide();
+    toast(t('rewalk.finished'), 'ok', 4000);
+    renderRewalk();
+  });
   on('rewalk:stopped', () => {
     renderRewalk();
-    if (map && !psActive) { map.setTrackData([], []); map.clearPosition(); }
+    if (map && !psActive) { map.clearNavGuide(); map.setTrackData([], []); map.clearPosition(); }
     renderButtons(); renderBanners();
   });
   on('rewalk:mute', () => renderRewalk());

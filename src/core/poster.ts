@@ -8,13 +8,11 @@ import { get } from './settings';
 import { prepareMap, paintTrack } from './mapPaint';
 import { computeTripScore, drawScoreBadge, fitText, roundRectPath } from './tripScore';
 import { canvasPalette } from './palette';
-import { loadBrandFonts, drawBrandBlock, SPORT_FONT } from './brand';
+import { loadBrandFonts, drawBrandBlock, drawSignalChip, SPORT_FONT } from './brand';
 import { t } from './i18n';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
 const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
-const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
-const signalText = (lv) => (lv ? t(`panel.sig${SIG_KEYS[lv]}`) : '--');
 
 function drawProfile(ctx, stats, x, y, w, h, P) {
   const alts = stats.series.alt;
@@ -47,16 +45,9 @@ function drawProfile(ctx, stats, x, y, w, h, P) {
   ctx.fillText(`${Math.round(minA)}m`, x + 4, y + h - 6);
 }
 
-function drawSignalStat(ctx, x, baseline, avgAcc, P) {
-  const lv = signalLevel(avgAcc);
-  const hs = [18, 28, 38, 48], bw = 10, gap = 5;
-  for (let i = 0; i < 4; i++) {
-    ctx.fillStyle = i < lv ? P.accent : P.grid;
-    ctx.fillRect(x + i * (bw + gap), baseline - hs[i], bw, hs[i]);
-  }
-  ctx.fillStyle = lv ? P.accent : P.muted;
-  ctx.font = `700 36px ${SPORT_FONT}`;
-  ctx.fillText(signalText(lv), x + 4 * (bw + gap) + 10, baseline - 4);
+function drawCaloriesCell(stats) {
+  const kcal = stats.calories != null ? `${Math.round(stats.calories)}` : '—';
+  return [kcal, stats.calories != null ? 'kcal' : '', t('panel.calories')];
 }
 
 function drawInfoPanel(ctx, full, stats, x, y, w, h, { score }, P) {
@@ -69,7 +60,10 @@ function drawInfoPanel(ctx, full, stats, x, y, w, h, { score }, P) {
   ctx.fillStyle = P.muted;
   ctx.font = `26px ${FONT}`;
   const dateStr = new Date(full.trip.createdAt).toLocaleDateString();
-  ctx.fillText(`${dateStr} · ${t(`record.activities.${full.trip.activity}`)}`, x, y + 96);
+  const dateLine = `${dateStr} · ${t(`record.activities.${full.trip.activity}`)}`;
+  ctx.fillText(dateLine, x, y + 96);
+  const dw = ctx.measureText(dateLine).width;
+  drawSignalChip(ctx, x + dw + 18, y + 96, signalLevel(stats.avgAcc), { on: P.accent, off: P.grid, text: P.muted });
   if (score) {
     drawScoreBadge(ctx, score, x + w - 168, y + 8, P);
     ctx.fillStyle = P.muted;
@@ -81,7 +75,8 @@ function drawInfoPanel(ctx, full, stats, x, y, w, h, { score }, P) {
   const cells = [
     [`${d.v}`, d.u, t('panel.distance')],
     [fmtDuration(stats.duration, { compact: true }), '', t('panel.duration')],
-    [`${Math.round(stats.ascent)}`, 'm', t('panel.ascent')]
+    [`${Math.round(stats.ascent)}`, 'm', t('panel.ascent')],
+    drawCaloriesCell(stats)
   ];
   const cw = w / 4;
   cells.forEach(([v, u, k], i) => {
@@ -95,29 +90,10 @@ function drawInfoPanel(ctx, full, stats, x, y, w, h, { score }, P) {
     if (u) ctx.fillText(u, cx + vw + 8, y + 196);
     ctx.fillText(k, cx, y + 232);
   });
-  drawSignalStat(ctx, x + 3 * cw, y + 196, stats.avgAcc, P);
-  ctx.fillStyle = P.muted;
-  ctx.font = `24px ${FONT}`;
-  ctx.fillText(`${t('panel.signal')}${stats.avgAcc != null ? ` ±${Math.round(stats.avgAcc)}m` : ''}`, x + 3 * cw, y + 232);
 
   const brandY = y + h - 150;
   drawProfile(ctx, stats, x, y + 260, w, Math.max(120, brandY - 30 - (y + 260)), P);
   drawBrandBlock(ctx, x, brandY, 150, P, w - 170);
-}
-
-function rgba(hex, a) {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
-}
-
-// Fade the bottom of the map into the panel colour so the seam reads as one
-// continuous surface instead of a hard rectangle edge.
-function blendSeam(ctx, y0, y1, w, P) {
-  const g = ctx.createLinearGradient(0, y0, 0, y1);
-  g.addColorStop(0, rgba(P.panel, 0));
-  g.addColorStop(1, rgba(P.panel, 1));
-  ctx.fillStyle = g;
-  ctx.fillRect(0, y0, w, y1 - y0);
 }
 
 function drawStatCard(ctx, x, y, w, h, v, u, label, P) {
@@ -143,14 +119,6 @@ function drawSquarePanel(ctx, full, stats, score, W, H, mapH, P) {
   const py = mapH;
   ctx.fillStyle = P.panel;
   ctx.fillRect(0, py, W, H - py);
-  // thin gradient seam echoing the track colours
-  const seam = ctx.createLinearGradient(0, 0, W, 0);
-  const lut = P.lut;
-  seam.addColorStop(0, `rgb(${lut[0].join(',')})`);
-  seam.addColorStop(0.5, `rgb(${lut[1].join(',')})`);
-  seam.addColorStop(1, `rgb(${lut[2].join(',')})`);
-  ctx.fillStyle = seam;
-  ctx.fillRect(0, py, W, 5);
 
   ctx.textAlign = 'left';
   ctx.fillStyle = P.accent;
@@ -162,7 +130,10 @@ function drawSquarePanel(ctx, full, stats, score, W, H, mapH, P) {
   ctx.fillStyle = P.muted;
   ctx.font = `24px ${FONT}`;
   const dateStr = new Date(full.trip.createdAt).toLocaleDateString();
-  ctx.fillText(`${dateStr} · ${t(`record.activities.${full.trip.activity}`)}`, 60, py + 128);
+  const dateLine = `${dateStr} · ${t(`record.activities.${full.trip.activity}`)}`;
+  ctx.fillText(dateLine, 60, py + 128);
+  const dw = ctx.measureText(dateLine).width;
+  drawSignalChip(ctx, 60 + dw + 18, py + 128, signalLevel(stats.avgAcc), { on: P.accent, off: P.grid, text: P.muted });
   drawScoreBadge(ctx, score, W - 60 - 168, py + 40, P);
   ctx.fillStyle = P.muted;
   ctx.font = `22px ${FONT}`;
@@ -172,23 +143,11 @@ function drawSquarePanel(ctx, full, stats, score, W, H, mapH, P) {
   const cells = [
     [d.v, d.u, t('panel.distance')],
     [fmtDuration(stats.duration, { compact: true }), '', t('panel.duration')],
-    [`${Math.round(stats.ascent)}`, 'm', t('panel.ascent')]
+    [`${Math.round(stats.ascent)}`, 'm', t('panel.ascent')],
+    drawCaloriesCell(stats)
   ];
   const gap = 16, cw = (W - 120 - gap * 3) / 4, ch = 92, cy = py + 186;
   cells.forEach(([v, u, k], i) => drawStatCard(ctx, 60 + i * (cw + gap), cy, cw, ch, v, u, k, P));
-
-  const sx = 60 + 3 * (cw + gap);
-  roundRectPath(ctx, sx, cy, cw, ch, 18);
-  ctx.fillStyle = P.cellBg;
-  ctx.fill();
-  ctx.strokeStyle = P.grid;
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-  drawSignalStat(ctx, sx + 22, cy + 58, stats.avgAcc, P);
-  ctx.fillStyle = P.muted;
-  ctx.font = `22px ${FONT}`;
-  ctx.textAlign = 'left';
-  ctx.fillText(t('panel.signal'), sx + 22, cy + 84);
 
   drawBrandBlock(ctx, 60, H - 160, 130, P, W - 120 - 150);
 }
@@ -206,7 +165,11 @@ export async function generatePoster(full, {
   const P = canvasPalette();
   await loadBrandFonts();
   const cropped = applyPrivacy(full, privacy);
-  const stats = computeStats(cropped.segments, { ascentThreshold: get('ascentThreshold') });
+  const stats = computeStats(cropped.segments, {
+    ascentThreshold: get('ascentThreshold'),
+    activity: full.trip.activity,
+    weightKg: get('weightKg')
+  });
   const score = computeTripScore(stats, full.trip.activity);
   const W = 1080;
   const H = size === 'square' ? 1080 : 1920;
@@ -222,7 +185,8 @@ export async function generatePoster(full, {
     });
     ctx.drawImage(m.bg, 0, 0);
     paintTrack(ctx, m.fit, m.segments, m.waypoints, { lineWidth: 7, dotRadius: 13 });
-    blendSeam(ctx, mapH - 170, mapH, W, P);
+    ctx.fillStyle = P.accent;
+    ctx.fillRect(0, mapH - 8, W, 8);
     drawSquarePanel(ctx, full, stats, score, W, H, mapH, P);
     const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
     return { canvas, blob, usedVectorFallback: m.vector };
@@ -235,7 +199,8 @@ export async function generatePoster(full, {
   });
   ctx.drawImage(m.bg, 0, 0);
   paintTrack(ctx, m.fit, m.segments, m.waypoints);
-  blendSeam(ctx, mapH - 150, mapH, W, P);
+  ctx.fillStyle = P.accent;
+  ctx.fillRect(0, mapH - 8, W, 8);
   ctx.fillStyle = P.panel;
   ctx.fillRect(0, mapH, W, H - mapH);
   ctx.fillStyle = P.accent;

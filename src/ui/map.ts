@@ -35,6 +35,7 @@ export class TrackMap {
   declare vertexMarkers: any[];
   declare posMarker: any;
   declare hoverMarker: any;
+  declare navMarker: any;
   declare tileErrors: number;
   declare tileLoaded: boolean;
   declare vectorFallback: boolean;
@@ -63,6 +64,7 @@ export class TrackMap {
     this.vertexMarkers = [];
     this.posMarker = null;
     this.hoverMarker = null;
+    this.navMarker = null;
     this.tileErrors = 0;
     this.tileLoaded = false;
     this.vectorFallback = false;
@@ -142,6 +144,7 @@ export class TrackMap {
       set('live-casing', 'line-color', cssVar('--track-casing', '#06251d'));
       set('track-line', 'line-color', accent);
       set('live-line', 'line-color', accent);
+      set('nav-line', 'line-color', cssVar('--warn', '#f2b14a'));
     };
     if (m.isStyleLoaded()) apply();
     else m.once('style.load', apply);
@@ -221,12 +224,16 @@ export class TrackMap {
     if (!m.getSource('pos')) {
       m.addSource('pos', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     }
+    if (!m.getSource('nav')) {
+      m.addSource('nav', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    }
     const accent = cssVar('--track', '#2bcda7');
     const casing = cssVar('--track-casing', '#06251d');
     if (!m.getLayer('pos-acc')) m.addLayer({ id: 'pos-acc', type: 'fill', source: 'pos', paint: { 'fill-color': cssVar('--info', '#5aa7f0'), 'fill-opacity': 0.12 } });
     if (!m.getLayer('gap-line')) m.addLayer({ id: 'gap-line', type: 'line', source: 'gaps', paint: { 'line-color': cssVar('--track-gap', '#93a1ac'), 'line-width': 1.6, 'line-dasharray': [2, 2.4], 'line-opacity': 0.65 } });
     if (!m.getLayer('track-casing')) m.addLayer({ id: 'track-casing', type: 'line', source: 'track', paint: { 'line-color': casing, 'line-width': 7, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('track-line')) m.addLayer({ id: 'track-line', type: 'line', source: 'track', paint: { 'line-color': accent, 'line-width': 4 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    if (!m.getLayer('nav-line')) m.addLayer({ id: 'nav-line', type: 'line', source: 'nav', paint: { 'line-color': cssVar('--warn', '#f2b14a'), 'line-width': 3, 'line-opacity': 0.9, 'line-dasharray': [1.2, 1.6] }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('live-casing')) m.addLayer({ id: 'live-casing', type: 'line', source: 'live', paint: { 'line-color': casing, 'line-width': 7, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('live-line')) m.addLayer({ id: 'live-line', type: 'line', source: 'live', paint: { 'line-color': accent, 'line-width': 4 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
   }
@@ -382,6 +389,33 @@ export class TrackMap {
     this.map.getSource('pos')?.setData({ type: 'FeatureCollection', features: [] });
   }
 
+  // ---------- re-walk approach guide ----------
+  setNavGuide(lat, lon, targetLat, targetLon, label) {
+    if (!this.map || this.destroyed) return;
+    const [dLon, dLat] = toDisplay(lon, lat, this.coordSystem);
+    const [tLon, tLat] = toDisplay(targetLon, targetLat, this.coordSystem);
+    this.map.getSource('nav')?.setData({
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [[dLon, dLat], [tLon, tLat]] } }]
+    });
+    if (!this.navMarker) {
+      const node = document.createElement('div');
+      node.className = 'rw-target-marker';
+      node.innerHTML = '<span class="rw-target-label"></span><span class="rw-target-dot"></span>';
+      this.navMarker = new maplibregl.Marker({ element: node, anchor: 'center' }).setLngLat([tLon, tLat]).addTo(this.map);
+    } else {
+      this.navMarker.setLngLat([tLon, tLat]);
+    }
+    const lb = this.navMarker.getElement().querySelector('.rw-target-label');
+    if (lb) lb.textContent = label || '';
+  }
+
+  clearNavGuide() {
+    this.navMarker?.remove();
+    this.navMarker = null;
+    this.map?.getSource('nav')?.setData({ type: 'FeatureCollection', features: [] });
+  }
+
   // ---------- editing ----------
   setEditMode(on) {
     this.editMode = on;
@@ -515,6 +549,7 @@ export class TrackMap {
     for (const [, mk] of this.wpMarkers) mk.remove();
     this.posMarker?.remove();
     this.hoverMarker?.remove();
+    this.navMarker?.remove();
     this.map?.remove();
   }
 }

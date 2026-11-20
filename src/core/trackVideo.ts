@@ -6,8 +6,9 @@ import { computeStats } from './stats';
 import { prepareMap, paintTrack } from './mapPaint';
 import { computeTripScore, drawScoreBadge, fitText } from './tripScore';
 import { canvasPalette } from './palette';
-import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel } from './geo';
+import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine } from './geo';
 import { loadBrandFonts, drawQr, SITE_URL, SPORT_FONT } from './brand';
+import { estimateCalories } from './calories';
 import { get } from './settings';
 import { t } from './i18n';
 
@@ -15,7 +16,7 @@ const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Micr
 const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
 const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
 const W = 1080, H = 1920, MAP_H = 1080;
-const INTRO_MS = 2800, FADE_MS = 500;
+const INTRO_MS = 2600, OUTRO_MS = 3400, FADE_MS = 500;
 
 export const videoSupported = () =>
   typeof MediaRecorder !== 'undefined' && typeof HTMLCanvasElement !== 'undefined' && !!HTMLCanvasElement.prototype.captureStream;
@@ -157,7 +158,11 @@ export async function generateTrackVideo(full, {
 }: any = {}): Promise<any> {
   if (!videoSupported()) throw new Error('video-unsupported');
   const cropped = applyPrivacy(full, privacy);
-  const stats = computeStats(cropped.segments, { ascentThreshold: get('ascentThreshold') });
+  const stats = computeStats(cropped.segments, {
+    ascentThreshold: get('ascentThreshold'),
+    activity: full.trip.activity,
+    weightKg: get('weightKg')
+  });
   const N = stats.pointCount;
   if (N < 2) throw new Error('no-track');
   const score = computeTripScore(stats, full.trip.activity);
@@ -190,6 +195,40 @@ export async function generateTrackVideo(full, {
     maxD: stats.series.d[N - 1] || 1
   } : null;
   const units = get('units');
+
+  // cumulative calories along the replay (MET uses current moving average)
+  const flatPts = cropped.segments.flatMap((s) => s.points);
+  const cumKcal = new Array(N);
+  let movingAcc = 0;
+  for (let i = 0; i < N; i++) {
+    if (i > 0) {
+      const a = flatPts[i - 1], b = flatPts[i];
+      if (a?.t && b?.t) {
+        const dt = b.t - a.t;
+        if (dt > 0 && dt <= 60000 && haversine(a.lat, a.lon, b.lat, b.lon) / (dt / 1000) > 0.5) {
+          movingAcc += Math.min(dt, 60000);
+        }
+      }
+    }
+    const soFar = stats.series.d[i] || 0;
+    cumKcal[i] = estimateCalories(full.trip.activity, movingAcc, movingAcc > 0 ? soFar / (movingAcc / 1000) : 0, get('weightKg'));
+  }
+
+  // normalised route silhouette for the intro reveal
+  const introShape = (() => {
+    const step = Math.max(1, Math.ceil(flatPts.length / 700));
+    const pts = flatPts.filter((_, i) => i % step === 0 || i === flatPts.length - 1);
+    if (pts.length < 2) return null;
+    const midLat = (pts.reduce((a, p) => a + p.lat, 0) / pts.length) * Math.PI / 180;
+    const xs = pts.map((p) => p.lon * Math.cos(midLat));
+    const ys = pts.map((p) => p.lat);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    return {
+      w: Math.max(1e-6, maxX - minX), h: Math.max(1e-6, maxY - minY),
+      pts: pts.map((_, i) => ({ x: xs[i] - minX, y: maxY - ys[i] }))
+    };
+  })();
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
@@ -239,6 +278,8 @@ export async function generateTrackVideo(full, {
     drawCell(ctx, 60, row2, alt.v, alt.u, t('panel.altitude'), P);
     drawCell(ctx, 60 + cw, row2, asc.v, asc.u, t('panel.ascent'), P);
     drawCell(ctx, 60 + cw * 2, row2, desc.v, desc.u, t('panel.descent'), P);
+    const kcal = cumKcal[idx];
+    drawCell(ctx, 60 + cw * 3, row2, kcal != null ? String(Math.round(kcal)) : '—', kcal != null ? 'kcal' : '', t('panel.calories'), P);
 
     const pace = fmtPace(stats.series.speed[idx], units);
     const slope = stats.series.slope[idx];
@@ -256,34 +297,152 @@ export async function generateTrackVideo(full, {
     ctx.fillText(`${t('app.name')} · ${SITE_URL}`, 60, H - 36);
   }
 
-  // Opening title card: brand, slogan, QR + URL — played before the replay.
-  function drawIntro() {
+  // Opening recap card: trip identity, route silhouette and headline stats.
+  // Promo/QR lives in the outro instead, so the video opens on the trip itself.
+  function drawIntro(p) {
+    const ease = 1 - Math.pow(1 - Math.max(0, Math.min(1, p)), 3);
+    ctx.fillStyle = P.panel;
+    ctx.fillRect(0, 0, W, H);
+    const glow = ctx.createRadialGradient(W / 2, 800, 40, W / 2, 800, 760);
+    glow.addColorStop(0, P.accentSoft);
+    glow.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(0, 220, W, 1200);
+
+    ctx.textAlign = 'center';
+    ctx.fillStyle = P.accent;
+    ctx.font = `700 36px ${SPORT_FONT}`;
+    ctx.fillText(t('app.name'), W / 2, 168);
+    ctx.fillStyle = P.muted;
+    ctx.font = `600 24px ${FONT}`;
+    ctx.fillText(t('export.videoRecap'), W / 2, 214);
+
+    ctx.globalAlpha = Math.min(1, p * 3);
+    ctx.fillStyle = P.text;
+    ctx.font = `800 86px ${FONT}`;
+    ctx.fillText(fitText(ctx, name, W - 160), W / 2, 336);
+    ctx.fillStyle = P.muted;
+    ctx.font = `26px ${FONT}`;
+    ctx.fillText(`${activity} · ${dateStr}`, W / 2, 388);
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = P.accent;
+    const ruleW = 120 * ease;
+    ctx.fillRect(W / 2 - ruleW / 2, 420, ruleW, 6);
+
+    if (introShape) {
+      const bx = 140, by = 470, bw = 800, bh = 520;
+      const scale = Math.min(bw / introShape.w, bh / introShape.h);
+      const ox = bx + (bw - introShape.w * scale) / 2;
+      const oy = by + (bh - introShape.h * scale) / 2;
+      const xy = (pt) => [ox + pt.x * scale, oy + pt.y * scale];
+      const path = (n) => {
+        ctx.beginPath();
+        for (let i = 0; i < n; i++) {
+          const [x, y] = xy(introShape.pts[i]);
+          i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        }
+      };
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = P.accentLine;
+      ctx.lineWidth = 10;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      path(introShape.pts.length);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = P.accent;
+      ctx.lineWidth = 7;
+      ctx.shadowColor = P.accent;
+      ctx.shadowBlur = 18;
+      const n = Math.max(2, Math.ceil(introShape.pts.length * ease));
+      path(n);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      const [sx, sy] = xy(introShape.pts[0]);
+      ctx.fillStyle = P.amber;
+      ctx.beginPath();
+      ctx.arc(sx, sy, 9, 0, Math.PI * 2);
+      ctx.fill();
+      const [ex, ey] = xy(introShape.pts[n - 1]);
+      ctx.fillStyle = P.panel;
+      ctx.beginPath();
+      ctx.arc(ex, ey, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = P.accent;
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = Math.max(0, Math.min(1, (p - 0.55) / 0.35));
+    const d = fmtDistance(stats.distance, units);
+    const cols = [
+      [d.v, d.u, t('panel.distance')],
+      [fmtDuration(stats.duration, { compact: true }), '', t('panel.duration')],
+      stats.calories != null
+        ? [String(Math.round(stats.calories)), 'kcal', t('panel.calories')]
+        : [String(Math.round(stats.ascent)), 'm', t('panel.ascent')]
+    ];
+    const colW = W / 3, cy = 1160;
+    cols.forEach(([v, u, k], i) => {
+      const cx = colW * i + colW / 2;
+      ctx.font = `700 58px ${SPORT_FONT}`;
+      const vw = ctx.measureText(v).width;
+      ctx.font = `500 24px ${FONT}`;
+      const uw = u ? ctx.measureText(u).width + 6 : 0;
+      const startX = cx - (vw + uw) / 2;
+      ctx.textAlign = 'left';
+      ctx.fillStyle = P.accent;
+      ctx.font = `700 58px ${SPORT_FONT}`;
+      ctx.fillText(v, startX, cy);
+      if (u) {
+        ctx.fillStyle = P.muted;
+        ctx.font = `500 24px ${FONT}`;
+        ctx.fillText(u, startX + vw + 6, cy);
+      }
+      ctx.textAlign = 'center';
+      ctx.fillStyle = P.muted;
+      ctx.font = `24px ${FONT}`;
+      ctx.fillText(k, cx, cy + 38);
+    });
+    ctx.globalAlpha = 1;
+  }
+
+  // Closing brand card — the QR / call-to-action lives here, after the replay.
+  function drawOutro(alpha) {
+    if (alpha <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, alpha);
     ctx.fillStyle = P.panel;
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = 'center';
     ctx.fillStyle = P.accent;
-    ctx.font = `700 84px ${SPORT_FONT}`;
-    ctx.fillText(t('app.name'), W / 2, 556);
-    ctx.fillStyle = P.muted;
-    ctx.font = `600 34px ${FONT}`;
-    ctx.fillText(t('app.tagline'), W / 2, 618);
-    ctx.fillStyle = P.accent;
-    ctx.fillRect(W / 2 - 32, 700, 64, 6);
+    ctx.font = `700 44px ${SPORT_FONT}`;
+    ctx.fillText(t('app.name'), W / 2, 470);
     ctx.fillStyle = P.text;
-    ctx.font = `700 58px ${SPORT_FONT}`;
-    ctx.fillText(t('app.slogan'), W / 2, 792);
-    const qr = 320;
-    drawQr(ctx, SITE_URL, (W - qr) / 2, 860, qr);
+    ctx.font = `800 72px ${FONT}`;
+    ctx.fillText(t('export.videoThanksTitle'), W / 2, 592);
+    ctx.fillStyle = P.accent;
+    ctx.fillRect(W / 2 - 40, 634, 80, 6);
+    ctx.fillStyle = P.muted;
+    ctx.font = `30px ${FONT}`;
+    ctx.fillText(t('export.videoThanksSub'), W / 2, 704);
+    ctx.fillStyle = P.accent;
+    ctx.font = `600 40px ${SPORT_FONT}`;
+    ctx.fillText(t('app.slogan'), W / 2, 790);
+    const qr = 320, qy = 850;
+    drawQr(ctx, SITE_URL, (W - qr) / 2, qy, qr);
     ctx.textAlign = 'center';
     ctx.fillStyle = P.muted;
-    ctx.font = `600 34px ${SPORT_FONT}`;
-    ctx.fillText(t('app.scan'), W / 2, 1256);
+    ctx.font = `600 32px ${SPORT_FONT}`;
+    ctx.fillText(t('app.scan'), W / 2, qy + qr + 56);
     ctx.fillStyle = P.text;
-    ctx.font = `600 30px ${SPORT_FONT}`;
-    ctx.fillText(SITE_URL, W / 2, 1306);
+    ctx.font = `600 28px ${SPORT_FONT}`;
+    ctx.fillText(SITE_URL, W / 2, qy + qr + 104);
     ctx.fillStyle = P.faint;
-    ctx.font = `500 26px ${SPORT_FONT}`;
-    ctx.fillText(t('app.brandLine'), W / 2, 1356);
+    ctx.font = `500 24px ${SPORT_FONT}`;
+    ctx.fillText(t('app.brandLine'), W / 2, qy + qr + 150);
+    ctx.restore();
   }
 
   const mime = pickMime();
@@ -295,10 +454,10 @@ export async function generateTrackVideo(full, {
   rec.start(250);
 
   const playMs = seconds * 1000;
-  const totalMs = INTRO_MS + playMs + 800; // intro, replay, then hold the final frame briefly
+  const totalMs = INTRO_MS + playMs + OUTRO_MS; // recap intro, replay, brand outro
   let idx = 0, aborted = false;
   drawFrame(0, 0);
-  drawIntro();
+  drawIntro(1);
   let cover = '';
   try { cover = canvas.toDataURL('image/jpeg', 0.82); } catch { /* canvas tainted by tiles */ }
   await new Promise<void>((resolve) => {
@@ -308,14 +467,16 @@ export async function generateTrackVideo(full, {
       const el = now - t0;
       const u = el <= INTRO_MS ? 0 : Math.min(1, (el - INTRO_MS) / playMs);
       const introA = el >= INTRO_MS ? 0 : el > INTRO_MS - FADE_MS ? (INTRO_MS - el) / FADE_MS : 1;
+      const outroA = Math.min(1, Math.max(0, (el - INTRO_MS - playMs) / FADE_MS));
       while (idx < N - 1 && pointU[idx + 1] <= u) idx++;
       drawFrame(idx, u);
       if (introA > 0) {
         ctx.save();
         ctx.globalAlpha = introA;
-        drawIntro();
+        drawIntro(Math.min(1, el / (INTRO_MS * 0.72)));
         ctx.restore();
       }
+      if (outroA > 0) drawOutro(outroA);
       onProgress?.(0.1 + 0.9 * Math.min(1, el / totalMs));
       if (el >= totalMs) { resolve(); return; }
       requestAnimationFrame(step);

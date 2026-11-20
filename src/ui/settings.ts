@@ -123,6 +123,7 @@ export function createSettingsView(navigate) {
     segRow(t('settings.recordQuality'), [['high', t('settings.qHigh')], ['balanced', t('settings.qBalanced')], ['low', t('settings.qLow')]], get('recordQuality'), (v) => set('recordQuality', v)),
     switchRow(t('settings.wakeLock'), t('settings.wakeLockHint'), 'wakeLock'),
     numRow(t('settings.ascentThreshold'), '3–5 m', 'ascentThreshold', { min: 1, max: 20, unit: 'm' }),
+    numRow(t('settings.weight'), t('settings.weightHint'), 'weightKg', { min: 30, max: 200, unit: 'kg' }),
     numRow(t('settings.accuracyLimit'), '', 'accuracyLimit', { min: 10, max: 500, unit: 'm' })
   );
 

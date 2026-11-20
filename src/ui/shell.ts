@@ -124,7 +124,8 @@ export function createShell(root) {
     for (const v of Object.values(views)) viewsBox.append(v.view);
     tabbar.innerHTML = '';
     for (const [name, iconKey] of TABS) {
-      const b = el('button', { 'data-tab': name, onclick: () => navigate(name) }, icon(iconKey, 22), t(`tabs.${name}`));
+      const b = el('button', { 'data-tab': name, onclick: () => navigate(name) },
+        el('span', { class: 'tab-ic' }, icon(iconKey, 22)), t(`tabs.${name}`));
       tabbar.append(b);
     }
     navigate(current);

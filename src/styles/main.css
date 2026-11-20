@@ -746,6 +746,29 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .rewalk-card .rw-off { margin-left: auto; color: var(--accent); font-weight: 600; }
 .rewalk-card .rw-off.bad { color: var(--danger); }
 .rewalk-card .rw-next { margin-top: 6px; color: var(--text-dim); }
+.rewalk-card .rw-phase {
+  flex: none; font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
+  padding: 2px 7px; border-radius: 999px; color: var(--text-dim); background: var(--bg-input);
+}
+.rewalk-card .rw-phase.locating { color: var(--warn); }
+.rewalk-card .rw-phase.approach { color: var(--warn); }
+.rewalk-card .rw-phase.follow { color: var(--accent); }
+.rewalk-card .rw-phase.done { color: var(--accent); }
+.rewalk-card .rw-stats { flex-wrap: wrap; }
+.rewalk-card .rw-k { color: var(--text-faint); }
+.rewalk-card .rw-dir { display: inline-flex; color: var(--warn); transition: transform .25s; }
+.rw-target-marker { position: relative; }
+.rw-target-dot {
+  display: block; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--warn); border: 3px solid var(--bg-elev);
+  box-shadow: 0 0 0 3px rgba(245,185,66,0.25), 0 2px 6px rgba(0,0,0,0.4);
+}
+.rw-target-label {
+  position: absolute; bottom: calc(100% + 5px); left: 50%; transform: translateX(-50%);
+  white-space: nowrap; font-size: 11px; font-weight: 700; color: var(--text);
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: 999px;
+  padding: 2px 8px; box-shadow: var(--shadow-1);
+}
 .wp-type-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; }
 .wp-type-grid button {
   background: var(--bg-input); border: 1px solid transparent; border-radius: 10px;
@@ -831,11 +854,32 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   .lp-detail .lp-coords { display: none; }
 }
 
+/* ---------- tablet / desktop: floating record dock instead of full-width scrim ---------- */
+@media (min-width: 760px) {
+  .rec-controls {
+    left: 50%; right: auto; transform: translateX(-50%);
+    bottom: 14px; width: min(720px, calc(100% - 32px));
+    padding: 12px; padding-bottom: calc(12px + var(--safe-b));
+    border-radius: 22px;
+    background: rgba(23, 35, 46, 0.86);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-2);
+    backdrop-filter: blur(16px) saturate(1.15);
+    -webkit-backdrop-filter: blur(16px) saturate(1.15);
+  }
+  :root[data-theme="light"] .rec-controls { background: rgba(255, 255, 255, 0.86); }
+  :root[data-theme="oled"] .rec-controls { background: rgba(6, 6, 6, 0.9); }
+  :root[data-theme="contrast"] .rec-controls {
+    background: #ffffff; border-width: 2px; backdrop-filter: none; -webkit-backdrop-filter: none;
+  }
+  .rec-controls .live-panel { box-shadow: none; }
+  .rec-controls .rewalk-card, .rec-controls .view-trip-bar, .rec-controls .debug-banner { margin-bottom: 0; }
+}
+
 /* ---------- desktop ---------- */
 @media (min-width: 900px) {
   .view-scroll { max-width: 840px; margin: 0 auto; width: 100%; }
   .lp-more { grid-template-columns: repeat(6, 1fr); }
-  .rec-controls { max-width: 720px; margin: 0 auto; }
   .stat-grid { grid-template-columns: repeat(4, 1fr); }
 }
 

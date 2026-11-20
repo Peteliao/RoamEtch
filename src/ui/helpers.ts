@@ -20,8 +20,11 @@ export function el(tag, attrs = {}, ...children) {
 
 export function icon(name, size = 20) {
   const paths = {
-    record: '<circle cx="12" cy="12" r="8" fill="currentColor"/>',
-    trips: '<path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
+    record: '<circle cx="12" cy="12" r="8.2" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/>',
+    trips: '<circle cx="5" cy="18.5" r="2.2" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="19" cy="5.5" r="2.2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M7.2 18.5h6.1a4 4 0 0 0 0-8H10a4 4 0 0 1 0-8h6.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
+    routeFwd: '<circle cx="4.5" cy="19.5" r="1.9" fill="currentColor"/><path d="M6.8 19.5h7.4a4 4 0 0 0 0-8H9a4 4 0 0 1 0-8h7.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><path d="m14.6 1.6 3 2-3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+    routeRev: '<circle cx="19.5" cy="19.5" r="1.9" fill="currentColor"/><path d="M17.2 19.5H9.8a4 4 0 0 1 0-8H15a4 4 0 0 0 0-8H7.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><path d="m9.4 1.6-3 2 3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+    flag: '<path d="M6 21V4m0 1h10.5l-1.8 3.6L16.5 12H6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     analysis: '<path d="M4 19V5m0 14h16M7 15l4-6 3 3 5-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     export: '<path d="M12 3v12m0-12L8 7m4-4 4 4M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     settings: '<circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M4.9 4.9l2.1 2.1m10 10 2.1 2.1M19.1 4.9 17 7m-10 10-2.1 2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',

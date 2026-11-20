@@ -1,5 +1,6 @@
 // Pure trip statistics. Shared by the Web Worker and main-thread fallback.
 import { haversine, emaSeries, ascentDescent, slopeAt } from './geo';
+import { estimateCalories } from './calories';
 
 const MOVING_SPEED = 0.5;   // m/s
 const MAX_DT = 60_000;      // cap per-step time contribution (gap protection)
@@ -76,9 +77,10 @@ export function computeStats(segments, opts: any = {}) {
   const stillMs = Math.max(0, duration - movingMs);
   const hasTime = tSeries.some((t) => t != null);
   const avgSpeed = movingMs > 0 ? distance / (movingMs / 1000) : 0;
+  const calories = estimateCalories(opts.activity, movingMs, avgSpeed, opts.weightKg);
 
   return {
-    distance, duration, movingMs, stillMs, avgSpeed, maxSpeed,
+    distance, duration, movingMs, stillMs, avgSpeed, maxSpeed, calories,
     avgPace: avgSpeed > 0.3 ? 1000 / avgSpeed : null,
     ascent, descent, maxAlt, minAlt,
     avgAcc: accN ? accSum / accN : null,

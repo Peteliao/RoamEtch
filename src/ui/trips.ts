@@ -224,8 +224,30 @@ export function createTripsView(navigate) {
     }
   }
 
-  async function onRewalk(trip) {
-    const res = await startRewalk(trip.id);
+  function onRewalk(trip) {
+    let m;
+    const modes = [
+      ['full-fwd', 'routeFwd', 'modeFullFwd', 'modeFullFwdHint'],
+      ['full-rev', 'routeRev', 'modeFullRev', 'modeFullRevHint'],
+      ['near-end', 'flag', 'modeToEnd', 'modeToEndHint'],
+      ['near-start', 'pin', 'modeToStart', 'modeToStartHint']
+    ];
+    m = modal({
+      title: t('rewalk.modeTitle'),
+      body: el('div', {},
+        el('div', { class: 'small faint', style: { margin: '0 2px 10px' } }, t('rewalk.hint')),
+        el('div', { class: 'sheet-list' },
+          ...modes.map(([mode, ic, label, hint]) => el('button', {
+            class: 'sheet-row',
+            onclick: async () => { m.close(); await onRewalkStart(trip, mode); }
+          },
+          el('span', { class: 's-ic' }, icon(ic, 18)),
+          el('span', { class: 's-txt' }, el('div', { class: 's-t' }, t(`rewalk.${label}`)), el('div', { class: 's-d' }, t(`rewalk.${hint}`)))))
+      ))
+    });
+  }
+  async function onRewalkStart(trip, mode) {
+    const res = await startRewalk(trip.id, mode);
     if (res === 'busy') { toast(t('rewalk.busy'), 'warn'); return; }
     if (res === 'empty') { toast(t('rewalk.empty'), 'warn'); return; }
     navigate('record');

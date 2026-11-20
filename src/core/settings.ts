@@ -13,6 +13,7 @@ const DEFAULTS = {
   recordQuality: 'balanced',   // high | balanced | low
   wakeLock: true,
   ascentThreshold: 4,          // metres hysteresis
+  weightKg: 65,                // used for calorie estimates
   accuracyLimit: 50,           // metres, worse fixes flagged invalid
   privacyRadius: 300,          // metres, start/end privacy circle
   tiandituKey: '',             // BYOK
