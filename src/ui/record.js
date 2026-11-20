@@ -71,7 +71,14 @@ export function createRecordView() {
   on('map:basemap', renderStyleBar);
 
   // ---------- tools ----------
-  const followBtn = el('button', { class: 'iconbtn', title: t('record.follow'), onclick: () => { map.setFollow(!map.follow); followBtn.classList.toggle('active', map.follow); } }, icon('follow'));
+  const followBtn = el('button', {
+    class: 'iconbtn', title: t('record.follow'),
+    onclick: () => {
+      if (!map.posMarker) { locateOnce({ follow: true }); return; }
+      map.setFollow(!map.follow);
+      followBtn.classList.toggle('active', map.follow);
+    }
+  }, icon('follow'));
   const fitBtn = el('button', { class: 'iconbtn', title: t('record.fit'), onclick: () => map.fitTrack() }, icon('fit'));
   const editBtn = el('button', { class: 'iconbtn', title: t('record.editMode'), onclick: toggleEdit }, icon('edit'));
   const undoBtn = el('button', { class: 'iconbtn', title: t('edit.undo'), onclick: undoEdit, style: { display: 'none' } }, icon('undo'));
@@ -337,6 +344,31 @@ export function createRecordView() {
       );
     }
     renderOledButtons();
+  }
+
+  // One-shot fix when the view opens idle: triggers the permission prompt on first
+  // visit (iOS) and centers the map on the current position.
+  let locateSeq = 0;
+  function locateOnce(opts = {}) {
+    if (!navigator.geolocation) return;
+    const seq = ++locateSeq;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (seq !== locateSeq) return;
+        rec.permissionDenied = false;
+        rec.geoError = null;
+        const c = pos.coords;
+        map.updatePosition(c.latitude, c.longitude, c.accuracy, c.heading);
+        map.flyTo(c.latitude, c.longitude, Math.max(map.map.getZoom(), 15));
+        if (opts.follow) { map.setFollow(true); followBtn.classList.add('active'); }
+        renderBanners();
+      },
+      (err) => {
+        if (seq !== locateSeq) return;
+        if (err.code === 1) { rec.permissionDenied = true; renderBanners(); }
+      },
+      { enableHighAccuracy: true, maximumAge: 20000, timeout: 15000 }
+    );
   }
 
   async function onStart() {
@@ -699,8 +731,20 @@ export function createRecordView() {
     } else if (recoverable) {
       const full = await loadTripFull(recoverable.id);
       if (full) setTimeout(() => { viewingTrip = full; map.setTrackData(full.segments, full.waypoints); map.fitTrack(); renderViewBar(); }, 600);
+    } else if (rec.status === 'idle' || rec.status === 'finished') {
+      locateOnce();
     }
   })();
+
+  // iOS PWAs often resume from suspension instead of reloading — locate on return,
+  // but never yank the map away from a trip/re-walk the user is looking at.
+  function onVisibility() {
+    if (document.visibilityState !== 'visible') return;
+    if (viewingTrip || recoverable || rewalk.active) return;
+    if (map?.posMarker || !(rec.status === 'idle' || rec.status === 'finished')) return;
+    locateOnce();
+  }
+  document.addEventListener('visibilitychange', onVisibility);
 
   return {
     view,
@@ -709,6 +753,7 @@ export function createRecordView() {
     refresh: () => { renderButtons(); renderBanners(); renderViewBar(); renderRewalk(); },
     destroy: () => {
       document.removeEventListener('keydown', onKeydown);
+      document.removeEventListener('visibilitychange', onVisibility);
       offBroadcast();
       map?.destroy();
       map = null;
