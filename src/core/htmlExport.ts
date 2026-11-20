@@ -19,8 +19,8 @@ function fit(){var pad=70,kx=(W-pad*2)/Math.max(1e-6,B[2]-B[0]),ky=(H-pad*2-120)
 var TF=fit();
 var tiles=null,provider=null;
 function draw(){
-ctx.fillStyle='#0e1626';ctx.fillRect(0,0,W,H);
-ctx.strokeStyle='rgba(36,51,82,.5)';ctx.lineWidth=1;
+ctx.fillStyle='#101820';ctx.fillRect(0,0,W,H);
+ctx.strokeStyle='rgba(255,255,255,.06)';ctx.lineWidth=1;
 for(var x=0;x<W;x+=64){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();}
 for(var y=0;y<H;y+=64){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
 if(tiles){for(var i=0;i<tiles.length;i++){var t=tiles[i];if(t.img&&t.img.complete&&t.img.naturalWidth)ctx.drawImage(t.img,t.x,t.y,256,256);}}
@@ -28,12 +28,12 @@ TF=fit();
 ctx.lineCap='round';ctx.lineJoin='round';
 ctx.beginPath();
 for(var i=0;i<D.pts.length;i++){var p=TF(D.pts[i][0],D.pts[i][1]);i?ctx.lineTo(p[0],p[1]):ctx.moveTo(p[0],p[1]);}
-ctx.strokeStyle='rgba(6,35,28,.6)';ctx.lineWidth=9;ctx.stroke();
-ctx.strokeStyle='#2dd4a7';ctx.lineWidth=4.5;ctx.stroke();
+ctx.strokeStyle='rgba(6,37,29,.6)';ctx.lineWidth=9;ctx.stroke();
+ctx.strokeStyle='#2bcda7';ctx.lineWidth=4.5;ctx.stroke();
 if(D.pts.length){var s=TF(D.pts[0][0],D.pts[0][1]),e=TF(D.pts[D.pts.length-1][0],D.pts[D.pts.length-1][1]);
-ctx.fillStyle='#2dd4a7';ctx.beginPath();ctx.arc(s[0],s[1],8,0,7);ctx.fill();
+ctx.fillStyle='#2bcda7';ctx.beginPath();ctx.arc(s[0],s[1],8,0,7);ctx.fill();
 ctx.fillStyle='#f5b942';ctx.beginPath();ctx.arc(e[0],e[1],8,0,7);ctx.fill();}
-for(var i=0;i<D.wps.length;i++){var w=D.wps[i],p=TF(w.lo,w.la);ctx.fillStyle='#e8eef7';ctx.beginPath();ctx.arc(p[0],p[1],5,0,7);ctx.fill();ctx.fillStyle='#93a3bd';ctx.font='11px system-ui';ctx.fillText(w.n||'',p[0]+8,p[1]+4);}
+for(var i=0;i<D.wps.length;i++){var w=D.wps[i],p=TF(w.lo,w.la);ctx.fillStyle='#f2f5f7';ctx.beginPath();ctx.arc(p[0],p[1],5,0,7);ctx.fill();ctx.fillStyle='#93a1ac';ctx.font='11px system-ui';ctx.fillText(w.n||'',p[0]+8,p[1]+4);}
 }
 // --- dual-region auto detection (sync tz guess + async race probe) ---
 function tzGuess(){try{var tz=Intl.DateTimeFormat().resolvedOptions().timeZone||'';return /^Asia\\/(Shanghai|Urumqi|Chongqing|Harbin|Kashgar)/.test(tz)?'cn':'global';}catch(e){return 'global';}}
@@ -102,16 +102,16 @@ export function buildSelfContainedHTML(full, { tier = 'clear', privacy }: any = 
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escapeHtml(data.name)} · TrackMint</title>
 <style>
-html,body{margin:0;height:100%;background:#0b1220;color:#e8eef7;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;overflow:hidden}
+html,body{margin:0;height:100%;background:#101820;color:#f2f5f7;font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;overflow:hidden}
 #cv{position:fixed;inset:0}
-#top{position:fixed;top:0;left:0;right:0;padding:14px 18px;background:linear-gradient(rgba(7,11,20,.9),transparent);pointer-events:none}
+#top{position:fixed;top:0;left:0;right:0;padding:14px 18px;background:linear-gradient(rgba(10,15,20,.9),transparent);pointer-events:none}
 #top h1{margin:0;font-size:18px}
-#top .m{font-size:12px;color:#93a3bd;margin-top:3px}
-#bar{position:fixed;bottom:0;left:0;right:0;display:flex;gap:0;background:rgba(11,18,32,.94);border-top:1px solid #243352;padding:10px 6px calc(10px + env(safe-area-inset-bottom))}
+#top .m{font-size:12px;color:#93a1ac;margin-top:3px}
+#bar{position:fixed;bottom:0;left:0;right:0;display:flex;gap:0;background:rgba(16,24,32,.94);border-top:1px solid rgba(255,255,255,.08);padding:10px 6px calc(10px + env(safe-area-inset-bottom))}
 #bar div{flex:1;text-align:center}
-#bar .v{font-size:17px;font-weight:800;font-family:ui-monospace,Consolas,monospace;color:#2dd4a7}
-#bar .k{font-size:10.5px;color:#93a3bd;margin-top:2px}
-#bm{position:fixed;top:14px;right:16px;font-size:10.5px;color:#5d6f8d;background:rgba(11,18,32,.7);padding:3px 8px;border-radius:8px}
+#bar .v{font-size:17px;font-weight:800;font-family:ui-monospace,Consolas,monospace;color:#2bcda7}
+#bar .k{font-size:10.5px;color:#93a1ac;margin-top:2px}
+#bm{position:fixed;top:14px;right:16px;font-size:10.5px;color:#6f7e89;background:rgba(16,24,32,.7);padding:3px 8px;border-radius:8px}
 </style></head><body>
 <canvas id="cv"></canvas>
 <div id="top"><h1>${escapeHtml(data.name)}</h1><div class="m">${new Date(data.createdAt).toLocaleDateString()} · TrackMint · WGS-84</div></div>

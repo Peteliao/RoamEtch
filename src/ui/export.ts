@@ -19,11 +19,13 @@ export function createExportView(getRecordMap) {
   const scroll = el('div', { class: 'view-scroll' });
   view.append(scroll);
 
-  const title = el('h2', { class: 'page-title' }, t('export.title'));
+  const head = el('div', { class: 'page-head' },
+    el('h2', { class: 'page-title' }, t('export.title')),
+    el('div', { class: 'small muted', style: { marginTop: '3px' } }, t('export.subtitle')));
   let curFull = null;
   const tripSel = el('select', { style: { width: '100%' } });
   const tripLabel = el('div', { class: 'small muted', style: { marginTop: '6px' } });
-  const tripCard = el('div', { class: 'card' }, el('h3', {}, t('export.tripPick')), tripSel, tripLabel);
+  const tripCard = el('div', { class: 'card' }, el('h3', {}, icon('pin', 18), t('export.tripPick')), tripSel, tripLabel);
   tripSel.onchange = () => pickTrip(tripSel.value);
 
   // ---- privacy ----
@@ -35,7 +37,7 @@ export function createExportView(getRecordMap) {
   const vectorCb = el('input', { type: 'checkbox' });
   const cropInfo = el('div', { class: 'small', style: { color: 'var(--warn)', marginTop: '8px' } });
   const privacyCard = el('div', { class: 'card' },
-    el('h3', {}, '🛡 ' + t('export.privacy')),
+    el('h3', {}, icon('shield', 18), t('export.privacy')),
     el('div', { class: 'field' }, el('label', {}, t('export.privacyRadius')), radiusInput,
       el('div', { class: 'hint' }, t('export.privacyRadiusHint'))),
     el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.hideSensitive'))), labelSwitch(hideCb)),
@@ -43,10 +45,10 @@ export function createExportView(getRecordMap) {
     cropInfo,
     el('div', { class: 'sep' }),
     el('div', { class: 'small muted' },
-      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, '✓'), t('export.checkCircle')),
-      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, '✓'), t('export.checkNodes')),
-      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, '✓'), t('export.checkExif')),
-      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, '✓'), t('export.checkCoords')))
+      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 14)), t('export.checkCircle')),
+      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 14)), t('export.checkNodes')),
+      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 14)), t('export.checkExif')),
+      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 14)), t('export.checkCoords')))
   );
 
   function labelSwitch(input) {
@@ -146,7 +148,7 @@ export function createExportView(getRecordMap) {
     }
   };
   const posterCard = el('div', { class: 'card' },
-    el('h3', {}, '🖼 ' + t('export.poster')),
+    el('h3', {}, icon('photo', 18), t('export.poster')),
     el('div', { class: 'card-line' }, sizeToggle, genBtn, dlBtn, posterShareBtn),
     posterNote,
     el('div', { style: { marginTop: '10px' } }, previewBox)
@@ -227,7 +229,7 @@ export function createExportView(getRecordMap) {
   };
   if (!videoOk) vGenBtn.disabled = true;
   const videoCard = el('div', { class: 'card' },
-    el('h3', {}, '🎬 ' + t('export.video')),
+    el('h3', {}, icon('play', 18), t('export.video')),
     el('div', { class: 'small faint', style: { marginBottom: '8px' } }, t('export.videoHint')),
     videoOk ? null : el('div', { class: 'debug-banner' }, '⚠ ' + t('export.videoUnsupported')),
     isWeChat() ? el('div', { class: 'small', style: { color: 'var(--warn)', marginBottom: '8px' } }, t('export.videoWechatHint')) : null,
@@ -250,7 +252,7 @@ export function createExportView(getRecordMap) {
     return b;
   };
   const filesCard = el('div', { class: 'card' },
-    el('h3', {}, '📁 ' + t('common.export')),
+    el('h3', {}, icon('download', 18), t('common.export')),
     fileBtn(t('export.gpx'), t('export.gpxHint'), () => {
       const f = croppedFull();
       if (!f) return toast(t('analysis.noTrip'), 'warn');
@@ -289,13 +291,13 @@ export function createExportView(getRecordMap) {
     toast(`${t('export.exported')} · ${(size / 1024).toFixed(0)} KB`, 'ok');
   };
   const htmlCard = el('div', { class: 'card' },
-    el('h3', {}, '📄 ' + t('export.html')),
+    el('h3', {}, icon('globe', 18), t('export.html')),
     el('div', { class: 'small faint', style: { marginBottom: '8px' } }, t('export.htmlHint')),
     el('div', { class: 'row wrap' }, tierToggle, htmlBtn)
   );
 
   // ---- share link ----
-  const linkInput = el('input', { type: 'text', readonly: true, style: { width: '100%', fontSize: '11px' } });
+  const linkInput = el('input', { type: 'text', readonly: true, class: 'link-input' });
   const linkBtn = el('button', { class: 'btn sm' }, icon('share', 14), t('export.link'));
   const copyBtn = el('button', { class: 'btn sm' }, t('common.copy'));
   const linkNote = el('div', { class: 'small faint', style: { marginTop: '6px' } });
@@ -330,7 +332,7 @@ export function createExportView(getRecordMap) {
     if (!ok) toast(t('toast.copyFail'), 'warn');
   };
   const linkCard = el('div', { class: 'card' },
-    el('h3', {}, '🔗 ' + t('export.link')),
+    el('h3', {}, icon('share', 18), t('export.link')),
     el('div', { class: 'row wrap', style: { marginBottom: '8px' } }, linkBtn, copyBtn, shareBtn),
     linkInput, linkNote
   );
@@ -339,7 +341,15 @@ export function createExportView(getRecordMap) {
     ? el('div', { class: 'debug-banner' }, '⚠ ' + t('export.openInBrowser'))
     : null;
 
-  scroll.append(...[title, tripCard, wechatBanner, privacyCard, posterCard, videoCard, filesCard, htmlCard, linkCard].filter(Boolean));
+  const secPrivacy = el('div', { class: 'section-label' }, t('export.groupPrivacy'));
+  const secShare = el('div', { class: 'section-label' }, t('export.groupShare'));
+  const secFiles = el('div', { class: 'section-label' }, t('export.groupFiles'));
+  scroll.append(...[
+    head, tripCard, wechatBanner,
+    secPrivacy, privacyCard,
+    secShare, posterCard, videoCard, linkCard,
+    secFiles, filesCard, htmlCard
+  ].filter(Boolean));
 
   function resetOutputs() {
     posterBlob = null;

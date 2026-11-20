@@ -12,17 +12,17 @@ import { onBroadcast } from '../core/locks';
 import { TrackMap, WP_ICONS } from './map';
 import { rewalk, stopRewalk, toggleMute, startSim, stopSim } from '../core/rewalk';
 import { appState, setActiveTrip } from './state';
-import { openWaypointModal, moveWaypoint, moveVertex, insertVertex, deleteVertex, undoEdit, redoEdit } from './editor';
-import { el, icon, toast } from './helpers';
+import { openWaypointModal, moveWaypoint, moveVertex, insertVertex, deleteVertex, undoEdit, redoEdit, histState } from './editor';
+import { el, icon, toast, modal } from './helpers';
 import { confirmModal } from './helpers';
 
 export function createRecordView() {
   const view = el('div', { class: 'view', id: 'view-record' });
   const mapContainer = el('div', { id: 'map-container' });
-  const styleBar = el('div', { class: 'map-style-bar' });
+  const layerPill = el('button', { class: 'map-layer-pill', onclick: openLayerSheet });
   const tools = el('div', { class: 'map-tools' });
   const controls = el('div', { class: 'rec-controls' });
-  view.append(mapContainer, styleBar, tools, controls);
+  view.append(mapContainer, layerPill, tools, controls);
 
   let map = null;
   let psActive = false;
@@ -50,24 +50,50 @@ export function createRecordView() {
   }
   buildMap();
 
-  // ---------- style bar ----------
-  function renderStyleBar() {
-    styleBar.innerHTML = '';
-    for (const b of availableBasemaps()) {
-      const label = get('language') === 'en' || (get('language') === 'auto' && !navigator.language.startsWith('zh')) ? b.nameEn : b.name;
-      const btn = el('button', {
-        class: map?.basemapId === b.id ? 'active' : '',
-        title: `${t('map.styleCs')}: ${b.coordSystem}`,
-        onclick: () => { map.setBasemap(b.id); renderStyleBar(); }
-      }, label, el('span', { class: 'cs' }, b.coordSystem === 'GCJ02' ? 'GCJ' : 'WGS'));
-      styleBar.append(btn);
-    }
+  // ---------- layers (one entry, bottom sheet) ----------
+  function basemapLabel(b) {
+    return get('language') === 'en' || (get('language') === 'auto' && !navigator.language.startsWith('zh')) ? b.nameEn : b.name;
   }
-  renderStyleBar();
-  on('region:changed', renderStyleBar);
-  on('region:probed', renderStyleBar);
-  on('settings:changed', ({ key }) => { if (['tiandituKey', 'customTileUrl', 'language'].includes(key)) renderStyleBar(); });
-  on('map:basemap', renderStyleBar);
+  function renderMapLayer() {
+    const list = availableBasemaps();
+    const cur = list.find((b) => b.id === map?.basemapId) || list[0];
+    layerPill.innerHTML = '';
+    if (cur) {
+      layerPill.append(icon('layers', 16),
+        el('span', { class: 'ml-name' }, basemapLabel(cur)),
+        el('span', { class: 'ml-cs' }, cur.coordSystem === 'GCJ02' ? 'GCJ' : 'WGS'),
+        el('span', { class: 'chev' }, icon('chevron', 14)));
+      layerPill.title = `${t('map.layers')} · ${t('map.styleCs')}: ${cur.coordSystem}`;
+    }
+    if (map?.vectorFallback) layerPill.append(el('span', { class: 'ml-cs' }, t('map.vectorShort')));
+  }
+  renderMapLayer();
+
+  function openLayerSheet() {
+    let m;
+    const list = availableBasemaps();
+    const rows = list.map((b) => el('button', {
+      class: 'sheet-row' + (map?.basemapId === b.id ? ' active' : ''),
+      onclick: () => { map.setBasemap(b.id); m.close(); renderMapLayer(); }
+    },
+      el('span', { class: 's-ic' }, icon(b.kind === 'satellite' ? 'globe' : b.kind === 'terrain' ? 'mountain' : 'map', 18)),
+      el('span', { class: 's-txt' },
+        el('div', { class: 's-t' }, basemapLabel(b)),
+        el('div', { class: 's-d' }, `${t(`map.${b.kind}`)} · ${b.coordSystem === 'GCJ02' ? 'GCJ-02' : 'WGS-84'}`)),
+      map?.basemapId === b.id ? el('span', { class: 's-check' }, icon('check', 18)) : null
+    ));
+    m = modal({
+      title: t('map.layers'),
+      body: el('div', {},
+        el('div', { class: 'sheet-list' }, rows),
+        el('div', { class: 'sheet-note' }, t('map.layerNote')))
+    });
+  }
+
+  on('region:changed', renderMapLayer);
+  on('region:probed', renderMapLayer);
+  on('settings:changed', ({ key }) => { if (['tiandituKey', 'customTileUrl', 'language'].includes(key)) renderMapLayer(); });
+  on('map:basemap', renderMapLayer);
 
   // ---------- tools ----------
   const followBtn = el('button', {
@@ -79,11 +105,10 @@ export function createRecordView() {
     }
   }, icon('follow'));
   const fitBtn = el('button', { class: 'iconbtn', title: t('record.fit'), onclick: () => map.fitTrack() }, icon('fit'));
-  const editBtn = el('button', { class: 'iconbtn', title: t('record.editMode'), onclick: toggleEdit }, icon('edit'));
   const undoBtn = el('button', { class: 'iconbtn', title: t('edit.undo'), onclick: undoEdit, style: { display: 'none' } }, icon('undo'));
   const redoBtn = el('button', { class: 'iconbtn', title: t('edit.redo'), onclick: redoEdit, style: { display: 'none' } }, icon('redo'));
-  const psBtn = el('button', { class: 'iconbtn', title: t('record.powerLock'), onclick: () => setPowerLock(true) }, icon('powerlock'));
-  tools.append(followBtn, fitBtn, editBtn, undoBtn, redoBtn, psBtn);
+  const moreBtn = el('button', { class: 'iconbtn', title: t('record.moreTools'), onclick: openMoreSheet }, icon('more'));
+  tools.append(followBtn, fitBtn, undoBtn, redoBtn, moreBtn);
   on('map:followoff', () => followBtn.classList.remove('active'));
   on('history:changed', (s) => {
     undoBtn.style.display = appState.editMode ? '' : 'none';
@@ -92,12 +117,35 @@ export function createRecordView() {
     redoBtn.disabled = !s.canRedo;
   });
 
+  function openMoreSheet() {
+    const canEdit = rec.status !== 'recording';
+    const canUndo = histState().canUndo;
+    const canRedo = histState().canRedo;
+    let m;
+    const close = (fn) => { m.close(); fn(); };
+    const row = (opts) => el('button', { class: 'sheet-row' + (opts.active ? ' active' : '') + (opts.danger ? ' danger' : ''), disabled: opts.disabled, onclick: opts.onclick },
+      el('span', { class: 's-ic' }, icon(opts.iconKey, 18)),
+      el('span', { class: 's-txt' }, el('div', { class: 's-t' }, opts.title), opts.desc ? el('div', { class: 's-d' }, opts.desc) : null),
+      opts.active ? el('span', { class: 's-check' }, icon('check', 18)) : null);
+    const body = el('div', { class: 'sheet-list' },
+      row({
+        iconKey: 'edit', title: t('record.editMode'), desc: t('record.editHint'),
+        active: appState.editMode, disabled: !canEdit,
+        onclick: () => close(() => toggleEdit())
+      }),
+      row({ iconKey: 'undo', title: t('edit.undo'), disabled: !appState.editMode || !canUndo, onclick: () => close(undoEdit) }),
+      row({ iconKey: 'redo', title: t('edit.redo'), disabled: !appState.editMode || !canRedo, onclick: () => close(redoEdit) }),
+      row({ iconKey: 'powerlock', title: t('record.powerLock'), desc: t('record.powerLockHint'), onclick: () => close(() => setPowerLock(true)) })
+    );
+    m = modal({ title: t('record.moreTools'), body });
+  }
+
   function toggleEdit() {
     if (rec.status === 'recording') { toast(t('record.statusRecording'), 'warn'); return; }
     if (!appState.activeTripId) { toast(t('analysis.noTrip'), 'warn'); return; }
     appState.editMode = !appState.editMode;
     map.setEditMode(appState.editMode);
-    editBtn.classList.toggle('active', appState.editMode);
+    moreBtn.classList.toggle('active', appState.editMode);
     undoBtn.style.display = appState.editMode ? '' : 'none';
     redoBtn.style.display = appState.editMode ? '' : 'none';
     if (appState.editMode) toast(t('record.editModeOn'), 'info', 3500);
@@ -106,32 +154,46 @@ export function createRecordView() {
   // ---------- live panel ----------
   const panel = el('div', { class: 'live-panel' + (get('panelCollapsed') ? ' collapsed' : '') });
   const pStatus = el('span', { class: 'st idle' }, t('record.statusIdle'));
-  const pHead = el('div', { class: 'lp-head', onclick: () => { panel.classList.toggle('collapsed'); set('panelCollapsed', panel.classList.contains('collapsed')); } },
-    pStatus, el('span', { class: 'rec-dot', id: 'panel-rec-dot' }), icon('chevron', 16));
-  const grid = el('div', { class: 'live-grid' });
-  function cell(key, hero = false) {
+  const pHead = el('div', { class: 'lp-head', onclick: togglePanel },
+    pStatus, el('span', { class: 'rec-dot', id: 'panel-rec-dot' }), el('span', { class: 'chev' }, icon('chevron', 16)));
+  function togglePanel() {
+    panel.classList.toggle('collapsed');
+    set('panelCollapsed', panel.classList.contains('collapsed'));
+  }
+  const compact = el('div', { class: 'lp-compact' });
+  function metric(key, hero = false) {
     const v = el('div', { class: 'v' }, '--');
     const k = el('div', { class: 'k' }, t(key));
-    const c = el('div', { class: 'live-cell' + (hero ? ' hero' : '') }, v, k);
-    grid.append(c);
+    const c = el('div', { class: 'lp-metric' + (hero ? ' hero' : '') }, v, k);
+    compact.append(c);
     return { v, k, c };
   }
-  const cDist = cell('panel.distance', true);
-  const cDur = cell('panel.duration');
-  const cSig = cell('panel.signal');
-  const cSpeed = cell('panel.speed');
-  const cAlt = cell('panel.altitude');
-  const cAsc = cell('panel.ascent');
-  const cDesc = cell('panel.descent');
-  cSpeed.c.style.cursor = 'pointer';
+  const cDist = metric('panel.distance', true);
+  const cDur = metric('panel.duration');
+  const cSpeed = metric('panel.speed');
+  cSpeed.c.classList.add('tap');
   cSpeed.c.title = t('settings.speedDisplay');
   cSpeed.c.onclick = () => {
     const cur = speedMode();
     set('speedDisplay', cur === 'speed' ? 'pace' : 'speed');
     if (rec.live) renderPanel(rec.live);
   };
+  const moreGrid = el('div', { class: 'lp-more' });
+  function moreCell(key) {
+    const v = el('div', { class: 'v' }, '--');
+    const k = el('div', { class: 'k' }, t(key));
+    const c = el('div', { class: 'lp-more-cell' }, v, k);
+    moreGrid.append(c);
+    return { v, k, c };
+  }
+  const cAvg = moreCell('panel.avgSpeed');
+  const cMax = moreCell('panel.maxSpeed');
+  const cAlt = moreCell('panel.altitude');
+  const cAsc = moreCell('panel.ascent');
+  const cDesc = moreCell('panel.descent');
+  const cSig = moreCell('panel.signal');
   const detail = el('div', { class: 'lp-detail' });
-  panel.append(pHead, grid, detail);
+  panel.append(pHead, compact, moreGrid, detail);
 
   const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
   function renderSignal(host, acc) {
@@ -167,6 +229,11 @@ export function createRecordView() {
       cSpeed.v.innerHTML = `${s.v}<small>${s.u}</small>`;
       cSpeed.k.textContent = t('panel.speed');
     }
+    const avg = L.movingMs > 0 ? L.distance / (L.movingMs / 1000) : 0;
+    const av = fmtSpeed(avg, units);
+    cAvg.v.innerHTML = `${av.v}<small>${av.u}</small>`;
+    const mx = fmtSpeed(L.maxSpeed || 0, units);
+    cMax.v.innerHTML = `${mx.v}<small>${mx.u}</small>`;
     const a = fmtAltitude(L.alt, units);
     cAlt.v.innerHTML = `${a.v}<small>${a.u}</small> <span class="tag ${altSourceTagClass(L.altSrc)}">${t(altSourceShortKey(L.altSrc))}</span>`;
     cAsc.v.innerHTML = `${Math.round(L.ascent)}<small>m</small>`;
@@ -595,7 +662,7 @@ export function createRecordView() {
           restoreTrackAfterRebuild();
         });
       }
-      renderStyleBar();
+      renderMapLayer();
     }
   }
 
@@ -769,7 +836,7 @@ export function createRecordView() {
   return {
     view,
     getMap: () => map,
-    resize: () => { map?.resize(); renderStyleBar(); },
+    resize: () => { map?.resize(); renderMapLayer(); },
     refresh: () => { renderButtons(); renderBanners(); renderViewBar(); renderRewalk(); },
     destroy: () => {
       document.removeEventListener('keydown', onKeydown);

@@ -16,6 +16,11 @@ export const WP_ICONS = {
 
 const LIVE_FILL = 'rgba(90,167,240,0.14)';
 
+function cssVar(name: string, fallback: string) {
+  if (typeof document === 'undefined') return fallback;
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+}
+
 export class TrackMap {
   declare container: HTMLElement;
   declare opts: any;
@@ -123,12 +128,20 @@ export class TrackMap {
     return this;
   }
 
-  // Basemap tiles stay full-color in every theme; only the loading background follows it.
+  // Basemap tiles stay full-color in every theme; track, gaps and background follow it.
   _applyTheme() {
     const m = this.map;
     if (!m || this.destroyed) return;
     const apply = () => {
-      if (m.getLayer('bg')) m.setPaintProperty('bg', 'background-color', vectorBgColor());
+      const set = (layer, prop, val) => { if (m.getLayer(layer)) m.setPaintProperty(layer, prop, val); };
+      const accent = cssVar('--track', '#2bcda7');
+      set('bg', 'background-color', vectorBgColor());
+      set('pos-acc', 'fill-color', cssVar('--info', '#5aa7f0'));
+      set('gap-line', 'line-color', cssVar('--track-gap', '#93a1ac'));
+      set('track-casing', 'line-color', cssVar('--track-casing', '#06251d'));
+      set('live-casing', 'line-color', cssVar('--track-casing', '#06251d'));
+      set('track-line', 'line-color', accent);
+      set('live-line', 'line-color', accent);
     };
     if (m.isStyleLoaded()) apply();
     else m.once('style.load', apply);
@@ -208,12 +221,14 @@ export class TrackMap {
     if (!m.getSource('pos')) {
       m.addSource('pos', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     }
-    if (!m.getLayer('pos-acc')) m.addLayer({ id: 'pos-acc', type: 'fill', source: 'pos', paint: { 'fill-color': '#5aa7f0', 'fill-opacity': 0.12 } });
-    if (!m.getLayer('gap-line')) m.addLayer({ id: 'gap-line', type: 'line', source: 'gaps', paint: { 'line-color': '#8a97ad', 'line-width': 1.6, 'line-dasharray': [2, 2.4], 'line-opacity': 0.65 } });
-    if (!m.getLayer('track-casing')) m.addLayer({ id: 'track-casing', type: 'line', source: 'track', paint: { 'line-color': '#06231c', 'line-width': 7, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
-    if (!m.getLayer('track-line')) m.addLayer({ id: 'track-line', type: 'line', source: 'track', paint: { 'line-color': '#2dd4a7', 'line-width': 4 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
-    if (!m.getLayer('live-casing')) m.addLayer({ id: 'live-casing', type: 'line', source: 'live', paint: { 'line-color': '#06231c', 'line-width': 7, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
-    if (!m.getLayer('live-line')) m.addLayer({ id: 'live-line', type: 'line', source: 'live', paint: { 'line-color': '#2dd4a7', 'line-width': 4 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    const accent = cssVar('--track', '#2bcda7');
+    const casing = cssVar('--track-casing', '#06251d');
+    if (!m.getLayer('pos-acc')) m.addLayer({ id: 'pos-acc', type: 'fill', source: 'pos', paint: { 'fill-color': cssVar('--info', '#5aa7f0'), 'fill-opacity': 0.12 } });
+    if (!m.getLayer('gap-line')) m.addLayer({ id: 'gap-line', type: 'line', source: 'gaps', paint: { 'line-color': cssVar('--track-gap', '#93a1ac'), 'line-width': 1.6, 'line-dasharray': [2, 2.4], 'line-opacity': 0.65 } });
+    if (!m.getLayer('track-casing')) m.addLayer({ id: 'track-casing', type: 'line', source: 'track', paint: { 'line-color': casing, 'line-width': 7, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    if (!m.getLayer('track-line')) m.addLayer({ id: 'track-line', type: 'line', source: 'track', paint: { 'line-color': accent, 'line-width': 4 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    if (!m.getLayer('live-casing')) m.addLayer({ id: 'live-casing', type: 'line', source: 'live', paint: { 'line-color': casing, 'line-width': 7, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    if (!m.getLayer('live-line')) m.addLayer({ id: 'live-line', type: 'line', source: 'live', paint: { 'line-color': accent, 'line-width': 4 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
   }
 
   /** segments: [{id, points:[{lat,lon,...}]}] in WGS-84 */

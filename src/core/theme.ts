@@ -31,6 +31,8 @@ export function effectiveTheme() {
 export function applyTheme() {
   const eff = effectiveTheme();
   document.documentElement.dataset.theme = eff === 'dark' ? '' : eff;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', eff === 'light' || eff === 'contrast' ? '#f5f7f6' : '#101820');
   emit('theme:applied', { effective: eff });
 }
 

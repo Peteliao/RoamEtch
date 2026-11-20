@@ -29,7 +29,7 @@ export function drawQr(ctx: CanvasRenderingContext2D, url: string, x: number, y:
   const cell = size / (n + quiet * 2);
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(x, y, size, size);
-  ctx.fillStyle = '#0b1220';
+  ctx.fillStyle = '#101820';
   for (let r = 0; r < n; r++) {
     for (let c = 0; c < n; c++) {
       if (qr.isDark(r, c)) ctx.fillRect(x + (c + quiet) * cell, y + (r + quiet) * cell, cell + 0.4, cell + 0.4);

@@ -17,28 +17,42 @@ export function createAnalysisView() {
   const scroll = el('div', { class: 'view-scroll' });
   view.append(scroll);
 
-  const tripSel = el('select', { style: { flex: '1' } });
-  const head = el('div', { class: 'card', style: { display: 'flex', gap: '10px', alignItems: 'center' } },
-    el('span', { class: 'small muted' }, t('analysis.selectTrip')), tripSel);
+  const tripSel = el('select', {});
+  const head = el('div', { class: 'page-head' },
+    el('h2', { class: 'page-title' }, t('analysis.title')),
+    el('div', { class: 'search-bar', style: { margin: '10px 0 14px' } }, icon('analysis', 18), tripSel));
   tripSel.onchange = async () => { if (tripSel.value) await setActiveTrip(tripSel.value); };
 
   const statsBox = el('div', { class: 'stat-grid' });
   const diffBox = el('div', {});
   const advisory = el('div', {});
-  const miniMapBox = el('div', { style: { height: '200px', borderRadius: '12px', overflow: 'hidden', border: '1px solid var(--border)', marginBottom: '12px', position: 'relative' } });
-  const elevCard = el('div', { class: 'card' }, el('h3', {}, t('analysis.elevProfile')), el('div', { class: 'small faint', style: { marginBottom: '6px' } }, t('analysis.hoverHint')), el('div', { id: 'elev-chart-wrap' }));
-  const speedCard = el('div', { class: 'card' }, el('h3', {}, t('analysis.speedProfile')), el('div', { class: 'small faint', style: { marginBottom: '6px' } }, t('analysis.hoverHint')), el('div', { id: 'speed-chart-wrap' }));
+  const miniMapBox = el('div', { class: 'analysis-map' });
+  const chartWrap = el('div', { class: 'chart-wrap' });
+  const altTab = el('button', { class: 'active', onclick: () => setChartMode('alt') }, t('analysis.altTab'));
+  const speedTab = el('button', { onclick: () => setChartMode('speed') }, t('analysis.speedTab'));
+  const chartTabs = el('div', { class: 'seg-toggle sm' }, altTab, speedTab);
+  const chartCard = el('div', { class: 'card chart-card' },
+    el('div', { class: 'chart-head' }, el('h3', {}, t('analysis.chartTitle')), chartTabs),
+    el('div', { class: 'small faint', style: { marginBottom: '2px' } }, t('analysis.hoverHint')),
+    chartWrap);
   const slopeCard = el('div', { class: 'card' }, el('h3', {}, t('analysis.slopeDist')), el('canvas', { id: 'slope-canvas', style: { width: '100%', height: '120px' } }));
   const segCard = el('div', { class: 'card' }, el('h3', {}, t('analysis.segTable')), el('div', { id: 'seg-table' }));
   const tlCard = el('div', { class: 'card' }, el('h3', {}, t('analysis.timeline')), el('div', { id: 'timeline' }));
   const disclaimer = el('div', { class: 'small faint', style: { padding: '4px 2px 20px' } }, '⚠ ' + t('analysis.disclaimer'));
 
-  scroll.append(head, advisory, statsBox, diffBox, miniMapBox, elevCard, speedCard, slopeCard, segCard, tlCard, disclaimer);
+  scroll.append(head, advisory, statsBox, diffBox, miniMapBox, chartCard, slopeCard, segCard, tlCard, disclaimer);
 
   let miniMap = null;
-  let elevChart = null;
-  let speedChart = null;
+  let chart = null;
+  let chartMode = 'alt';
   let flatPoints = [];
+
+  function setChartMode(mode) {
+    chartMode = mode;
+    altTab.classList.toggle('active', mode === 'alt');
+    speedTab.classList.toggle('active', mode === 'speed');
+    if (appState.stats) renderCharts(appState.stats);
+  }
 
   function ensureMiniMap() {
     if (miniMap) return;
@@ -55,8 +69,8 @@ export function createAnalysisView() {
     tripSel.value = appState.activeTripId || '';
   }
 
-  function statBox(label, valueHtml) {
-    return el('div', { class: 'stat-box' }, el('div', { class: 'v', html: valueHtml }), el('div', { class: 'k' }, label));
+  function statBox(label, valueHtml, primary = false) {
+    return el('div', { class: 'stat-box' + (primary ? ' primary' : '') }, el('div', { class: 'v', html: valueHtml }), el('div', { class: 'k' }, label));
   }
 
   function renderStats(stats) {
@@ -71,14 +85,14 @@ export function createAnalysisView() {
     const ha = fmtAltitude(stats.maxAlt, units);
     const la = fmtAltitude(stats.minAlt, units);
     statsBox.append(
-      statBox(t('analysis.distance'), `${d.v}<small> ${d.u}</small>`),
-      statBox(t('analysis.duration'), fmtDuration(stats.duration)),
+      statBox(t('analysis.distance'), `${d.v}<small> ${d.u}</small>`, true),
+      statBox(t('analysis.duration'), fmtDuration(stats.duration), true),
+      statBox(t('analysis.avgSpeed'), `${sp.v}<small> ${sp.u}</small>`, true),
+      statBox(t('analysis.ascent'), `↑${Math.round(stats.ascent)}<small> m</small>`, true),
       statBox(t('analysis.movingTime'), fmtDuration(stats.movingMs, { compact: true })),
       statBox(t('analysis.stillTime'), fmtDuration(stats.stillMs, { compact: true })),
-      statBox(t('analysis.avgSpeed'), `${sp.v}<small> ${sp.u}</small>`),
       statBox(t('analysis.maxSpeed'), `${mx.v}<small> ${mx.u}</small>`),
       statBox(t('analysis.avgPace'), `${pc.v}<small> ${pc.u}</small>`),
-      statBox(t('analysis.ascent'), `↑${Math.round(stats.ascent)}<small> m</small>`),
       statBox(t('analysis.descent'), `↓${Math.round(stats.descent)}<small> m</small>`),
       statBox(t('analysis.maxAlt'), `${ha.v}<small> ${ha.u}</small>`),
       statBox(t('analysis.minAlt'), `${la.v}<small> ${la.u}</small>`),
@@ -131,22 +145,38 @@ export function createAnalysisView() {
 
   function renderCharts(stats) {
     flatPoints = appState.activeTripFull?.segments.flatMap((s) => s.points) || [];
-    const wrap = elevCard.querySelector('#elev-chart-wrap');
-    const sWrap = speedCard.querySelector('#speed-chart-wrap');
-    wrap.innerHTML = '';
-    sWrap.innerHTML = '';
-    elevChart?.destroy();
-    speedChart?.destroy();
-    elevChart = speedChart = null;
-    if (!stats || !flatPoints.length) return;
+    chartWrap.innerHTML = '';
+    chart?.destroy();
+    chart = null;
+    if (!stats || !flatPoints.length) { chartCard.style.display = 'none'; return; }
 
     const xs = stats.series.d.map((d) => d / 1000);
     const alts = stats.series.alt;
+    const speeds = stats.series.speed.map((s) => (s != null ? s * 3.6 : null));
+    const hasAlt = alts.some((a) => a != null);
+    const hasSpeed = stats.hasTime && speeds.some((s) => s != null);
+    altTab.disabled = !hasAlt;
+    speedTab.disabled = !hasSpeed;
+    if (!hasAlt && !hasSpeed) {
+      chartCard.style.display = 'none';
+      renderSlope(stats);
+      return;
+    }
+    if ((chartMode === 'alt' && !hasAlt) || (chartMode === 'speed' && !hasSpeed)) {
+      chartMode = hasAlt ? 'alt' : 'speed';
+    }
+    altTab.classList.toggle('active', chartMode === 'alt');
+    speedTab.classList.toggle('active', chartMode === 'speed');
+    chartCard.style.display = '';
+
     const units = get('units');
-    if (alts.some((a) => a != null)) {
-      const opts = chartOpts(220);
-      opts.axes[0].label = 'km';
+    const P = canvasPalette();
+    const opts = chartOpts(210);
+    opts.axes[0].label = 'km';
+    if (chartMode === 'alt') {
       opts.axes[1].label = 'm';
+      opts.series[1].stroke = P.accent;
+      opts.series[1].fill = P.accentSoft;
       opts.hooks = {
         setCursor: [hoverHook((idx) => {
           if (alts[idx] == null) return null;
@@ -154,32 +184,20 @@ export function createAnalysisView() {
           return `${a.v} ${a.u}`;
         })]
       };
-      elevChart = new uPlot(opts, [xs, alts], wrap);
+      chart = new uPlot(opts, [xs, alts], chartWrap);
     } else {
-      wrap.append(el('div', { class: 'small faint' }, t('analysis.noAlt')));
-    }
-
-    if (stats.hasTime) {
-      const speeds = stats.series.speed.map((s) => (s != null ? s * 3.6 : null));
-      if (speeds.some((s) => s != null)) {
-        const P = canvasPalette();
-        const opts = chartOpts(160);
-        opts.series[1].stroke = `rgb(${P.lut[1].join(',')})`;
-        opts.series[1].fill = `rgba(${P.lut[1].join(',')},0.12)`;
-        opts.axes[1].label = 'km/h';
-        opts.hooks = {
-          setCursor: [hoverHook((idx) => {
-            const raw = stats.series.speed[idx];
-            if (raw == null) return null;
-            const s = fmtSpeed(raw, units);
-            return `${s.v} ${s.u}`;
-          })]
-        };
-        speedChart = new uPlot(opts, [xs, speeds], sWrap);
-      }
-      speedCard.style.display = '';
-    } else {
-      speedCard.style.display = 'none';
+      opts.axes[1].label = 'km/h';
+      opts.series[1].stroke = `rgb(${P.lut[1].join(',')})`;
+      opts.series[1].fill = `rgba(${P.lut[1].join(',')},0.12)`;
+      opts.hooks = {
+        setCursor: [hoverHook((idx) => {
+          const raw = stats.series.speed[idx];
+          if (raw == null) return null;
+          const s = fmtSpeed(raw, units);
+          return `${s.v} ${s.u}`;
+        })]
+      };
+      chart = new uPlot(opts, [xs, speeds], chartWrap);
     }
     renderSlope(stats);
   }
@@ -264,15 +282,14 @@ export function createAnalysisView() {
       statsBox.innerHTML = '';
       diffBox.innerHTML = '';
       advisory.innerHTML = '';
-      elevCard.style.display = 'none';
-      speedCard.style.display = 'none';
+      chartCard.style.display = 'none';
       slopeCard.style.display = 'none';
       segCard.style.display = 'none';
       tlCard.style.display = 'none';
       miniMapBox.style.display = 'none';
       return;
     }
-    elevCard.style.display = '';
+    chartCard.style.display = '';
     slopeCard.style.display = '';
     miniMapBox.style.display = '';
     ensureMiniMap();
@@ -301,15 +318,13 @@ export function createAnalysisView() {
     resize: () => {
       miniMap?.resize();
       const w = Math.max(280, scroll.clientWidth - 60);
-      elevChart?.setSize({ width: w, height: 220 });
-      speedChart?.setSize({ width: w, height: 160 });
+      chart?.setSize({ width: w, height: 210 });
       if (appState.stats) renderSlope(appState.stats);
     },
     destroy: () => {
       miniMap?.destroy();
       miniMap = null;
-      elevChart?.destroy();
-      speedChart?.destroy();
+      chart?.destroy();
     }
   };
 }

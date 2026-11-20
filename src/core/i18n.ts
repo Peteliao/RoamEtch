@@ -17,7 +17,7 @@ const zh = {
     back: '返回', done: '完成', retry: '重试', loading: '加载中…', none: '无', auto: '自动',
     confirm: '确认', clear: '清空', copy: '复制', copied: '已复制', open: '打开', export: '导出',
     import: '导入', preview: '预览', apply: '应用', reset: '重置', yes: '是', no: '否',
-    unavailable: '不可用', offline: '离线', online: '在线', seconds: '秒', meters: '米', km: '公里',
+    unavailable: '不可用', offline: '离线', online: '在线', seconds: '秒', meters: '米', km: '公里', days: '天',
     fullscreen: '全屏', exitFullscreen: '退出全屏'
   },
   region: {
@@ -45,6 +45,9 @@ const zh = {
     node: '节点', nodeNoFix: '暂未定位，无法添加节点',
     wakeLockOn: '屏幕常亮已开启', wakeLockOff: '屏幕常亮已释放',
     powerLock: '省电锁屏',
+    powerLockHint: '黑屏大字显示，防止误触，长按解锁',
+    moreTools: '地图工具',
+    editHint: '点按地图添加节点，拖拽调整轨迹',
     lockHint: '长按圆圈 1.5 秒解锁',
     lockSub: '省电显示 · 防口袋或雨滴误触',
     tabLocked: '另一个标签页正在记录，本页为只读模式',
@@ -75,7 +78,8 @@ const zh = {
   panel: {
     distance: '里程', duration: '总时长', moving: '移动时间', still: '静止时间',
     signal: '搜星', sigStrong: '强', sigGood: '良', sigFair: '中', sigWeak: '弱',
-    speed: '速度', pace: '配速', altitude: '海拔', ascent: '累计爬升', descent: '累计下降',
+    speed: '速度', pace: '配速', avgSpeed: '平均速度', maxSpeed: '最高速度',
+    altitude: '海拔', ascent: '累计爬升', descent: '累计下降',
     slope: '坡度', accuracy: '定位精度', coords: '坐标', points: '轨迹点', segments: '分段',
     altGps: 'GPS 海拔', altSvc: '高程服务', altCache: '缓存', altNone: '海拔不可用',
     altGpsShort: 'GPS', altSvcShort: '服务', altCacheShort: '缓存', altNoneShort: '无',
@@ -89,7 +93,10 @@ const zh = {
     gcjNote: 'GCJ-02 底图：渲染已自动纠偏',
     wgsNote: 'WGS-84 底图：直出无偏移',
     loadingTiles: '加载瓦片…',
-    styleCs: '坐标系'
+    styleCs: '坐标系',
+    layers: '地图图层',
+    layerNote: '底图仅影响显示；轨迹始终按 WGS-84 存储，切换图源不会改变数据。',
+    vectorShort: '矢量'
   },
   trips: {
     title: '我的行程', empty: '还没有行程', emptyHint: '去「记录」页开始你的第一段行程',
@@ -112,7 +119,13 @@ const zh = {
     restoreErr: '备份文件无效或已损坏',
     storage: '存储空间', storageWarn: '存储空间不足，建议立即整库备份',
     damaged: '检测到损坏数据，已隔离',
-    filterAll: '全部', searchPh: '搜索行程…'
+    filterAll: '全部', searchPh: '搜索行程…',
+    importShort: '导入', more: '更多操作', goRecord: '去记录',
+    noMatch: '没有匹配的行程', noMatchHint: '试试其他关键词或筛选条件',
+    sumTrips: '总行程', sumDistance: '累计里程', sumDays: '记录天数',
+    batchImportHint: '一次选择多个 GPX 或 ZIP',
+    backupHint: '导出全部行程与节点数据',
+    restoreHint: '从备份文件恢复行程'
   },
   rewalk: {
     title: '重走行程', progress: '已完成', remaining: '剩余',
@@ -159,6 +172,7 @@ const zh = {
     avgSpeed: '平均速度', maxSpeed: '最高速度', avgPace: '平均配速',
     ascent: '累计爬升', descent: '累计下降', maxAlt: '最高海拔', minAlt: '最低海拔',
     elevProfile: '高程剖面', speedProfile: '速度曲线', slopeDist: '坡度分布',
+    chartTitle: '轨迹曲线', altTab: '海拔', speedTab: '速度',
     segTable: '分段统计', timeline: '时间轴', difficulty: '难度评分',
     difficultyNote: '难度评分仅供参考，不构成出行建议',
     disclaimer: '户外海拔、坡度、难度评分及轨迹仅供参考，请结合实际情况判断。',
@@ -169,8 +183,10 @@ const zh = {
     noAlt: '无海拔数据', points: '轨迹点'
   },
   export: {
-    title: '分享与导出', privacy: '隐私脱敏', privacyRadius: '起终点隐私圈半径',
+    title: '分享与导出', subtitle: '海报、视频与轨迹文件，全部在本机生成',
+    privacy: '隐私脱敏', privacyRadius: '起终点隐私圈半径',
     tripPick: '选择行程',
+    groupPrivacy: '隐私与安全', groupShare: '分享', groupFiles: '导出文件',
     privacyRadiusHint: '隐藏起点/终点周围设定半径内的轨迹与节点',
     hideSensitive: '隐藏标记为敏感的节点', stripExif: '照片 EXIF 已剥离',
     vectorOnly: '纯矢量模式（无底图）',
@@ -219,6 +235,8 @@ const zh = {
   },
   settings: {
     title: '设置', language: '界面语言', langAuto: '跟随系统', langZh: '简体中文', langEn: 'English',
+    appearanceGroup: '外观', recordGroup: '记录', privacyGroup: '隐私与安全',
+    mapGroup: '地图与服务', dataGroup: '数据管理', debugGroup: '调试', aboutGroup: '关于',
     langNote: '界面语言与服务环境相互独立',
     region: '服务环境（双区）', units: '单位制', metric: '公制', imperial: '英制',
     theme: '主题', themeDark: '深色', themeLight: '浅色', themeContrast: '阳光高对比',
@@ -231,6 +249,7 @@ const zh = {
     wakeLock: '记录时屏幕常亮', ascentThreshold: '爬升滞回阈值',
     wakeLockHint: '防止锁屏中断记录；切后台或手动锁屏仍可能被系统暂停',
     accuracyLimit: '精度过滤阈值', privacyRadius: '默认隐私圈半径',
+    privacyRadiusHint: '隐藏起点/终点周围设定半径内的轨迹与节点，导出时同样生效',
     advanced: '高级：自定义底图与 Key（BYOK）',
     tiandituKey: '天地图 Token（tk）', tiandituKeyHint: '需在 tianditu.gov.cn 申请并配置域名白名单；CGCS2000≈WGS-84，无需纠偏',
     maptilerKey: 'MapTiler Key（P1 预留）',
@@ -246,7 +265,10 @@ const zh = {
     about: '关于', aboutText: 'TrackMint迹刻 v1.4 · 纯前端 · 数据仅存本机 IndexedDB · WGS-84 标准存储',
     disclaimer: '免责声明：海拔、坡度、难度评分与轨迹仅供参考。',
     storageUsage: '存储占用', clearAll: '清空所有数据',
+    dataBackup: '备份与存储', dangerTitle: '危险操作',
+    dangerHint: '清空后全部行程、节点、照片与缓存将从本机删除，无法恢复。',
     clearConfirm: '将删除全部行程、节点、照片与缓存，且不可恢复。建议先整库备份。确认清空？',
+    clearConfirm2: '最后确认：此操作不可撤销，是否继续？',
     cleared: '已清空',
     keySaved: '已保存，切换底图后生效'
   },
@@ -275,7 +297,7 @@ const en = {
     back: 'Back', done: 'Done', retry: 'Retry', loading: 'Loading…', none: 'None', auto: 'Auto',
     confirm: 'Confirm', clear: 'Clear', copy: 'Copy', copied: 'Copied', open: 'Open', export: 'Export',
     import: 'Import', preview: 'Preview', apply: 'Apply', reset: 'Reset', yes: 'Yes', no: 'No',
-    unavailable: 'Unavailable', offline: 'Offline', online: 'Online', seconds: 's', meters: 'm', km: 'km',
+    unavailable: 'Unavailable', offline: 'Offline', online: 'Online', seconds: 's', meters: 'm', km: 'km', days: 'd',
     fullscreen: 'Fullscreen', exitFullscreen: 'Exit fullscreen'
   },
   region: {
@@ -303,6 +325,9 @@ const en = {
     node: 'Node', nodeNoFix: 'No GPS fix yet — cannot add a node',
     wakeLockOn: 'Screen wake lock on', wakeLockOff: 'Wake lock released',
     powerLock: 'Power-save lock',
+    powerLockHint: 'Large dim dashboard, guards against mistouches; hold to unlock',
+    moreTools: 'Map tools',
+    editHint: 'Tap the map to add nodes, drag to adjust the track',
     lockHint: 'Hold the ring for 1.5 s to unlock',
     lockSub: 'Low-power display · guards against pocket or rain touches',
     tabLocked: 'Another tab is recording — this tab is read-only',
@@ -333,7 +358,8 @@ const en = {
   panel: {
     distance: 'Distance', duration: 'Duration', moving: 'Moving time', still: 'Stopped time',
     signal: 'GPS signal', sigStrong: 'Strong', sigGood: 'Good', sigFair: 'Fair', sigWeak: 'Weak',
-    speed: 'Speed', pace: 'Pace', altitude: 'Altitude', ascent: 'Ascent', descent: 'Descent',
+    speed: 'Speed', pace: 'Pace', avgSpeed: 'Avg speed', maxSpeed: 'Max speed',
+    altitude: 'Altitude', ascent: 'Ascent', descent: 'Descent',
     slope: 'Slope', accuracy: 'GPS accuracy', coords: 'Coordinates', points: 'Points', segments: 'Segments',
     altGps: 'GPS altitude', altSvc: 'Elevation service', altCache: 'Cached', altNone: 'Altitude unavailable',
     altGpsShort: 'GPS', altSvcShort: 'SVC', altCacheShort: 'CACHE', altNoneShort: 'N/A',
@@ -347,7 +373,10 @@ const en = {
     gcjNote: 'GCJ-02 basemap: render auto-offset',
     wgsNote: 'WGS-84 basemap: no offset',
     loadingTiles: 'Loading tiles…',
-    styleCs: 'datum'
+    styleCs: 'datum',
+    layers: 'Map layers',
+    layerNote: 'Basemaps affect display only; tracks always stay WGS-84 and switching sources never rewrites data.',
+    vectorShort: 'vector'
   },
   trips: {
     title: 'My trips', empty: 'No trips yet', emptyHint: 'Start your first trip in the Record tab',
@@ -370,7 +399,13 @@ const en = {
     restoreErr: 'Invalid or corrupted backup file',
     storage: 'Storage', storageWarn: 'Low storage — back up now',
     damaged: 'Corrupted data isolated',
-    filterAll: 'All', searchPh: 'Search trips…'
+    filterAll: 'All', searchPh: 'Search trips…',
+    importShort: 'Import', more: 'More actions', goRecord: 'Start recording',
+    noMatch: 'No matching trips', noMatchHint: 'Try another keyword or filter',
+    sumTrips: 'Trips', sumDistance: 'Total distance', sumDays: 'Record days',
+    batchImportHint: 'Pick several GPX or ZIP files at once',
+    backupHint: 'Export every trip and waypoint',
+    restoreHint: 'Restore from a backup file'
   },
   rewalk: {
     title: 'Re-walk', progress: 'Done', remaining: 'Left',
@@ -417,6 +452,7 @@ const en = {
     avgSpeed: 'Avg speed', maxSpeed: 'Max speed', avgPace: 'Avg pace',
     ascent: 'Ascent', descent: 'Descent', maxAlt: 'Max altitude', minAlt: 'Min altitude',
     elevProfile: 'Elevation profile', speedProfile: 'Speed curve', slopeDist: 'Slope distribution',
+    chartTitle: 'Track profile', altTab: 'Altitude', speedTab: 'Speed',
     segTable: 'Segments', timeline: 'Timeline', difficulty: 'Difficulty',
     difficultyNote: 'Difficulty score is indicative only',
     disclaimer: 'Altitude, slope, difficulty and track data are for reference only.',
@@ -427,8 +463,10 @@ const en = {
     noAlt: 'No altitude data', points: 'points'
   },
   export: {
-    title: 'Share & export', privacy: 'Privacy', privacyRadius: 'Start/end privacy radius',
+    title: 'Share & export', subtitle: 'Posters, videos and track files — rendered on this device',
+    privacy: 'Privacy', privacyRadius: 'Start/end privacy radius',
     tripPick: 'Trip to share',
+    groupPrivacy: 'Privacy & safety', groupShare: 'Share', groupFiles: 'Export files',
     privacyRadiusHint: 'Hides track & waypoints within this radius of start/end',
     hideSensitive: 'Hide sensitive waypoints', stripExif: 'Photo EXIF stripped',
     vectorOnly: 'Vector-only (no basemap)',
@@ -477,6 +515,8 @@ const en = {
   },
   settings: {
     title: 'Settings', language: 'Language', langAuto: 'System', langZh: '简体中文', langEn: 'English',
+    appearanceGroup: 'Appearance', recordGroup: 'Recording', privacyGroup: 'Privacy & safety',
+    mapGroup: 'Maps & services', dataGroup: 'Data', debugGroup: 'Debug', aboutGroup: 'About',
     langNote: 'UI language is independent from service region',
     region: 'Service region (dual)', units: 'Units', metric: 'Metric', imperial: 'Imperial',
     theme: 'Theme', themeDark: 'Dark', themeLight: 'Light', themeContrast: 'Sunlight contrast',
@@ -489,6 +529,7 @@ const en = {
     wakeLock: 'Keep screen on while recording', ascentThreshold: 'Ascent hysteresis',
     wakeLockHint: 'Prevents screen sleep from interrupting recording; backgrounding or manual lock may still pause it',
     accuracyLimit: 'Accuracy filter', privacyRadius: 'Default privacy radius',
+    privacyRadiusHint: 'Hides track & waypoints within this radius of start/end; applies to exports too',
     advanced: 'Advanced: custom basemap & BYOK',
     tiandituKey: 'Tianditu token (tk)', tiandituKeyHint: 'Apply at tianditu.gov.cn with domain whitelist; CGCS2000≈WGS-84, no offset',
     maptilerKey: 'MapTiler key (P1 reserved)',
@@ -504,7 +545,10 @@ const en = {
     about: 'About', aboutText: 'TrackMint v1.4 · pure frontend · data stays in IndexedDB · WGS-84 storage',
     disclaimer: 'Disclaimer: altitude, slope, difficulty and track data are for reference only.',
     storageUsage: 'Storage used', clearAll: 'Erase all data',
+    dataBackup: 'Backup & storage', dangerTitle: 'Danger zone',
+    dangerHint: 'Every trip, waypoint, photo and cache will be deleted from this device. This cannot be undone.',
     clearConfirm: 'Deletes all trips, waypoints, photos and caches. Irreversible — back up first. Continue?',
+    clearConfirm2: 'Final check: this cannot be undone. Continue?',
     cleared: 'Erased',
     keySaved: 'Saved — applies after basemap switch'
   },

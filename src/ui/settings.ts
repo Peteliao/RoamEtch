@@ -17,8 +17,14 @@ export function createSettingsView(navigate) {
   const scroll = el('div', { class: 'view-scroll' });
   view.append(scroll);
 
-  function card(title, ...rows) {
-    return el('div', { class: 'card' }, el('h3', {}, title), ...rows);
+  function section(label) {
+    return el('div', { class: 'section-label' }, label);
+  }
+  function panel(...rows) {
+    return el('div', { class: 'card' }, ...rows);
+  }
+  function card(iconKey, title, ...rows) {
+    return el('div', { class: 'card' }, el('h3', {}, icon(iconKey, 18), title), ...rows);
   }
   function segRow(label, options, current, onPick, note = '') {
     const toggle = el('div', { class: 'seg-toggle' });
@@ -90,7 +96,7 @@ export function createSettingsView(navigate) {
     reprobeBtn.textContent = '↻ ' + t('region.reprobe');
   };
 
-  const regionCard = card(t('settings.region'),
+  const regionCard = card('map', t('settings.region'),
     segRow(t('region.title'), [
       ['auto', t('region.modeAuto')], ['cn', t('region.modeCn')], ['global', t('region.modeGlobal')]
     ], get('regionMode'), (v) => { setRegionMode(v); renderProbe(); }, t('region.switchHint')),
@@ -99,8 +105,8 @@ export function createSettingsView(navigate) {
     regionNote
   );
 
-  // ---- language / units / theme ----
-  const langCard = card(t('settings.language'),
+  // ---- appearance ----
+  const langCard = panel(
     segRow(t('settings.language'), [
       ['auto', t('settings.langAuto')], ['zh', t('settings.langZh')], ['en', t('settings.langEn')]
     ], get('language'), (v) => setLanguage(v), t('settings.langNote')),
@@ -111,18 +117,22 @@ export function createSettingsView(navigate) {
   );
 
   // ---- recording ----
-  const recCard = card(t('record.title'),
+  const recCard = panel(
     segRow(t('settings.activity'), [['auto', t('settings.activityAuto')], ...['hike', 'drive', 'bike', 'run', 'travel'].map((a) => [a, t(`record.activities.${a}`)])], get('activity'), (v) => set('activity', v), t('settings.activityAutoHint')),
     segRow(t('settings.speedDisplay'), [['auto', t('settings.speedAuto')], ['speed', t('settings.speedSpeed')], ['pace', t('settings.speedPace')]], get('speedDisplay'), (v) => set('speedDisplay', v)),
     segRow(t('settings.recordQuality'), [['high', t('settings.qHigh')], ['balanced', t('settings.qBalanced')], ['low', t('settings.qLow')]], get('recordQuality'), (v) => set('recordQuality', v)),
     switchRow(t('settings.wakeLock'), t('settings.wakeLockHint'), 'wakeLock'),
     numRow(t('settings.ascentThreshold'), '3–5 m', 'ascentThreshold', { min: 1, max: 20, unit: 'm' }),
-    numRow(t('settings.accuracyLimit'), '', 'accuracyLimit', { min: 10, max: 500, unit: 'm' }),
-    numRow(t('settings.privacyRadius'), '', 'privacyRadius', { min: 0, max: 5000, step: 50, unit: 'm' })
+    numRow(t('settings.accuracyLimit'), '', 'accuracyLimit', { min: 10, max: 500, unit: 'm' })
+  );
+
+  // ---- privacy ----
+  const privacyCard = panel(
+    numRow(t('settings.privacyRadius'), t('settings.privacyRadiusHint'), 'privacyRadius', { min: 0, max: 5000, step: 50, unit: 'm' })
   );
 
   // ---- advanced / BYOK ----
-  const advCard = card(t('settings.advanced'),
+  const advCard = card('compass', t('settings.advanced'),
     textRow(t('settings.tiandituKey'), t('settings.tiandituKeyHint'), 'tiandituKey', 'tk=…'),
     textRow(t('settings.maptilerKey'), '', 'maptilerKey'),
     textRow(t('settings.customTileName'), '', 'customTileName'),
@@ -189,7 +199,7 @@ export function createSettingsView(navigate) {
     toast(t('settings.diagLogOk'), 'ok');
   };
 
-  const debugCard = card(t('settings.debug'),
+  const debugCard = card('settings', t('settings.debug'),
     simBanner,
     el('div', { class: 'setting-row' },
       el('div', { class: 'txt' }, el('div', { class: 't' }, t('settings.simNetwork')), el('div', { class: 'd' }, 'CN / Global / offline / CORS')),
@@ -219,10 +229,12 @@ export function createSettingsView(navigate) {
       toast(t('trips.restoreOk', { n }), 'ok');
     } catch { toast(t('trips.restoreErr'), 'err'); }
   };
-  const eraseBtn = el('button', { class: 'btn sm danger' }, icon('trash', 14), t('settings.clearAll'));
+  const eraseBtn = el('button', { class: 'btn danger block' }, icon('trash', 14), t('settings.clearAll'));
   eraseBtn.onclick = async () => {
     const ok = await confirmModal({ title: t('settings.clearAll'), message: t('settings.clearConfirm'), danger: true, confirmText: t('settings.clearAll') });
     if (!ok) return;
+    const again = await confirmModal({ title: t('settings.dangerTitle'), message: t('settings.clearConfirm2'), danger: true, confirmText: t('common.confirm') });
+    if (!again) return;
     await eraseAll();
     toast(t('settings.cleared'), 'ok');
     refreshStorage();
@@ -234,17 +246,29 @@ export function createSettingsView(navigate) {
       : t('settings.storageUsage') + ': --';
   }
   refreshStorage();
-  const dataCard = card(t('trips.storage'), storageLine,
-    el('div', { class: 'row wrap', style: { marginTop: '8px' } }, backupBtn, restoreBtn, eraseBtn));
+  const dangerZone = el('div', { class: 'danger-zone' },
+    el('div', { class: 'dz-title' }, icon('warn', 14), t('settings.dangerTitle')),
+    el('div', { class: 'small faint', style: { marginBottom: '10px' } }, t('settings.dangerHint')),
+    eraseBtn);
+  const dataCard = card('database', t('settings.dataBackup'), storageLine,
+    el('div', { class: 'row wrap', style: { marginTop: '8px' } }, backupBtn, restoreBtn),
+    el('div', { class: 'sep' }),
+    dangerZone);
 
   // ---- about ----
-  const aboutCard = card(t('settings.about'),
+  const aboutCard = card('info', t('settings.about'),
     el('div', { class: 'small muted' }, t('settings.aboutText')),
     el('div', { class: 'small faint', style: { marginTop: '6px' } }, '⚠ ' + t('settings.disclaimer')));
 
   scroll.append(
-    el('h2', { class: 'page-title' }, t('settings.title')),
-    regionCard, langCard, recCard, advCard, debugCard, dataCard, aboutCard
+    el('div', { class: 'page-head' }, el('h2', { class: 'page-title' }, t('settings.title'))),
+    section(t('settings.appearanceGroup')), langCard,
+    section(t('settings.recordGroup')), recCard,
+    section(t('settings.privacyGroup')), privacyCard,
+    section(t('settings.mapGroup')), regionCard, advCard,
+    section(t('settings.dataGroup')), dataCard,
+    section(t('settings.debugGroup')), debugCard,
+    section(t('settings.aboutGroup')), aboutCard
   );
 
   return { view, refresh: () => { renderProbe(); renderSimBanner(); refreshStorage(); }, resize: () => {} };

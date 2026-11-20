@@ -141,7 +141,7 @@ export async function prepareMap({
     paintVectorBackground(ctx, w, h);
     return { bg, fit, segments: dispSegs, waypoints: dispWps, vector: true, label: 'vector' };
   }
-  ctx.fillStyle = '#0b1220';
+  ctx.fillStyle = canvasPalette().panel;
   ctx.fillRect(0, 0, w, h);
   for (const layer of [0, 1]) {
     for (const j of jobs) if (j.layer === layer) ctx.drawImage(j.img, j.px, j.py);
@@ -151,7 +151,7 @@ export async function prepareMap({
 
 // Along-path gradient (teal → sky → indigo) with layered soft glow and a
 // centre highlight — the neon-tube look used by modern recap renderers.
-const STOPS = [[45, 212, 167], [56, 189, 248], [129, 140, 248]];
+const STOPS = [[43, 205, 167], [56, 189, 248], [129, 140, 248]];
 function lut(t, stops = STOPS) {
   const s = Math.max(0, Math.min(1, t)) * (stops.length - 1);
   const i = Math.min(stops.length - 2, Math.floor(s));
