@@ -31,6 +31,7 @@ export function createRecordView() {
 
   let map = null;
   let psActive = false;
+  let oledThemeActive = false;
   let viewingTrip = null;
   let recoverable = null;
   let readOnly = false;
@@ -658,7 +659,19 @@ export function createRecordView() {
   }
 
   // ---------- power-save lock: dim dashboard + hold-to-unlock ----------
-  const ps = el('div', { id: 'oled-dash' });
+  const ps = el('div', { id: 'oled-dash', 'aria-hidden': 'true' });
+  function enterOledTheme() {
+    if (oledThemeActive) return;
+    oledThemeActive = true;
+    setThemeModeOverride('dark');
+    setThemeColorOverride('#000000');
+  }
+  function leaveOledTheme() {
+    if (!oledThemeActive) return;
+    oledThemeActive = false;
+    setThemeColorOverride(null);
+    setThemeModeOverride(null);
+  }
   const psTop = el('div', { class: 'od-top' });
   const odGrid = el('div', { class: 'od-grid' });
   const psBottom = el('div', { class: 'od-bottom' });
@@ -793,6 +806,9 @@ export function createRecordView() {
     if (on === psActive) return;
     psActive = on;
     if (on) {
+      // Dark palette is applied before the black overlay so the transition reads
+      // as a theme switch, not an abrupt flash; the CSS fade reveals it underneath.
+      enterOledTheme();
       // truly stop WebGL rendering while in power saver
       const center = map.map.getCenter();
       const zoom = map.map.getZoom();
@@ -801,21 +817,21 @@ export function createRecordView() {
       map = null;
       mapContainer.style.display = 'none';
       ps._restore = { center, zoom, basemap };
+      document.documentElement.classList.add('oled-lock');
+      ps.setAttribute('aria-hidden', 'false');
       ps.classList.add('active');
       ps.classList.remove('pocket');
-      document.documentElement.classList.add('oled-lock');
-      setThemeModeOverride('dark');
-      setThemeColorOverride('#000000');
       requestWakeLock();
       renderPsTop();
       renderOled(rec.live);
       updatePsSub();
       setTimeout(() => { if (psActive) updatePsSub(); }, 1200);
     } else {
-      ps.classList.remove('active', 'pocket');
+      // Restore the saved theme first, then fade the overlay to reveal it.
+      leaveOledTheme();
       document.documentElement.classList.remove('oled-lock');
-      setThemeColorOverride(null);
-      setThemeModeOverride(null);
+      ps.setAttribute('aria-hidden', 'true');
+      ps.classList.remove('active', 'pocket');
       if (rec.status !== 'recording') releaseWakeLock();
       mapContainer.style.display = '';
       buildMap();
@@ -1007,9 +1023,9 @@ export function createRecordView() {
       document.removeEventListener('keydown', onKeydown);
       document.removeEventListener('visibilitychange', onVisibility);
       offBroadcast();
+      leaveOledTheme();
+      document.documentElement.classList.remove('oled-lock');
       if (psActive) {
-        setThemeColorOverride(null);
-        setThemeModeOverride(null);
         if (rec.status !== 'recording') releaseWakeLock();
       }
       map?.destroy();

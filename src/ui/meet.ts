@@ -99,7 +99,7 @@ export function createMeetView(navigate) {
         el('button', { class: 'btn ghost big block', onclick: () => openJoin() }, icon('pin', 18), t('meet.join'))),
       el('div', { class: 'meet-safe-note' }, icon('shield', 15), t('meet.expiryWarning')),
       el('div', { class: 'meet-safe-sub' }, `${relayLabel()} · ${t('meet.serverless')}`),
-      el('button', { class: 'meet-settings-link', onclick: () => navigate('settings') }, icon('settings', 14), t('meet.relaySettings'))
+      el('button', { class: 'meet-settings-link', onclick: () => navigate('settings', 'relay') }, icon('settings', 14), t('meet.relaySettings'))
     ));
   }
   buildEmpty();
@@ -221,7 +221,7 @@ export function createMeetView(navigate) {
     }
     if (s.relayState === 'error' || s.relayState === 'reconnecting') {
       panelBody.append(warningBanner('warn', t('meet.relayErrorHint'),
-        el('button', { class: 'btn sm ghost', onclick: () => navigate('settings') }, t('tabs.settings'))));
+        el('button', { class: 'btn sm ghost', onclick: () => navigate('settings', 'relay') }, t('meet.relaySettings'))));
     }
     if (s.geoError) {
       panelBody.append(warningBanner('pin', s.geoError === 'denied' ? t('meet.gpsDeniedHint') : t('meet.gpsUnavailableHint'),

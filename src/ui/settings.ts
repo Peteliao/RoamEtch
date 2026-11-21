@@ -159,13 +159,18 @@ export function createSettingsView(navigate) {
     }
   }
   renderMeetRelayFields();
-  const meetCard = card('meet', t('settings.meetGroup'),
+  const relaySection = el('div', { class: 'relay-settings-block' },
+    el('div', { class: 'settings-subhead relay-subhead' }, icon('globe', 15), t('settings.meetRelay')),
     el('div', { class: 'small muted', style: { margin: '-2px 0 10px' } }, t('settings.meetChannelNote')),
     segRow(t('settings.meetChannel'), [
       ['mqtt', t('settings.meetMqtt')], ['ws', t('settings.meetWs')]
     ], meetRelayMode, (v) => { meetRelayMode = v; renderMeetRelayFields(); }, t('settings.meetSettingsNote')),
+    meetRelayFields
+  );
+  const meetCard = card('meet', t('settings.meetGroup'),
+    relaySection,
+    el('div', { class: 'sep' }),
     textRow(t('settings.meetNick'), t('settings.meetNickHint'), 'meetName', t('meet.namePlaceholder')),
-    meetRelayFields,
     el('div', { class: 'settings-subhead' }, icon('globe', 15), t('settings.meetIce')),
     textRow(t('settings.meetStun'), '', 'meetStun', 'stun:stun.cloudflare.com:3478'),
     textRow(t('settings.meetTurn'), '', 'meetTurnUrl', 'turn:turn.example.com:3478'),
@@ -316,5 +321,19 @@ export function createSettingsView(navigate) {
     section(t('settings.aboutGroup')), aboutCard
   );
 
-  return { view, refresh: () => { renderProbe(); renderSimBanner(); refreshStorage(); }, resize: () => {} };
+  return {
+    view,
+    refresh: () => { renderProbe(); renderSimBanner(); refreshStorage(); },
+    resize: () => {},
+    focus: (intent) => {
+      if (intent !== 'relay') return;
+      requestAnimationFrame(() => {
+        relaySection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        meetCard.classList.remove('settings-focus');
+        void meetCard.offsetWidth;
+        meetCard.classList.add('settings-focus');
+        setTimeout(() => meetCard.classList.remove('settings-focus'), 2000);
+      });
+    }
+  };
 }

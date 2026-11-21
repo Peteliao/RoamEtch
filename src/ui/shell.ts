@@ -99,7 +99,7 @@ export function createShell(root) {
     recDot.className = `rec-dot ${status === 'recording' ? 'recording' : status === 'paused' ? 'paused' : ''}`;
   });
 
-  function navigate(name) {
+  function navigate(name, intent = null) {
     if (!views[name]) return;
     current = name;
     appState.view = name;
@@ -110,6 +110,7 @@ export function createShell(root) {
     requestAnimationFrame(() => {
       views[name].resize?.();
       views[name].refresh?.();
+      if (intent) views[name].focus?.(intent);
     });
   }
 

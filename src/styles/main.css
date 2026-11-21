@@ -567,10 +567,12 @@ html.oled-lock, html.oled-lock body, html.oled-lock #app { background: #000 !imp
 html.oled-lock { color-scheme: dark; }
 #oled-dash {
   position: fixed; inset: 0; z-index: 300; background: #000; color: #fff;
-  display: none; flex-direction: column; padding: calc(14px + var(--safe-t)) 18px calc(14px + var(--safe-b));
+  display: flex; flex-direction: column; padding: calc(14px + var(--safe-t)) 18px calc(14px + var(--safe-b));
   touch-action: none; overscroll-behavior: none; user-select: none; -webkit-user-select: none;
+  visibility: hidden; opacity: 0; pointer-events: none;
+  transition: opacity 0.24s ease, visibility 0s linear 0.24s;
 }
-#oled-dash.active { display: flex; }
+#oled-dash.active { visibility: visible; opacity: 1; pointer-events: auto; transition: opacity 0.24s ease; }
 #oled-dash .od-top, #oled-dash .od-grid, #oled-dash .od-bottom { transition: opacity 0.45s ease; }
 #oled-dash.pocket .od-top, #oled-dash.pocket .od-grid, #oled-dash.pocket .od-bottom { opacity: 0; pointer-events: none; }
 #oled-dash.pocket::after {
@@ -1122,6 +1124,12 @@ html.oled-lock { color-scheme: dark; }
   border-top: 1px solid var(--border); color: var(--text-dim); font-size: 12px; font-weight: 650;
 }
 .settings-subhead svg { color: var(--accent); }
+.relay-subhead { margin-top: 0; padding-top: 0; border-top: none; }
+.card.settings-focus { animation: settings-focus 2s ease-out; }
+@keyframes settings-focus {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  12%, 70% { box-shadow: 0 0 0 2px var(--accent), 0 10px 30px var(--accent-soft); }
+}
 
 /* ---------- narrow screens ---------- */
 @media (max-width: 640px) {
