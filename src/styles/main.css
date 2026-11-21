@@ -580,6 +580,9 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .sig-txt { font-family: var(--font); font-size: 10px; font-weight: 600; color: var(--text-dim); letter-spacing: 0; }
 
 /* power-save lock: dim dashboard + hold-to-unlock */
+/* iOS 26+ derives the status bar tint from the page background. */
+html.oled-lock, html.oled-lock body, html.oled-lock #app { background: #000 !important; }
+html.oled-lock { color-scheme: dark; }
 #oled-dash {
   position: fixed; inset: 0; z-index: 300; background: #000; color: #fff;
   display: none; flex-direction: column; padding: calc(14px + var(--safe-t)) 18px calc(14px + var(--safe-b));

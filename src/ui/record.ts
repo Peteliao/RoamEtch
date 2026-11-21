@@ -802,6 +802,7 @@ export function createRecordView() {
       ps._restore = { center, zoom, basemap };
       ps.classList.add('active');
       ps.classList.remove('pocket');
+      document.documentElement.classList.add('oled-lock');
       setThemeColorOverride('#000000');
       requestWakeLock();
       renderPsTop();
@@ -810,6 +811,7 @@ export function createRecordView() {
       setTimeout(() => { if (psActive) updatePsSub(); }, 1200);
     } else {
       ps.classList.remove('active', 'pocket');
+      document.documentElement.classList.remove('oled-lock');
       setThemeColorOverride(null);
       if (rec.status !== 'recording') releaseWakeLock();
       mapContainer.style.display = '';

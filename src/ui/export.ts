@@ -33,10 +33,10 @@ export function createExportView(getRecordMap) {
 
   // ---- privacy ----
   const radiusInput = el('input', { type: 'number', min: '0', max: '5000', step: '50', value: get('privacyRadius') });
-  radiusInput.onchange = () => { set('privacyRadius', Math.max(0, +radiusInput.value || 0)); updateCropInfo(); warmExport(curFull); };
+  radiusInput.onchange = () => { set('privacyRadius', Math.max(0, +radiusInput.value || 0)); updateCropInfo(); updateLink(true); warmExport(curFull); };
   const hideCb = el('input', { type: 'checkbox' });
   hideCb.checked = true;
-  hideCb.onchange = () => { updateCropInfo(); warmExport(curFull); };
+  hideCb.onchange = () => { updateCropInfo(); updateLink(true); warmExport(curFull); };
   const vectorCb = el('input', { type: 'checkbox' });
   vectorCb.onchange = () => { updateCropInfo(); warmExport(curFull); };
   const cropInfo = el('div', { class: 'small', style: { color: 'var(--warn)', marginTop: '8px' } });
@@ -309,45 +309,82 @@ export function createExportView(getRecordMap) {
   // ---- self-contained HTML ----
   let htmlTier = 'clear';
   const tierToggle = el('div', { class: 'seg-toggle' });
+  const tierButtons = [];
   for (const [k, label] of [['clear', t('export.htmlClear')], ['light', t('export.htmlLight')], ['none', t('export.htmlNone')]]) {
     const b = el('button', { class: k === htmlTier ? 'active' : '' }, label);
     b.onclick = () => { htmlTier = k; tierToggle.querySelectorAll('button').forEach((x) => x.classList.remove('active')); b.classList.add('active'); };
     tierToggle.append(b);
+    tierButtons.push(b);
   }
+  const htmlPhotosCb = el('input', { type: 'checkbox' });
+  htmlPhotosCb.checked = true;
   const htmlBtn = el('button', { class: 'btn' }, icon('export', 16), t('export.html'));
-  htmlBtn.onclick = () => {
-    const f = croppedFull();
-    if (!f) return toast(t('analysis.noTrip'), 'warn');
-    const { html, size } = buildSelfContainedHTML(f, { tier: htmlTier, privacy: privacyOpts() });
-    if (size > 1_500_000) toast(t('export.htmlWarn', { size: (size / 1048576).toFixed(1) + 'MB' }), 'warn', 4000);
-    exportFile(new Blob([html], { type: 'text/html' }), `${f.trip.name || 'trip'}.html`);
-    toast(`${t('export.exported')} · ${(size / 1024).toFixed(0)} KB`, 'ok');
+  htmlBtn.onclick = async () => {
+    const full = curFull;
+    if (!full) return toast(t('analysis.noTrip'), 'warn');
+    htmlBtn.disabled = true;
+    htmlPhotosCb.disabled = true;
+    tierButtons.forEach((b) => { b.disabled = true; });
+    htmlBtn.textContent = t('export.htmlBuilding');
+    try {
+      const { html, size, photos } = await buildSelfContainedHTML(full, {
+        tier: htmlTier,
+        privacy: privacyOpts(),
+        includePhotos: htmlPhotosCb.checked,
+        onProgress: (p) => { htmlBtn.textContent = `${t('export.htmlBuilding')} ${Math.round(p * 100)}%`; }
+      });
+      if (size > 1_500_000) toast(t('export.htmlWarn', { size: (size / 1048576).toFixed(1) + 'MB' }), 'warn', 4000);
+      exportFile(new Blob([html], { type: 'text/html' }), `${full.trip.name || 'trip'}.html`);
+      toast(`${t('export.exported')} · ${(size / 1024).toFixed(0)} KB${photos ? ` · ${photos} ${t('wp.photos')}` : ''}`, 'ok');
+    } catch (e) {
+      console.error(e);
+      toast(String(e?.message || e), 'err');
+    }
+    htmlBtn.disabled = false;
+    htmlPhotosCb.disabled = false;
+    tierButtons.forEach((b) => { b.disabled = false; });
+    htmlBtn.innerHTML = '';
+    htmlBtn.append(icon('export', 16), t('export.html'));
   };
   const htmlCard = el('div', { class: 'card' },
     el('h3', {}, icon('globe', 18), t('export.html')),
     el('div', { class: 'small faint', style: { marginBottom: '8px' } }, t('export.htmlHint')),
-    el('div', { class: 'row wrap' }, tierToggle, htmlBtn)
+    el('div', { class: 'row wrap' }, tierToggle, htmlBtn),
+    el('label', { class: 'row', style: { cursor: 'pointer', fontSize: '13px', marginTop: '8px' } }, htmlPhotosCb, t('export.htmlPhotos'))
   );
 
-  // ---- share link ----
+  // ---- share link (compact import URL, fragment only) ----
   const linkInput = el('input', { type: 'text', readonly: true, class: 'link-input' });
-  const linkBtn = el('button', { class: 'btn sm' }, icon('share', 14), t('export.link'));
+  const linkBtn = el('button', { class: 'btn sm' }, icon('share', 14), t('export.linkBuild'));
   const copyBtn = el('button', { class: 'btn sm' }, t('common.copy'));
   const linkNote = el('div', { class: 'small faint', style: { marginTop: '6px' } });
-  linkBtn.onclick = () => {
+  function updateLink(quiet = true) {
     const full = curFull;
-    if (!full) return toast(t('analysis.noTrip'), 'warn');
+    linkInput.value = '';
+    linkNote.textContent = '';
+    if (!full) return false;
     try {
       const { url, size } = buildShareLink(full, privacyOpts());
       linkInput.value = url;
-      linkNote.textContent = `${size} B / 1500 B · fragment only, no server`;
+      linkNote.textContent = t('export.linkNote', { size });
+      return true;
     } catch (e) {
-      if (e.message === 'too-big') toast(t('export.qrTooBig'), 'warn');
-      else toast(String(e.message), 'err');
+      if (e?.message === 'too-big') {
+        linkNote.textContent = t('export.linkTooBig');
+        if (!quiet) toast(t('export.linkTooBig'), 'warn', 5000);
+      } else {
+        linkNote.textContent = String(e?.message || e);
+        if (!quiet) toast(linkNote.textContent, 'err');
+      }
+      return false;
     }
-  };
+  }
+  linkBtn.onclick = () => updateLink(false);
   copyBtn.onclick = async () => {
-    if (!linkInput.value) return;
+    if (!linkInput.value && !updateLink(true)) {
+      toast(t('analysis.noTrip'), 'warn');
+      return;
+    }
     try {
       await navigator.clipboard.writeText(linkInput.value);
       toast(t('common.copied'), 'ok');
@@ -361,11 +398,17 @@ export function createExportView(getRecordMap) {
   shareBtn.onclick = async () => {
     const full = curFull;
     if (!full) return;
-    const ok = await nativeShare({ title: full.trip.name, text: t('app.tagline'), url: linkInput.value || undefined });
+    if (!linkInput.value) updateLink(true);
+    const ok = await nativeShare({
+      title: full.trip.name,
+      text: t('app.tagline'),
+      url: linkInput.value || undefined
+    });
     if (!ok) toast(t('toast.copyFail'), 'warn');
   };
   const linkCard = el('div', { class: 'card' },
     el('h3', {}, icon('share', 18), t('export.link')),
+    el('div', { class: 'small faint', style: { marginBottom: '9px', lineHeight: 1.5 } }, t('export.linkHint')),
     el('div', { class: 'row wrap', style: { marginBottom: '8px' } }, linkBtn, copyBtn, shareBtn),
     linkInput, linkNote
   );
@@ -423,6 +466,7 @@ export function createExportView(getRecordMap) {
       ? `${curFull.trip.name || t('record.newTripName')} · ${t(`record.activities.${curFull.trip.activity}`)}`
       : t('analysis.noTrip');
     updateCropInfo();
+    updateLink(true);
     warmExport(curFull);
   }
   on('trip:active', (full) => {

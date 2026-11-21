@@ -72,7 +72,10 @@ const CONTRAST = {
   edgeShade: 'rgba(0,0,0,0.25)'
 };
 
+export function paletteFor(theme: string) {
+  return theme === 'light' ? LIGHT : theme === 'contrast' ? CONTRAST : DARK;
+}
+
 export function canvasPalette() {
-  const th = effectiveTheme();
-  return th === 'light' ? LIGHT : th === 'contrast' ? CONTRAST : DARK;
+  return paletteFor(effectiveTheme());
 }
