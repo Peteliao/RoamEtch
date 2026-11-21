@@ -32,6 +32,7 @@ export function icon(name, size = 20) {
     fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5m11-5v5h-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     edit: '<path d="m4 20 4-1L20 7l-3-3L5 16l-1 4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',
     powerlock: '<rect x="6" y="2" width="12" height="20" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><rect x="9.5" y="12.5" width="5" height="4" rx="1" fill="currentColor"/><path d="M10.5 12.5v-1.3a1.5 1.5 0 0 1 3 0v1.3" stroke="currentColor" stroke-width="1.4" fill="none"/>',
+    moon: '<path d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',
     expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5m11-5v5h-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     compress: '<path d="M9 4v5H4M15 4v5h5M9 20v-5H4m11 5v-5h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     play: '<path d="M7 4v16l13-8L7 4Z" fill="currentColor"/>',

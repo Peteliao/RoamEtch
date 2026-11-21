@@ -9,6 +9,7 @@ let timer = null;
 let ref = null;
 let dayKey = '';
 let times = null;
+let colorOverride: string | null = null;
 
 function autoEffective() {
   const now = new Date();
@@ -32,8 +33,14 @@ export function applyTheme() {
   const eff = effectiveTheme();
   document.documentElement.dataset.theme = eff === 'dark' ? '' : eff;
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', eff === 'light' || eff === 'contrast' ? '#f5f7f6' : '#101820');
+  if (meta) meta.setAttribute('content', colorOverride || (eff === 'light' || eff === 'contrast' ? '#f5f7f6' : '#101820'));
   emit('theme:applied', { effective: eff });
+}
+
+/** Highlights the OS status bar with a fixed color until cleared (OLED black). */
+export function setThemeColorOverride(color: string | null) {
+  colorOverride = color;
+  applyTheme();
 }
 
 export function themeInfo() {

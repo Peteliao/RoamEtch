@@ -1,9 +1,11 @@
-// Record view: map + live panel + controls + power-save lock (dim dashboard + touch guard).
+// Record view: map + live panel + controls + OLED power-save lock.
 import { t, currentLang } from '../core/i18n';
 import { get, set } from '../core/settings';
 import { on, emit } from '../core/events';
 import { rec, startRecording, pauseRecording, resumeRecording, stopRecording, continueTrip, findRecoverableTrip, createManualTrip, retryGeolocation, setRecordingActivity } from '../core/recorder';
 import { armKeepAlive, disarmKeepAlive, isKeepAliveActive } from '../core/keepalive';
+import { requestWakeLock, releaseWakeLock } from '../core/wakelock';
+import { setThemeColorOverride } from '../core/theme';
 import { regionState } from '../core/region';
 import { availableBasemaps } from '../core/providers';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine, bearing } from '../core/geo';
@@ -673,14 +675,28 @@ export function createRecordView() {
   const odAsc = odCell('panel.ascent');
   const odDesc = odCell('panel.descent');
   psBottom.innerHTML = `
-    <div class="ps-ring" role="button" aria-label="${t('record.lockHint')}">
-      <svg width="104" height="104" viewBox="0 0 104 104">
-        <circle class="bgc" cx="52" cy="52" r="46" fill="none" stroke-width="6"/>
-        <circle class="fgc" cx="52" cy="52" r="46" fill="none" stroke-width="6" stroke-linecap="round"/>
-      </svg>
-      <div class="ps-lock"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 11V7a4 4 0 0 1 8 0v4" stroke="currentColor" stroke-width="2" fill="none"/></svg></div>
+    <div class="ps-actions">
+      <div class="ps-act">
+        <div class="ps-ring ps-unlock" role="button" aria-label="${t('record.lockHint')}">
+          <svg width="104" height="104" viewBox="0 0 104 104">
+            <circle class="bgc" cx="52" cy="52" r="46" fill="none" stroke-width="6"/>
+            <circle class="fgc" cx="52" cy="52" r="46" fill="none" stroke-width="6" stroke-linecap="round"/>
+          </svg>
+          <div class="ps-lock"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 11V7a4 4 0 0 1 8 0v4" stroke="currentColor" stroke-width="2" fill="none"/></svg></div>
+        </div>
+        <div class="ps-hint">${t('record.lockHint')}</div>
+      </div>
+      <div class="ps-act">
+        <div class="ps-ring ps-sleep" role="button" aria-label="${t('record.sleepHint')}">
+          <svg width="104" height="104" viewBox="0 0 104 104">
+            <circle class="bgc" cx="52" cy="52" r="46" fill="none" stroke-width="6"/>
+            <circle class="fgc" cx="52" cy="52" r="46" fill="none" stroke-width="6" stroke-linecap="round"/>
+          </svg>
+          <div class="ps-lock"><svg width="25" height="25" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/></svg></div>
+        </div>
+        <div class="ps-hint">${t('record.sleepHint')}</div>
+      </div>
     </div>
-    <div class="ps-hint">${t('record.lockHint')}</div>
     <div class="ps-sub">${t('record.lockSub')}</div>`;
   ps.append(psTop, odGrid, psBottom);
   document.body.append(ps);
@@ -695,8 +711,10 @@ export function createRecordView() {
     );
   }
 
-  const ring = psBottom.querySelector('.ps-ring') as HTMLElement;
-  const ringFg = psBottom.querySelector('.fgc') as SVGCircleElement;
+  const unlockRing = psBottom.querySelector('.ps-unlock') as HTMLElement;
+  const unlockFg = psBottom.querySelector('.ps-unlock .fgc') as SVGCircleElement;
+  const sleepRing = psBottom.querySelector('.ps-sleep') as HTMLElement;
+  const sleepFg = psBottom.querySelector('.ps-sleep .fgc') as SVGCircleElement;
   const psSub = psBottom.querySelector('.ps-sub') as HTMLElement;
   function updatePsSub() {
     psSub.textContent = isKeepAliveActive()
@@ -704,40 +722,49 @@ export function createRecordView() {
       : t('record.lockSub');
   }
   const RING_C = 2 * Math.PI * 46;
-  let holdStart = 0;
-  let holdRaf = 0;
-  let pocketTimer = 0;
   function wakePocket() {
-    if (!psActive) return;
+    if (!psActive || !ps.classList.contains('pocket')) return;
     ps.classList.remove('pocket');
-    clearTimeout(pocketTimer);
-    pocketTimer = window.setTimeout(() => {
-      if (psActive && document.visibilityState === 'visible') ps.classList.add('pocket');
-    }, 15_000);
+    requestWakeLock();
   }
-  function holdLoop(ts) {
-    if (!holdStart) return;
-    const p = Math.min(1, (ts - holdStart) / 1500);
-    ringFg.style.strokeDashoffset = String(RING_C * (1 - p));
-    if (p >= 1) { setPowerLock(false); return; }
-    holdRaf = requestAnimationFrame(holdLoop);
+  function enterPocket() {
+    if (!psActive) return;
+    ps.classList.add('pocket');
+    requestWakeLock();
   }
-  function resetHold() {
-    holdStart = 0;
-    ring.classList.remove('holding');
-    cancelAnimationFrame(holdRaf);
-    ringFg.style.strokeDashoffset = String(RING_C);
+  function bindHold(ringEl, fgEl, duration, onDone) {
+    let start = 0;
+    let raf = 0;
+    function reset() {
+      start = 0;
+      ringEl.classList.remove('holding');
+      cancelAnimationFrame(raf);
+      raf = 0;
+      fgEl.style.strokeDashoffset = String(RING_C);
+    }
+    function loop(ts) {
+      if (!start) return;
+      const p = Math.min(1, (ts - start) / duration);
+      fgEl.style.strokeDashoffset = String(RING_C * (1 - p));
+      if (p >= 1) { reset(); onDone(); return; }
+      raf = requestAnimationFrame(loop);
+    }
+    ringEl.addEventListener('pointerdown', (e) => {
+      if (!psActive) return;
+      e.preventDefault();
+      e.stopPropagation();
+      reset();
+      try { ringEl.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+      ringEl.classList.add('holding');
+      start = performance.now();
+      raf = requestAnimationFrame(loop);
+    });
+    ringEl.addEventListener('pointerup', reset);
+    ringEl.addEventListener('pointercancel', reset);
+    ringEl.addEventListener('pointerleave', reset);
   }
-  ring.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    try { ring.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
-    ring.classList.add('holding');
-    holdStart = performance.now();
-    holdRaf = requestAnimationFrame(holdLoop);
-  });
-  ring.addEventListener('pointerup', resetHold);
-  ring.addEventListener('pointercancel', resetHold);
-  ring.addEventListener('pointerleave', resetHold);
+  bindHold(unlockRing, unlockFg, 1500, () => setPowerLock(false));
+  bindHold(sleepRing, sleepFg, 3000, enterPocket);
   ps.addEventListener('pointerdown', (e) => { wakePocket(); e.preventDefault(); });
   ps.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -764,7 +791,6 @@ export function createRecordView() {
   async function setPowerLock(on) {
     if (on === psActive) return;
     psActive = on;
-    resetHold();
     if (on) {
       // truly stop WebGL rendering while in power saver
       const center = map.map.getCenter();
@@ -775,14 +801,17 @@ export function createRecordView() {
       mapContainer.style.display = 'none';
       ps._restore = { center, zoom, basemap };
       ps.classList.add('active');
+      ps.classList.remove('pocket');
+      setThemeColorOverride('#000000');
+      requestWakeLock();
       renderPsTop();
       renderOled(rec.live);
       updatePsSub();
       setTimeout(() => { if (psActive) updatePsSub(); }, 1200);
-      wakePocket();
     } else {
       ps.classList.remove('active', 'pocket');
-      clearTimeout(pocketTimer);
+      setThemeColorOverride(null);
+      if (rec.status !== 'recording') releaseWakeLock();
       mapContainer.style.display = '';
       buildMap();
       const r = ps._restore;
@@ -973,7 +1002,10 @@ export function createRecordView() {
       document.removeEventListener('keydown', onKeydown);
       document.removeEventListener('visibilitychange', onVisibility);
       offBroadcast();
-      clearTimeout(pocketTimer);
+      if (psActive) {
+        setThemeColorOverride(null);
+        if (rec.status !== 'recording') releaseWakeLock();
+      }
       map?.destroy();
       map = null;
       ps.remove();

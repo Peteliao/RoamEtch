@@ -587,7 +587,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 }
 #oled-dash.active { display: flex; }
 #oled-dash .od-top, #oled-dash .od-grid, #oled-dash .od-bottom { transition: opacity 0.45s ease; }
-#oled-dash.pocket .od-top, #oled-dash.pocket .od-grid, #oled-dash.pocket .od-bottom { opacity: 0; }
+#oled-dash.pocket .od-top, #oled-dash.pocket .od-grid, #oled-dash.pocket .od-bottom { opacity: 0; pointer-events: none; }
 #oled-dash.pocket::after {
   content: ''; position: absolute; left: 50%; bottom: calc(10px + var(--safe-b));
   width: 4px; height: 4px; margin-left: -2px; border-radius: 50%;
@@ -618,13 +618,17 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 #oled-dash .sig-bars.lv4 i:nth-child(-n+4) { background: var(--accent); }
 #oled-dash .sig-txt { font-size: 14px; color: #999; }
 #oled-dash .od-bottom { display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 12px; }
+#oled-dash .ps-actions { width: 100%; display: flex; align-items: flex-start; justify-content: space-evenly; gap: 18px; }
+#oled-dash .ps-act { display: flex; flex-direction: column; align-items: center; gap: 7px; min-width: 0; }
 #oled-dash .ps-ring { position: relative; width: 104px; height: 104px; touch-action: none; cursor: pointer; }
 #oled-dash .ps-ring > svg { transform: rotate(-90deg); }
 #oled-dash .ps-ring .bgc { stroke: #262626; }
 #oled-dash .ps-ring .fgc { stroke: var(--accent); stroke-dasharray: 289.03; stroke-dashoffset: 289.03; opacity: 0; }
 #oled-dash .ps-ring.holding .fgc { opacity: 1; }
+#oled-dash .ps-ring.ps-sleep .fgc { stroke: #9fb3c8; }
+#oled-dash .ps-ring.ps-sleep .ps-lock { color: #9fb3c8; }
 #oled-dash .ps-lock { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #bbb; }
-#oled-dash .ps-hint { color: #aaa; font-size: 14px; text-align: center; }
+#oled-dash .ps-hint { color: #aaa; font-size: 13px; text-align: center; }
 #oled-dash .ps-sub { color: #666; font-size: 12px; text-align: center; }
 
 /* ---------- trips list ---------- */
