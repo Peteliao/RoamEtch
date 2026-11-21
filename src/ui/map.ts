@@ -8,11 +8,7 @@ import { isOfflineSim, regionState } from '../core/region';
 import { simplify, haversine } from '../core/geo';
 import { on, emit } from '../core/events';
 import { diag } from '../core/diag';
-
-export const WP_ICONS = {
-  start: '🚩', end: '🏁', view: '👁️', photo: '📷', stay: '🏨',
-  food: '🍜', supply: '🛒', danger: '⚠️', fuel: '⛽', custom: '📍'
-};
+import { WP_ICONS } from '../core/waypointMeta';
 
 const LIVE_FILL = 'rgba(90,167,240,0.14)';
 

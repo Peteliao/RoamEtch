@@ -76,9 +76,32 @@ export function paintVectorBackground(ctx, w, h) {
   for (let y = 0; y < h; y += 64) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
 }
 
+/** Average perceived luminance of the finished basemap (0..1), null if unreadable. */
+function bgLuminance(bg) {
+  try {
+    const sample = document.createElement('canvas');
+    sample.width = 48; sample.height = 48;
+    const sctx = sample.getContext('2d', { willReadFrequently: true });
+    sctx.drawImage(bg, 0, 0, 48, 48);
+    const data = sctx.getImageData(0, 0, 48, 48).data;
+    let sum = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      sum += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+    }
+    return sum / (data.length / 4) / 255;
+  } catch {
+    return null;
+  }
+}
+
+function mapResult(bg, fit, segments, waypoints, vector, label) {
+  const luma = bgLuminance(bg);
+  return { bg, fit, segments, waypoints, vector, label, darkBg: luma != null && luma < 0.5 };
+}
+
 /**
  * Prepare a basemap background at native resolution plus a display-space track.
- * @returns {Promise<{bg:HTMLCanvasElement, fit, segments, waypoints, vector:boolean, label:string}>}
+ * @returns {Promise<{bg:HTMLCanvasElement, fit, segments, waypoints, vector:boolean, label:string, darkBg:boolean}>}
  */
 export async function prepareMap({
   w, h, pad = 90, segments, waypoints = [], basemapId = '', vectorOnly = false, onProgress
@@ -102,7 +125,7 @@ export async function prepareMap({
 
   if (!provider || !fit) {
     paintVectorBackground(ctx, w, h);
-    return { bg, fit, segments: dispSegs, waypoints: dispWps, vector: true, label: 'vector' };
+    return mapResult(bg, fit, dispSegs, dispWps, true, 'vector');
   }
 
   const key = provider.requiresKey ? get(provider.requiresKey) : '';
@@ -139,20 +162,20 @@ export async function prepareMap({
 
   if (failed) {
     paintVectorBackground(ctx, w, h);
-    return { bg, fit, segments: dispSegs, waypoints: dispWps, vector: true, label: 'vector' };
+    return mapResult(bg, fit, dispSegs, dispWps, true, 'vector');
   }
   ctx.fillStyle = canvasPalette().panel;
   ctx.fillRect(0, 0, w, h);
   for (const layer of [0, 1]) {
     for (const j of jobs) if (j.layer === layer) ctx.drawImage(j.img, j.px, j.py);
   }
-  return { bg, fit, segments: dispSegs, waypoints: dispWps, vector: false, label };
+  return mapResult(bg, fit, dispSegs, dispWps, false, label);
 }
 
 // Along-path gradient (teal → sky → indigo) with layered soft glow and a
 // centre highlight — the neon-tube look used by modern recap renderers.
-const STOPS = [[43, 205, 167], [56, 189, 248], [129, 140, 248]];
-function lut(t, stops = STOPS) {
+const BRIGHT_STOPS = [[43, 205, 167], [56, 189, 248], [129, 140, 248]];
+function lut(t, stops = BRIGHT_STOPS) {
   const s = Math.max(0, Math.min(1, t)) * (stops.length - 1);
   const i = Math.min(stops.length - 2, Math.floor(s));
   const f = s - i;
@@ -162,13 +185,18 @@ function lut(t, stops = STOPS) {
 
 /**
  * Draw the track over a prepared map. `upto` limits rendering to the first N
- * points (video playback); the head point gets the amber marker.
+ * points (video playback); the head point gets the amber marker. `darkBg`
+ * switches to the bright gradient so the line stays visible on satellite or
+ * night-style tiles.
  */
 export function paintTrack(ctx, fit, segments, waypoints, {
-  upto = Infinity, lineWidth = 8.5, dotRadius = 13, wpRadius = 6
+  upto = Infinity, lineWidth = 6.5, dotRadius = 12, wpRadius = 5.5, darkBg = false
 } = {}) {
   if (!fit) return;
   const P = canvasPalette();
+  const stops = darkBg ? BRIGHT_STOPS : P.lut;
+  const halo = darkBg ? 'rgba(0,0,0,0.40)' : P.trackHalo;
+  const casing = darkBg ? 'rgba(4,16,24,0.74)' : P.trackCasing;
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, fit.w, fit.h);
@@ -194,13 +222,13 @@ export function paintTrack(ctx, fit, segments, waypoints, {
     }
   }
   const chunk = Math.max(2, Math.ceil(count / 18));
-  // Dark halo + casing keep the gradient readable on pale street maps; the
-  // thin highlight prevents the line from looking flat on dark basemaps.
+  // Halo + casing separate the gradient from both pale street maps and dark
+  // imagery; the thin highlight keeps the line from looking flat.
   const passes = [
-    { w: lineWidth * 2.1, a: 0.20, color: P.trackHalo },
-    { w: lineWidth + 4.5, a: 0.95, color: P.trackCasing },
+    { w: lineWidth * 1.9, a: 0.20, color: halo },
+    { w: lineWidth + 2.8, a: darkBg ? 0.85 : 0.92, color: casing },
     { w: lineWidth, a: 1 },
-    { w: Math.max(1.4, lineWidth * 0.24), a: 0.34, color: 'rgba(255,255,255,0.9)' }
+    { w: Math.max(1.2, lineWidth * 0.24), a: darkBg ? 0.26 : 0.34, color: 'rgba(255,255,255,0.9)' }
   ];
   for (const pass of passes) {
     ctx.globalAlpha = pass.a;
@@ -209,7 +237,7 @@ export function paintTrack(ctx, fit, segments, waypoints, {
     for (const pts of polys) {
       for (let s = 0; s < pts.length - 1; s += chunk - 1) {
         const e = Math.min(pts.length, s + chunk);
-        ctx.strokeStyle = pass.color || lut((gi + s + (e - s) / 2) / Math.max(1, count), P.lut);
+        ctx.strokeStyle = pass.color || lut((gi + s + (e - s) / 2) / Math.max(1, count), stops);
         ctx.beginPath();
         for (let i = s; i < e; i++) {
           const [x, y] = fit.toPx(pts[i]);
@@ -224,20 +252,20 @@ export function paintTrack(ctx, fit, segments, waypoints, {
 
   for (const wp of waypoints.slice(0, 40)) {
     const [x, y] = fit.toPx(wp);
-    ctx.fillStyle = P.text;
+    ctx.fillStyle = darkBg ? 'rgba(255,255,255,0.95)' : P.text;
     ctx.beginPath(); ctx.arc(x, y, wpRadius, 0, 7); ctx.fill();
-    ctx.strokeStyle = P.wpRing;
+    ctx.strokeStyle = darkBg ? 'rgba(4,16,24,0.8)' : P.wpRing;
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(x, y, wpRadius + 1.5, 0, 7); ctx.stroke();
   }
   const ring = (p, fill) => {
     const [x, y] = fit.toPx(p);
-    ctx.fillStyle = P.trackCasing;
-    ctx.beginPath(); ctx.arc(x, y, dotRadius + 4, 0, 7); ctx.fill();
+    ctx.fillStyle = casing;
+    ctx.beginPath(); ctx.arc(x, y, dotRadius + 3.5, 0, 7); ctx.fill();
     ctx.fillStyle = fill;
     ctx.beginPath(); ctx.arc(x, y, dotRadius, 0, 7); ctx.fill();
-    ctx.strokeStyle = P.endRing;
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = darkBg ? 'rgba(255,255,255,0.92)' : P.endRing;
+    ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(x, y, dotRadius + 2.5, 0, 7); ctx.stroke();
   };
   if (first) ring(first, P.accent);

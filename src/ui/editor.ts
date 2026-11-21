@@ -8,7 +8,7 @@ import { resolveAltitude } from '../core/elevation';
 import { pushAction, undo, redo, state as histState } from '../core/history';
 import { appState, refreshActiveTrip, scheduleAltBackfill } from './state';
 import { el, icon, modal, toast, confirmModal, filePicker } from './helpers';
-import { WP_ICONS } from './map';
+import { WP_ICONS } from '../core/waypointMeta';
 
 const WP_TYPES = ['start', 'end', 'view', 'photo', 'stay', 'food', 'supply', 'danger', 'fuel', 'custom'];
 

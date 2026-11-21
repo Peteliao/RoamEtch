@@ -234,7 +234,7 @@ export async function generatePoster(full, {
     });
     const places = await placesPromise;
     ctx.drawImage(m.bg, 0, 0);
-    paintTrack(ctx, m.fit, m.segments, m.waypoints, { lineWidth: 8, dotRadius: 13 });
+    paintTrack(ctx, m.fit, m.segments, m.waypoints, { lineWidth: 6.2, dotRadius: 12, darkBg: m.darkBg });
     ctx.fillStyle = P.accent;
     ctx.fillRect(0, mapH - 8, W, 8);
     drawSquarePanel(ctx, full, stats, score, W, H, mapH, P, time, places);
@@ -249,7 +249,7 @@ export async function generatePoster(full, {
   });
   const places = await placesPromise;
   ctx.drawImage(m.bg, 0, 0);
-  paintTrack(ctx, m.fit, m.segments, m.waypoints);
+  paintTrack(ctx, m.fit, m.segments, m.waypoints, { darkBg: m.darkBg });
   ctx.fillStyle = P.accent;
   ctx.fillRect(0, mapH - 8, W, 8);
   ctx.fillStyle = P.panel;

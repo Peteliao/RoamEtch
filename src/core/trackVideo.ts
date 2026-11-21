@@ -4,11 +4,12 @@
 import { applyPrivacy } from './privacy';
 import { computeStats } from './stats';
 import { prepareMap, paintTrack } from './mapPaint';
-import { computeTripScore, drawScoreBadge, fitText } from './tripScore';
+import { computeTripScore, drawScoreBadge, fitText, roundRectPath } from './tripScore';
 import { canvasPalette } from './palette';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine } from './geo';
 import { loadBrandFonts, drawQr, SITE_URL, SPORT_FONT } from './brand';
 import { tripTimeInfo, routePlaceNames } from './shareInfo';
+import { WP_ICONS } from './waypointMeta';
 import { estimateCalories } from './calories';
 import { get } from './settings';
 import { t } from './i18n';
@@ -18,6 +19,7 @@ const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
 const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
 const W = 1080, H = 1920, MAP_H = 1080;
 const INTRO_MS = 2600, OUTRO_MS = 3400, FADE_MS = 500;
+const NODE_LEAD_MS = 500, NODE_SHOW_MS = 2600;
 
 export const videoSupported = () =>
   typeof MediaRecorder !== 'undefined' && typeof HTMLCanvasElement !== 'undefined' && !!HTMLCanvasElement.prototype.captureStream;
@@ -146,6 +148,55 @@ function drawProfileCursor(ctx, prof, meta, curD, curA, x, y, w, h, P) {
   ctx.fillText(`${Math.round(minA)}m`, x + 4, y + h - 6);
 }
 
+async function decodeImage(blob) {
+  if (!blob) return null;
+  try {
+    return await createImageBitmap(blob);
+  } catch {
+    return new Promise((resolve) => {
+      const img = new Image();
+      const url = URL.createObjectURL(blob);
+      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    });
+  }
+}
+
+function drawCover(ctx, img, x, y, w, h) {
+  const iw = img.width, ih = img.height;
+  const scale = Math.max(w / iw, h / ih);
+  const sw = w / scale, sh = h / scale;
+  ctx.drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, x, y, w, h);
+}
+
+function wrapLines(ctx, text, maxWidth, maxLines) {
+  const tokens = text.match(/[^\s\u2E80-\u9FFF]+|[\u2E80-\u9FFF]|\s+/g) || [];
+  const lines = [];
+  let i = 0;
+  while (i < tokens.length && lines.length < maxLines) {
+    let line = '';
+    while (i < tokens.length && ctx.measureText(line + tokens[i]).width <= maxWidth) {
+      line += tokens[i];
+      i++;
+    }
+    if (!line) { line = tokens[i]; i++; }
+    lines.push(line.trim());
+  }
+  if (i < tokens.length && lines.length) {
+    let last = lines[lines.length - 1];
+    while (last && ctx.measureText(last + '…').width > maxWidth) last = last.slice(0, -1);
+    lines[lines.length - 1] = last + '…';
+  }
+  return lines;
+}
+
+function clockOf(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 /**
  * @returns {Promise<{blob, mime, width, height, seconds, usedVectorFallback:boolean}>}
  */
@@ -194,6 +245,66 @@ export async function generateTrackVideo(full, {
   const pointU = ts.map((v, i) => (span > 0 && v != null ? (v - firstT) / span : i / (N - 1)));
   for (let i = 1; i < N; i++) if (pointU[i] < pointU[i - 1]) pointU[i] = pointU[i - 1];
 
+  const flatPts = cropped.segments.flatMap((s) => s.points);
+  const mediaById = new Map(((full as any).media || []).map((md) => [md.id, md]));
+  const nodes = (await Promise.all(m.waypoints.slice(0, 40).map(async (dispWp, i) => {
+    const wp = cropped.waypoints[i];
+    if (!wp) return null;
+    const onClock = span > 0 && Number.isFinite(wp.time) && wp.time >= firstT! && wp.time <= lastT!;
+    let u;
+    if (onClock) {
+      u = (wp.time - firstT!) / span;
+    } else {
+      let best = 0, bestD = Infinity;
+      const cosLat = Math.cos((wp.lat * Math.PI) / 180);
+      for (let j = 0; j < flatPts.length; j++) {
+        const dx = (flatPts[j].lon - wp.lon) * cosLat;
+        const dy = flatPts[j].lat - wp.lat;
+        const d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; best = j; }
+      }
+      u = pointU[best];
+    }
+    const mediaIds = wp.mediaIds || [];
+    const mediaRec = mediaIds.map((id) => mediaById.get(id)).find(Boolean);
+    const photo = mediaRec ? await decodeImage(mediaRec.thumb || mediaRec.blob) : null;
+    const title = String(wp.name || '').trim();
+    const desc = String(wp.desc || '').trim();
+    return {
+      wp, disp: dispWp, u: Math.max(0, Math.min(1, u)),
+      type: wp.type || 'custom', title, desc, photo,
+      photoCount: mediaIds.length, cardW: 0, cardH: 0, cardX: 0, cardY: 0
+    };
+  }))).filter(Boolean).sort((a, b) => a!.u - b!.u);
+
+  const routePx = [];
+  for (const seg of m.segments) for (const p of seg.points) routePx.push(m.fit!.toPx(p));
+  const routeEnds = [routePx[0], routePx[routePx.length - 1]].filter(Boolean);
+  const insideRect = (p, x, y, w, h, pad = 10) =>
+    p[0] >= x - pad && p[0] <= x + w + pad && p[1] >= y - pad && p[1] <= y + h + pad;
+  for (const n of nodes) {
+    n!.cardW = n!.photo ? 440 : 400;
+    n!.cardH = n!.photo ? 176 : 72 + (n!.title ? 32 : 0) + (n!.desc ? 54 : 0);
+    const margin = 34, bottom = 40;
+    const spots = [
+      [W - margin - n!.cardW, margin], [margin, margin],
+      [W - margin - n!.cardW, MAP_H - bottom - n!.cardH], [margin, MAP_H - bottom - n!.cardH]
+    ];
+    const marker = m.fit!.toPx(n!.disp);
+    let bestSpot = spots[0], bestScore = Infinity;
+    for (const [x, y] of spots) {
+      let score = 0;
+      for (let i = 0; i < routePx.length; i += 2) {
+        if (insideRect(routePx[i], x, y, n!.cardW, n!.cardH, 18)) score++;
+      }
+      if (insideRect(marker, x, y, n!.cardW, n!.cardH, 14)) score += 1e6;
+      for (const e of routeEnds) if (insideRect(e, x, y, n!.cardW, n!.cardH, 14)) score += 4000;
+      if (score < bestScore) { bestScore = score; bestSpot = [x, y]; }
+    }
+    n!.cardX = bestSpot[0];
+    n!.cardY = bestSpot[1];
+  }
+
   const { asc: cumAsc, desc: cumDesc } = cumulativeAscentDescent(stats.series.alt, get('ascentThreshold') ?? 4);
   const render = decimate(m.segments);
   const profAll = stats.series.alt.map((a, i) => [stats.series.d[i], a]).filter(([, a]) => a != null);
@@ -207,7 +318,6 @@ export async function generateTrackVideo(full, {
   const units = get('units');
 
   // cumulative calories along the replay (MET uses current moving average)
-  const flatPts = cropped.segments.flatMap((s) => s.points);
   const cumKcal = new Array(N);
   let movingAcc = 0;
   for (let i = 0; i < N; i++) {
@@ -246,16 +356,120 @@ export async function generateTrackVideo(full, {
   const dateStr = time?.date || new Date(full.trip.createdAt).toLocaleDateString();
   const activity = t(`record.activities.${full.trip.activity}`);
 
+  function drawNodePulse(n, replayMs, alpha) {
+    if (!m.fit) return;
+    const [x, y] = m.fit.toPx(n.disp);
+    const phase = (replayMs % 1400) / 1400;
+    ctx.save();
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = P.amber;
+    ctx.globalAlpha = 0.55 * (1 - phase) * alpha;
+    ctx.beginPath(); ctx.arc(x, y, 22 + phase * 20, 0, Math.PI * 2); ctx.stroke();
+    const phase2 = ((replayMs + 700) % 1400) / 1400;
+    ctx.globalAlpha = 0.35 * (1 - phase2) * alpha;
+    ctx.beginPath(); ctx.arc(x, y, 22 + phase2 * 20, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawNodeCard(n, alpha) {
+    const { cardX: x, cardY: y, cardW: w, cardH: h, photo } = n;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = 'rgba(0,0,0,0.30)';
+    ctx.shadowBlur = 28;
+    ctx.shadowOffsetY = 10;
+    roundRectPath(ctx, x, y, w, h, 18);
+    ctx.fillStyle = P.panel;
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = P.accentLine;
+    roundRectPath(ctx, x, y, w, h, 18);
+    ctx.stroke();
+
+    let textX = x + 22;
+    const textW = w - (photo ? 206 : 44);
+    if (photo) {
+      const ps = 152, px = x + 16, py = y + (h - ps) / 2;
+      ctx.save();
+      roundRectPath(ctx, px, py, ps, ps, 12);
+      ctx.clip();
+      drawCover(ctx, photo, px, py, ps, ps);
+      ctx.restore();
+      if (n.photoCount > 1) {
+        const label = `+${n.photoCount - 1}`;
+        ctx.font = `700 20px ${FONT}`;
+        const bw = ctx.measureText(label).width + 18;
+        ctx.fillStyle = 'rgba(4,16,24,0.62)';
+        roundRectPath(ctx, px + ps - bw - 8, py + ps - 40, bw, 30, 15);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
+        ctx.fillText(label, px + ps - bw / 2 - 8, py + ps - 18);
+      }
+      textX = x + 184;
+    }
+
+    const icon = WP_ICONS[n.type] || '📍';
+    const clock = clockOf(n.wp.time);
+    ctx.textAlign = 'left';
+    ctx.font = `22px ${FONT}`;
+    ctx.fillStyle = P.muted;
+    const clockW = clock ? ctx.measureText(clock).width : 0;
+    if (clock) {
+      ctx.textAlign = 'right';
+      ctx.fillText(clock, x + w - 20, y + 38);
+    }
+    ctx.textAlign = 'left';
+    ctx.font = `24px ${FONT}`;
+    ctx.fillText(icon, textX, y + 39);
+    const iconW = ctx.measureText(icon).width + 6;
+    ctx.fillStyle = P.accent;
+    ctx.font = `700 21px ${FONT}`;
+    ctx.fillText(fitText(ctx, t(`wp.types.${n.type}`), textW - iconW - clockW - 12), textX + iconW, y + 38);
+
+    if (n.title) {
+      ctx.fillStyle = P.text;
+      ctx.font = `800 30px ${FONT}`;
+      ctx.fillText(fitText(ctx, n.title, textW), textX, y + 78);
+    }
+    if (n.desc) {
+      ctx.fillStyle = P.muted;
+      ctx.font = `21px ${FONT}`;
+      const maxY = y + h - 18;
+      let ty = n.title ? y + 112 : y + 76;
+      for (const line of wrapLines(ctx, n.desc, textW, 2)) {
+        if (ty > maxY) break;
+        ctx.fillText(fitText(ctx, line, textW), textX, ty);
+        ty += 27;
+      }
+    }
+    ctx.restore();
+  }
+
   function drawFrame(idx, u) {
     ctx.drawImage(m.bg, 0, 0);
     paintTrack(ctx, m.fit, render.segs, m.waypoints, {
       upto: render.origIdx ? countUpTo(render.origIdx, idx) : idx + 1,
-      lineWidth: 9, dotRadius: 14
+      lineWidth: 7, dotRadius: 13, darkBg: m.darkBg
     });
     ctx.fillStyle = P.progressTrack;
     ctx.fillRect(0, MAP_H - 8, W, 8);
     ctx.fillStyle = P.accent;
     ctx.fillRect(0, MAP_H - 8, W * u, 8);
+
+    const replayMs = u * playMs;
+    let activeNode = null, activeAlpha = 0;
+    for (const n of nodes) {
+      const local = replayMs - (n!.u * playMs - NODE_LEAD_MS);
+      if (local < 0 || local >= NODE_SHOW_MS) continue;
+      const a = Math.max(0, Math.min(1, local / 180, (NODE_SHOW_MS - local) / 320));
+      if (a > 0.001 && a >= activeAlpha - 1e-6) { activeNode = n; activeAlpha = a; }
+    }
+    if (activeNode) {
+      drawNodePulse(activeNode, replayMs, activeAlpha);
+      drawNodeCard(activeNode, activeAlpha);
+    }
 
     const py0 = MAP_H;
     ctx.fillStyle = P.panel;
@@ -516,6 +730,12 @@ export async function generateTrackVideo(full, {
   try { rec.stop(); } catch { /* already stopped */ }
   stream.getTracks().forEach((tr) => tr.stop());
   await stopped;
+  for (const n of nodes) {
+    const photo = n!.photo;
+    if (photo && typeof photo.close === 'function') {
+      try { photo.close(); } catch { /* already closed */ }
+    }
+  }
   if (aborted) throw new DOMException('Aborted', 'AbortError');
 
   const type = (mime || 'video/webm').split(';')[0];
