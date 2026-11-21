@@ -7,11 +7,12 @@ import { get } from '../core/settings';
 import { on } from '../core/events';
 import { listTrips } from '../core/store';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude } from '../core/geo';
+import { findTrackGaps, repairTrackGaps } from '../core/gapRepair';
 import { TrackMap } from './map';
 import { WP_ICONS } from '../core/waypointMeta';
 import { canvasPalette } from '../core/palette';
-import { appState, setActiveTrip } from './state';
-import { el, icon } from './helpers';
+import { appState, setActiveTrip, refreshActiveTrip } from './state';
+import { el, icon, confirmModal, toast } from './helpers';
 
 export function createAnalysisView() {
   const view = el('div', { class: 'view', id: 'view-analysis' });
@@ -27,6 +28,9 @@ export function createAnalysisView() {
   const statsBox = el('div', { class: 'stat-grid' });
   const diffBox = el('div', {});
   const advisory = el('div', {});
+  const gapBody = el('div', {});
+  const gapCard = el('div', { class: 'card', style: { display: 'none' } },
+    el('h3', {}, icon('routeFwd', 18), t('analysis.gapTitle')), gapBody);
   const miniMapBox = el('div', { class: 'analysis-map' });
   const chartWrap = el('div', { class: 'chart-wrap' });
   const altTab = el('button', { class: 'active', onclick: () => setChartMode('alt') }, t('analysis.altTab'));
@@ -41,7 +45,7 @@ export function createAnalysisView() {
   const tlCard = el('div', { class: 'card' }, el('h3', {}, t('analysis.timeline')), el('div', { id: 'timeline' }));
   const disclaimer = el('div', { class: 'small faint', style: { padding: '4px 2px 20px' } }, '⚠ ' + t('analysis.disclaimer'));
 
-  scroll.append(head, advisory, statsBox, diffBox, miniMapBox, chartCard, slopeCard, segCard, tlCard, disclaimer);
+  scroll.append(head, advisory, statsBox, diffBox, gapCard, miniMapBox, chartCard, slopeCard, segCard, tlCard, disclaimer);
 
   let miniMap = null;
   let chart = null;
@@ -275,6 +279,52 @@ export function createAnalysisView() {
     }
   }
 
+  function renderGaps() {
+    gapBody.innerHTML = '';
+    const full = appState.activeTripFull;
+    if (!full || full.segments.length < 2) { gapCard.style.display = 'none'; return; }
+    const gaps = findTrackGaps(full.segments);
+    if (!gaps.length) { gapCard.style.display = 'none'; return; }
+    gapCard.style.display = '';
+    const total = gaps.reduce((sum, g) => sum + g.distance, 0);
+    const d = fmtDistance(total, get('units'));
+    const btn = el('button', { class: 'btn primary sm' }, icon('routeFwd', 15), t('analysis.gapFill'));
+    btn.onclick = async () => {
+      const ok = await confirmModal({
+        title: t('analysis.gapTitle'),
+        message: t('analysis.gapConfirm', { n: gaps.length }),
+        confirmText: t('analysis.gapFill')
+      });
+      if (!ok) return;
+      if (!navigator.onLine) { toast(t('analysis.gapOffline'), 'warn'); return; }
+      btn.disabled = true;
+      try {
+        const r = await repairTrackGaps(full.trip.id, {
+          onProgress: ({ done, total: all }) => {
+            btn.textContent = t('analysis.gapProgress', { done, total: all });
+          }
+        });
+        if (r.repaired) {
+          await refreshActiveTrip();
+          const added = fmtDistance(r.distance, get('units'));
+          toast(t('analysis.gapDone', { n: r.repaired, d: `${added.v}${added.u}` }), 'ok', 4500);
+        }
+        if (r.failed) toast(t('analysis.gapFail', { n: r.failed }), 'warn', 4500);
+      } catch (e) {
+        console.error(e);
+        toast(t('analysis.gapFail', { n: gaps.length }), 'warn', 4500);
+      }
+      btn.disabled = false;
+      btn.innerHTML = '';
+      btn.append(icon('routeFwd', 15), t('analysis.gapFill'));
+    };
+    gapBody.append(
+      el('div', { class: 'small muted' }, t('analysis.gapCount', { n: gaps.length, d: `${d.v}${d.u}` })),
+      el('div', { class: 'small faint', style: { margin: '4px 0 10px' } }, t('analysis.gapNote')),
+      btn
+    );
+  }
+
   async function renderAll() {
     await refreshTripList();
     if (!appState.activeTripId && tripSel.options.length > 1) await setActiveTrip(tripSel.options[1].value);
@@ -284,6 +334,7 @@ export function createAnalysisView() {
       statsBox.innerHTML = '';
       diffBox.innerHTML = '';
       advisory.innerHTML = '';
+      gapCard.style.display = 'none';
       chartCard.style.display = 'none';
       slopeCard.style.display = 'none';
       segCard.style.display = 'none';
@@ -297,6 +348,7 @@ export function createAnalysisView() {
     ensureMiniMap();
     miniMap.setTrackData(full.segments, full.waypoints);
     setTimeout(() => miniMap.fitTrack(30), 120);
+    renderGaps();
     renderStats(stats);
     renderCharts(stats);
     renderSegments(stats);

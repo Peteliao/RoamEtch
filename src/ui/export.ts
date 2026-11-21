@@ -11,6 +11,9 @@ import { buildShareLink } from '../core/shareLink';
 import { generateTrackVideo, videoSupported } from '../core/trackVideo';
 import { exportImage, exportFile, isWeChat, nativeShare } from '../core/shareEnv';
 import { listTrips, loadTripFull } from '../core/store';
+import { prepareMap } from '../core/mapPaint';
+import { routePlaceNames } from '../core/shareInfo';
+import { loadBrandFonts } from '../core/brand';
 import { appState } from './state';
 import { el, icon, toast, modal } from './helpers';
 
@@ -30,11 +33,12 @@ export function createExportView(getRecordMap) {
 
   // ---- privacy ----
   const radiusInput = el('input', { type: 'number', min: '0', max: '5000', step: '50', value: get('privacyRadius') });
-  radiusInput.onchange = () => { set('privacyRadius', Math.max(0, +radiusInput.value || 0)); updateCropInfo(); };
+  radiusInput.onchange = () => { set('privacyRadius', Math.max(0, +radiusInput.value || 0)); updateCropInfo(); warmExport(curFull); };
   const hideCb = el('input', { type: 'checkbox' });
   hideCb.checked = true;
-  hideCb.onchange = updateCropInfo;
+  hideCb.onchange = () => { updateCropInfo(); warmExport(curFull); };
   const vectorCb = el('input', { type: 'checkbox' });
+  vectorCb.onchange = () => { updateCropInfo(); warmExport(curFull); };
   const cropInfo = el('div', { class: 'small', style: { color: 'var(--warn)', marginTop: '8px' } });
   const privacyCard = el('div', { class: 'card' },
     el('h3', {}, icon('shield', 18), t('export.privacy')),
@@ -81,6 +85,35 @@ export function createExportView(getRecordMap) {
     if (!full) { cropInfo.textContent = ''; return; }
     const c = applyPrivacy(full, privacyOpts());
     cropInfo.textContent = t('export.cropNote', { n: c.croppedPoints, m: c.croppedWaypoints });
+  }
+
+  // Warm tiles / place names / fonts while the user reviews the options, so
+  // clicking generate only pays for the actual composition.
+  let warmTimer = 0;
+  let warmKey = '';
+  function warmExport(full) {
+    if (!full || !navigator.onLine) return;
+    const privacy = privacyOpts();
+    const base = getRecordMap?.()?.basemapId || '';
+    const key = [full.trip.id, full.trip.updatedAt, base, privacy.radius, privacy.hideSensitive, vectorCb.checked].join('|');
+    if (key === warmKey) return;
+    warmKey = key;
+    clearTimeout(warmTimer);
+    warmTimer = window.setTimeout(async () => {
+      try {
+        const cropped = applyPrivacy(full, privacy);
+        const common = {
+          segments: cropped.segments, waypoints: cropped.waypoints,
+          basemapId: base, vectorOnly: vectorCb.checked, onProgress: undefined
+        };
+        await Promise.all([
+          loadBrandFonts(),
+          routePlaceNames(cropped.segments, { max: 6 }),
+          prepareMap({ w: 1080, h: 1150, pad: 90, ...common }),
+          prepareMap({ w: 1080, h: 1080, pad: 80, ...common })
+        ]);
+      } catch { /* prewarm is best-effort */ }
+    }, 550);
   }
 
   // ---- poster ----
@@ -373,6 +406,7 @@ export function createExportView(getRecordMap) {
     curFull = id ? await loadTripFull(id) : null;
     resetOutputs();
     refresh();
+    warmExport(curFull);
   }
   async function refreshTripList() {
     const trips = await listTrips();
@@ -389,6 +423,7 @@ export function createExportView(getRecordMap) {
       ? `${curFull.trip.name || t('record.newTripName')} · ${t(`record.activities.${curFull.trip.activity}`)}`
       : t('analysis.noTrip');
     updateCropInfo();
+    warmExport(curFull);
   }
   on('trip:active', (full) => {
     if (full && full.trip.id !== curFull?.trip.id) {

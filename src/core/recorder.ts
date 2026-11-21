@@ -8,17 +8,19 @@ import * as store from './store';
 import { resolveAltitude } from './elevation';
 import { acquireRecorderLock, releaseRecorderLock, broadcast, isHolding } from './locks';
 import { requestWakeLock, releaseWakeLock } from './wakelock';
+import { armKeepAlive, disarmKeepAlive } from './keepalive';
 import { classifyActivity } from './activity';
 
 const GAP_TIME = 5 * 60_000;   // > 5 min → new segment
 const GAP_DIST = 500;          // > 500 m jump → new segment
-const NOISE_DIST = 2;          // metres
 const MOVING_SPEED = 0.5;      // m/s
 const FLUSH_POINTS = 10;
 const FLUSH_MS = 5000;
-const ALT_WAIT = 1200;         // ms to wait for elevation before appending null
 const SILENT_MS = 20_000;      // no fix callback at all → location likely switched off
 const BG_NOTICE_MS = 15_000;   // background absence worth notifying about
+const RESUME_BREAK_MS = 45_000;// long silence → start a fresh segment on return
+const STALE_FIX_MS = 20_000;   // ignore cached fixes older than this
+const JUMP_CONFIRM_MS = 60_000;// how long to wait for a relocated fix to confirm
 
 const MAX_SPEED = { hike: 7, run: 12.5, bike: 22, drive: 70, travel: 70 }; // m/s
 
@@ -30,6 +32,7 @@ export const rec = {
   permissionDenied: false,
   geoError: null,              // denied | unavailable | timeout | silent | null
   activityGuess: null,         // live classification while trip.activity === 'auto'
+  tripActivity: 'auto',
   filteredCount: 0,
   live: null,
   lastPoint: null,
@@ -48,6 +51,14 @@ let altRef = null;
 let pausedAt = 0;
 let hiddenAt = 0;
 let speedSamples = [];
+let watchEpoch = 0;
+let anchorT = 0;               // last valid fix time, including stationary ones
+let pendingJump = null;        // candidate relocation awaiting a consistent next fix
+let breakOnNextFix = false;    // background silence → split before accepting again
+let forceAccLimit = 0;         // stricter gate for the first fix after a break
+let lastWatchRestart = 0;
+let fixChain = Promise.resolve();
+
 
 function freshLive() {
   return {
@@ -89,6 +100,7 @@ export async function startRecording({ tripId = null, name = '', activity = null
     });
   }
   rec.tripId = trip.id;
+  rec.tripActivity = trip.activity || 'auto';
   rec.status = 'recording';
   rec.startedAt = Date.now();
   rec.live = freshLive();
@@ -96,6 +108,7 @@ export async function startRecording({ tripId = null, name = '', activity = null
   rec.firstFixT = 0; rec.lastFixT = 0;
   altSmooth = null; altRef = null;
   buffer = [];
+  anchorT = 0; pendingJump = null; breakOnNextFix = false; forceAccLimit = 0;
 
   const seg = await store.addSegment(trip.id);
   rec.segmentId = seg.id;
@@ -104,10 +117,39 @@ export async function startRecording({ tripId = null, name = '', activity = null
 
   if (!simulated) startWatch();
   requestWakeLock();
+  armKeepAlive();
   startTick();
   broadcast({ type: 'rec-state', state: 'recording', tripId: trip.id });
   emit('recorder:started', { tripId: trip.id, simulated });
   return true;
+}
+
+function onGeoError(err) {
+  if (rec.status !== 'recording' || rec.simulated) return;
+  if (err.code === 1) {
+    rec.permissionDenied = true;
+    rec.geoError = 'denied';
+    emit('recorder:geoerror', { code: 'denied' });
+    emit('recorder:denied');
+    pauseRecording();
+  } else {
+    // code 2 = OS location off / no source; code 3 = timeout (weak signal)
+    rec.geoError = err.code === 2 ? 'unavailable' : 'timeout';
+    emit('recorder:geoerror', { code: rec.geoError });
+  }
+}
+
+function onGeoPosition(pos) {
+  if (rec.status !== 'recording' || rec.simulated) return;
+  if (rec.geoError && rec.geoError !== 'denied') {
+    rec.geoError = null;
+    emit('recorder:geoerror', { code: null });
+  }
+  handleFix({
+    lat: pos.coords.latitude, lon: pos.coords.longitude,
+    acc: pos.coords.accuracy, alt: pos.coords.altitude, altAcc: pos.coords.altitudeAccuracy,
+    speed: pos.coords.speed, heading: pos.coords.heading, t: pos.timestamp || Date.now()
+  });
 }
 
 function startWatch() {
@@ -119,75 +161,116 @@ function startWatch() {
     return;
   }
   stopWatch();
+  const epoch = watchEpoch;
   watchId = navigator.geolocation.watchPosition(
-    (pos) => {
-      rec.lastFixWall = Date.now();
-      if (rec.geoError && rec.geoError !== 'denied') {
-        rec.geoError = null;
-        emit('recorder:geoerror', { code: null });
-      }
-      handleFix({
-        lat: pos.coords.latitude, lon: pos.coords.longitude,
-        acc: pos.coords.accuracy, alt: pos.coords.altitude, altAcc: pos.coords.altitudeAccuracy,
-        speed: pos.coords.speed, heading: pos.coords.heading, t: pos.timestamp || Date.now()
-      });
-    },
-    (err) => {
-      if (err.code === 1) {
-        rec.permissionDenied = true;
-        rec.geoError = 'denied';
-        emit('recorder:geoerror', { code: 'denied' });
-        emit('recorder:denied');
-        pauseRecording();
-      } else {
-        // code 2 = OS location off / no source; code 3 = timeout (weak signal)
-        rec.geoError = err.code === 2 ? 'unavailable' : 'timeout';
-        emit('recorder:geoerror', { code: rec.geoError });
-      }
-    },
+    (pos) => { if (epoch === watchEpoch) onGeoPosition(pos); },
+    (err) => { if (epoch === watchEpoch) onGeoError(err); },
     watchOptions()
   );
 }
-function stopWatch() {
-  if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+
+/** One immediate high-accuracy fix, mainly to wake iOS after a lock/suspension. */
+function locateNow() {
+  if (rec.simulated || rec.status !== 'recording' || !navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(
+    (pos) => onGeoPosition(pos),
+    () => { /* watchPosition error path owns the UI state */ },
+    { ...watchOptions(), maximumAge: 0 }
+  );
 }
 
-/** Re-arm the watch after a signal error (OS location switched back on, etc.). */
+/** Re-arm after a signal error or a suspended PWA. */
 export function retryGeolocation() {
   if (rec.simulated || rec.status !== 'recording') return;
   rec.geoError = null;
   rec.lastFixWall = Date.now();
+  armResumeBreak();
   startWatch();
+  locateNow();
   emit('recorder:geoerror', { code: null });
 }
 
-/** Central fix pipeline — also fed by the GPX simulator. */
-export async function handleFix(fix) {
-  if (rec.status !== 'recording') return;
-  const now = fix.t || Date.now();
-  rec.lastFixT = now;
-  if (!rec.firstFixT) rec.firstFixT = now;
-  const accLimit = get('accuracyLimit');
-  const tripActivity = (await store.getTrip(rec.tripId))?.activity || get('activity');
-  // auto: stay permissive (travel envelope) until the classifier converges
-  const activity = tripActivity === 'auto' ? (rec.activityGuess || 'travel') : tripActivity;
-  const vmax = MAX_SPEED[activity] ?? 7;
+function stopWatch() {
+  watchEpoch++;
+  if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+}
 
-  // ---- filter: poor accuracy ----
-  if (fix.acc != null && fix.acc > accLimit) {
+function armResumeBreak() {
+  if (rec.simulated || rec.status !== 'recording') return;
+  if (!rec.lastFixT || Date.now() - rec.lastFixT > RESUME_BREAK_MS) {
+    breakOnNextFix = true;
+    forceAccLimit = Math.min(get('accuracyLimit'), 30);
+  }
+}
+
+export function setRecordingActivity(activity) {
+  if (rec.status === 'recording' || rec.status === 'paused') rec.tripActivity = activity;
+}
+
+
+/** Serialized fix pipeline — callbacks can overlap, but fixes must land in order. */
+export function handleFix(fix) {
+  const run = fixChain.then(() => processFix(fix));
+  fixChain = run.catch((e) => console.error('fix failed', e));
+  return run;
+}
+
+async function beginNewSegment(now, info, reasonKey) {
+  await flushBuffer();
+  const seg = await store.addSegment(rec.tripId, now);
+  rec.segmentId = seg.id;
+  rec.live.segCount++;
+  rec.lastPoint = null;
+  anchorT = 0;
+  pendingJump = null;
+  emit('recorder:gap', { ...info, reasonKey });
+  emit('toast', { type: 'warn', msg: t(reasonKey) });
+}
+
+async function processFix(fix) {
+  if (rec.status !== 'recording') return;
+  const arrival = Date.now();
+  const rawT = Number(fix?.t);
+  const now = Number.isFinite(rawT) && rawT > 0 ? rawT : arrival;
+  const lat = Number(fix?.lat), lon = Number(fix?.lon);
+  if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
+
+  // Cached/queued fixes from before a suspension must never rewind the track.
+  if ((rec.lastFixT && now <= rec.lastFixT) || arrival - now > STALE_FIX_MS) {
+    return;
+  }
+
+  rec.lastFixWall = arrival;
+  if (rec.geoError && rec.geoError !== 'denied') {
+    rec.geoError = null;
+    emit('recorder:geoerror', { code: null });
+  }
+
+  const accLimit = forceAccLimit || get('accuracyLimit');
+  if (fix.acc != null && (!isFinite(fix.acc) || fix.acc > accLimit)) {
     rec.filteredCount++;
     emit('recorder:filtered', { reason: 'accuracy', count: rec.filteredCount });
     return;
   }
+  if (!rec.firstFixT) rec.firstFixT = now;
+  rec.lastFixT = now;
+
+  const acc = fix.acc != null && isFinite(fix.acc) ? fix.acc : null;
+  const fixSpeed = fix.speed != null && isFinite(fix.speed) && fix.speed >= 0 ? fix.speed : null;
+  const tripActivity = rec.tripActivity || get('activity');
+  // auto: stay permissive (travel envelope) until the classifier converges
+  const activity = tripActivity === 'auto' ? (rec.activityGuess || 'travel') : tripActivity;
+  const vmax = MAX_SPEED[activity] ?? 7;
 
   let dist = 0, dt = 0, implied = null;
   if (rec.lastPoint) {
-    dist = haversine(rec.lastPoint.lat, rec.lastPoint.lon, fix.lat, fix.lon);
-    dt = now - rec.lastPoint.t;
+    dist = haversine(rec.lastPoint.lat, rec.lastPoint.lon, lat, lon);
+    const refT = anchorT || rec.lastPoint.t;
+    dt = now - refT;
     if (dt > 0) implied = dist / (dt / 1000);
     // feed the auto-activity classifier even with fixes the filters reject
     if (dt > 0 && dt <= 60000) {
-      const s = fix.speed != null && isFinite(fix.speed) && fix.speed >= 0 ? fix.speed : implied;
+      const s = fixSpeed ?? implied;
       if (s != null && s > MOVING_SPEED) {
         speedSamples.push(s);
         if (speedSamples.length > 400) speedSamples.shift();
@@ -200,48 +283,95 @@ export async function handleFix(fix) {
         }
       }
     }
-    // ---- filter: teleport jump ----
-    if (implied != null && implied > vmax && dist > 30) {
+  }
+
+  const jumpFloor = Math.max(10, (acc ?? 15) * 1.2);
+  const impossibleJump = !!rec.lastPoint && implied != null && implied > vmax * 1.4 && dist > jumpFloor;
+
+  let relocated = false;
+  // A long suspension starts a fresh segment instead of bridging the gap.
+  if (breakOnNextFix && rec.lastPoint) {
+    await beginNewSegment(now, { dist: Math.round(dist), dt: Math.round(dt), auto: true }, 'record.bgResumed');
+    breakOnNextFix = false;
+    forceAccLimit = 0;
+    relocated = true;
+    dist = 0; dt = 0; implied = null;
+  } else if (breakOnNextFix) {
+    breakOnNextFix = false;
+    forceAccLimit = 0;
+  }
+
+  if (pendingJump && rec.lastPoint) {
+    const candDt = (now - pendingJump.t) / 1000;
+    const candDist = haversine(pendingJump.lat, pendingJump.lon, lat, lon);
+    const consistent = now > pendingJump.t && now - pendingJump.t <= JUMP_CONFIRM_MS
+      && candDist <= Math.max(70, vmax * candDt * 1.5 + 30);
+    const nearOld = dist <= Math.max(50, ((acc ?? 15) + (rec.lastPoint.acc ?? 15)) * 2)
+      && (implied == null || implied <= vmax * 1.4);
+    if (consistent) {
+      // Two mutually consistent fixes far from the old anchor: relocate honestly
+      // in a new segment instead of dropping every subsequent point forever.
+      await beginNewSegment(now, { dist: Math.round(candDist), dt: Math.round(candDt * 1000), auto: true }, 'record.geoRelocated');
+      relocated = true;
+      forceAccLimit = 0;
+      dist = 0; dt = 0; implied = null;
+    } else if (nearOld) {
+      pendingJump = null;
+    } else {
+      pendingJump = { lat, lon, t: now, acc };
       rec.filteredCount++;
       emit('recorder:filtered', { reason: 'jump', count: rec.filteredCount });
       return;
     }
-    // ---- stationary noise: don't grow the track ----
-    if (dist < NOISE_DIST && (implied == null || implied < MOVING_SPEED)) {
-      if (dt > 0 && dt <= 60000) rec.live.stillMs += dt;
-      rec.live.speed = 0;
+  }
+
+  // ---- filter: unconfirmed teleport jump ----
+  if (!relocated && impossibleJump) {
+    pendingJump = { lat, lon, t: now, acc };
+    rec.filteredCount++;
+    emit('recorder:filtered', { reason: 'jump', count: rec.filteredCount });
+    return;
+  }
+
+  if (rec.lastPoint) {
+    // ---- accuracy-scaled deadband: stop resting fixes from drawing drifts ----
+    const avgAcc = acc != null && rec.lastPoint.acc != null ? (acc + rec.lastPoint.acc) / 2 : (acc ?? rec.lastPoint.acc ?? 15);
+    const deadband = Math.max(4, Math.min(20, avgAcc * 1.2));
+    if (dist < deadband) {
+      if (dt > 0 && dt <= 60000) {
+        if (fixSpeed != null && fixSpeed > MOVING_SPEED) rec.live.movingMs += dt;
+        else rec.live.stillMs += dt;
+      }
+      // Keep the gap clock alive: a long rest is not a GPS outage.
+      anchorT = now;
+      rec.live.speed = fixSpeed != null && fixSpeed > MOVING_SPEED ? fixSpeed : 0;
+      rec.live.acc = acc;
+      rec.live.lat = lat; rec.live.lon = lon;
+      rec.live.heading = fix.heading != null && isFinite(fix.heading) ? fix.heading : null;
       emit('recorder:tick', { live: rec.live });
       return;
     }
     // ---- gap → new segment ----
     if (dt > GAP_TIME || dist > GAP_DIST) {
-      await flushBuffer();
-      const seg = await store.addSegment(rec.tripId, now);
-      rec.segmentId = seg.id;
-      rec.live.segCount++;
-      rec.lastPoint = null;
+      await beginNewSegment(now, { dist: Math.round(dist), dt: Math.round(dt) }, 'record.gapNewSegment');
       dist = 0; dt = 0; implied = null;
-      emit('recorder:gap', { dist, dt });
-      emit('toast', { type: 'warn', msg: t('record.gapNewSegment') });
     }
   }
 
-  // ---- altitude priority chain ----
-  let alt = null, altSrc = null, altPending = false;
-  const altPromise = resolveAltitude(fix.lat, fix.lon, fix.alt, fix.altAcc);
-  const raced = await Promise.race([
-    altPromise,
-    new Promise((res) => setTimeout(() => res({ alt: null, src: null, pending: true }), ALT_WAIT))
-  ]);
-  alt = raced.alt; altSrc = raced.src; altPending = !!raced.pending;
+  const speed = fixSpeed ?? (implied != null && dt <= 60000 ? implied : null);
 
-  const speed = fix.speed != null && isFinite(fix.speed) && fix.speed >= 0
-    ? fix.speed
-    : (implied != null && dt <= 60000 ? implied : null);
+  // GPS altitude is trusted immediately; network/cache lookup fills the point
+  // asynchronously so a slow elevation service never stalls the fix queue.
+  let alt = null, altSrc = null, altPromise = null;
+  if (fix.alt != null && isFinite(fix.alt) && fix.altAcc != null && fix.altAcc <= 30) {
+    alt = fix.alt; altSrc = 'gps';
+  } else {
+    altPromise = resolveAltitude(lat, lon, fix.alt, fix.altAcc);
+  }
 
   const point: any = {
-    lat: fix.lat, lon: fix.lon, t: now,
-    alt, altSrc, acc: fix.acc ?? null,
+    lat, lon, t: now,
+    alt, altSrc, acc,
     speed: speed != null ? Math.round(speed * 100) / 100 : null
   };
 
@@ -253,8 +383,8 @@ export async function handleFix(fix) {
     else L.stillMs += dt;
   }
   L.speed = speed;
-  L.acc = fix.acc ?? null;
-  L.lat = fix.lat; L.lon = fix.lon;
+  L.acc = acc;
+  L.lat = lat; L.lon = lon;
   L.heading = fix.heading != null && isFinite(fix.heading) ? fix.heading : null;
   L.pointCount++;
   if (speed != null && speed > L.maxSpeed && speed < vmax * 1.5) L.maxSpeed = speed;
@@ -277,8 +407,12 @@ export async function handleFix(fix) {
   }
 
   rec.lastPoint = point;
+  anchorT = now;
+  pendingJump = null;
+  forceAccLimit = 0;
+  breakOnNextFix = false;
   buffer.push(point);
-  if (altPending) {
+  if (altPromise) {
     altPromise.then((res) => {
       if (res.alt == null) return;
       point.alt = res.alt; point.altSrc = res.src;
@@ -295,6 +429,7 @@ export async function handleFix(fix) {
 
   emit('recorder:point', { point, live: L });
 }
+
 
 async function patchFlushedAlt(point) {
   try {
@@ -333,10 +468,18 @@ function startTick() {
       rec.live.duration = rec.simulated && rec.firstFixT
         ? rec.lastFixT - rec.firstFixT
         : Date.now() - rec.startedAt;
-      // some WebViews swallow the error callback when OS location is off
-      if (!rec.simulated && !rec.geoError && Date.now() - (rec.lastFixWall || rec.startedAt) > SILENT_MS) {
-        rec.geoError = 'silent';
-        emit('recorder:geoerror', { code: 'silent' });
+      // Some WebViews swallow the error callback when OS location is off, and
+      // iOS can silently retire a watch after a lock. Re-arm periodically.
+      if (!rec.simulated && !rec.permissionDenied && Date.now() - (rec.lastFixWall || rec.startedAt) > SILENT_MS) {
+        if (!rec.geoError) {
+          rec.geoError = 'silent';
+          emit('recorder:geoerror', { code: 'silent' });
+        }
+        if (Date.now() - lastWatchRestart > 60_000) {
+          lastWatchRestart = Date.now();
+          startWatch();
+          locateNow();
+        }
       }
       emit('recorder:tick', { live: rec.live });
     }
@@ -350,15 +493,19 @@ export async function pauseRecording() {
   stopWatch();
   rec.status = 'paused';
   pausedAt = Date.now();
+  pendingJump = null; breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
   await store.updateTrip(rec.tripId, { status: 'paused' });
   releaseWakeLock();
+  disarmKeepAlive();
   broadcast({ type: 'rec-state', state: 'paused', tripId: rec.tripId });
   emit('recorder:paused', { tripId: rec.tripId });
 }
 
 export async function resumeRecording() {
   if (rec.status !== 'paused' || !rec.tripId) return false;
+  armKeepAlive();
   if (!rec.simulated && !isHolding() && !(await acquireRecorderLock())) {
+    disarmKeepAlive();
     emit('recorder:busy');
     return false;
   }
@@ -373,9 +520,11 @@ export async function resumeRecording() {
   rec.permissionDenied = false;
   rec.geoError = null;
   rec.lastFixWall = Date.now();
+  pendingJump = null; breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
   await store.updateTrip(rec.tripId, { status: 'recording' });
   if (!rec.simulated) startWatch();
   requestWakeLock();
+  armKeepAlive();
   startTick();
   broadcast({ type: 'rec-state', state: 'recording', tripId: rec.tripId });
   emit('recorder:resumed', { tripId: rec.tripId });
@@ -387,6 +536,7 @@ export async function stopRecording() {
   await flushBuffer();
   stopWatch();
   stopTick();
+  pendingJump = null; breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
   // pause/resume without fixes leaves empty segments — prune them at stop
   const full = await store.loadTripFull(rec.tripId);
   for (const s of full.segments) if (!s.points.length) await store.deleteSegment(s.id);
@@ -399,11 +549,12 @@ export async function stopRecording() {
     await store.updateTrip(rec.tripId, finalActivity ? { status: 'finished', activity: finalActivity } : { status: 'finished' });
   }
   releaseWakeLock();
+  disarmKeepAlive();
   releaseRecorderLock();
   broadcast({ type: 'rec-state', state: 'finished', tripId: rec.tripId });
   emit('recorder:stopped', { tripId: rec.tripId });
   const id = rec.tripId;
-  rec.tripId = null; rec.segmentId = null; rec.live = null; rec.lastPoint = null;
+  rec.tripId = null; rec.segmentId = null; rec.live = null; rec.lastPoint = null; rec.tripActivity = 'auto';
   return id;
 }
 
@@ -416,6 +567,7 @@ export async function continueTrip(tripId) {
   rec.status = 'paused';
   rec.simulated = false;
   rec.activityGuess = null;
+  rec.tripActivity = trip.activity || 'auto';
   speedSamples = [];
   rec.live = freshLive();
   // rebuild live counters from stored data
@@ -429,7 +581,7 @@ export async function continueTrip(tripId) {
   });
   const lastSeg = full.segments[full.segments.length - 1];
   const lastPt = lastSeg?.points[lastSeg.points.length - 1];
-  if (lastPt) { rec.lastPoint = lastPt; altSmooth = lastPt.alt; altRef = lastPt.alt; }
+  if (lastPt) { rec.lastPoint = lastPt; rec.lastFixT = lastPt.t || 0; altSmooth = lastPt.alt; altRef = lastPt.alt; }
   return resumeRecording();
 }
 
@@ -456,8 +608,19 @@ document.addEventListener('visibilitychange', () => {
     hiddenAt = Date.now();
     flushBuffer();
   } else if (hiddenAt) {
-    const gapMs = Date.now() - hiddenAt;
+    const now = Date.now();
+    const gapMs = now - hiddenAt;
+    const silentMs = now - Math.max(hiddenAt, rec.lastFixT || 0);
     hiddenAt = 0;
-    if (gapMs > BG_NOTICE_MS) emit('recorder:background', { gapMs });
+    if (rec.status === 'recording' && !rec.simulated) {
+      // iOS often retires the watch silently while locked; rebuild it and ask
+      // for one fresh high-accuracy fix immediately.
+      armResumeBreak();
+      startWatch();
+      locateNow();
+    }
+    if (gapMs > BG_NOTICE_MS) {
+      emit('recorder:background', { gapMs, silentMs, autoBreak: breakOnNextFix });
+    }
   }
 });

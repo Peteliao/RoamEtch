@@ -586,6 +586,13 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   touch-action: none; overscroll-behavior: none; user-select: none; -webkit-user-select: none;
 }
 #oled-dash.active { display: flex; }
+#oled-dash .od-top, #oled-dash .od-grid, #oled-dash .od-bottom { transition: opacity 0.45s ease; }
+#oled-dash.pocket .od-top, #oled-dash.pocket .od-grid, #oled-dash.pocket .od-bottom { opacity: 0; }
+#oled-dash.pocket::after {
+  content: ''; position: absolute; left: 50%; bottom: calc(10px + var(--safe-b));
+  width: 4px; height: 4px; margin-left: -2px; border-radius: 50%;
+  background: #1c1c1c;
+}
 #oled-dash .od-top { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #888; }
 #oled-dash .ps-mode { display: inline-flex; align-items: center; gap: 5px; color: #9a9a9a; font-size: 12px; }
 #oled-dash .od-grid { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 14px; align-content: center; }

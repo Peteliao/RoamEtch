@@ -24,6 +24,7 @@ function loadCache(): Record<string, Entry> {
 
 let cache = loadCache();
 let lastRequestAt = 0;
+const inflight = new Map<string, Promise<string>>();
 
 function persist() {
   try {
@@ -98,29 +99,39 @@ async function reverseOne(lat: number, lon: number, signal?: AbortSignal) {
   const hit = cache[key];
   if (hit && Date.now() - hit.ts < (hit.name ? CACHE_TTL : EMPTY_TTL)) return hit.name;
   if (!navigator.onLine) return '';
+  const running = inflight.get(key);
+  if (running) return running;
 
-  const wait = Math.max(0, PHOTON_GAP - (Date.now() - lastRequestAt));
-  if (wait) await new Promise((r) => setTimeout(r, wait));
-  lastRequestAt = Date.now();
-  const photon = await fetchJson(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`, signal);
-  let name = photonLabel(photon?.features?.[0]?.properties);
-
-  if (!name && !signal?.aborted) {
-    const gap = Math.max(0, NOMINATIM_GAP - (Date.now() - lastRequestAt));
-    if (gap) await new Promise((r) => setTimeout(r, gap));
+  const task = (async () => {
+    const wait = Math.max(0, PHOTON_GAP - (Date.now() - lastRequestAt));
+    if (wait) await new Promise((r) => setTimeout(r, wait));
     lastRequestAt = Date.now();
-    const lang = currentLang() === 'zh' ? 'zh-CN' : 'en';
-    const nomi = await fetchJson(
-      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=16&addressdetails=1&accept-language=${lang}`,
-      signal
-    );
-    name = nominatimLabel(nomi);
-  }
+    const photon = await fetchJson(`https://photon.komoot.io/reverse?lat=${lat}&lon=${lon}`, signal);
+    let name = photonLabel(photon?.features?.[0]?.properties);
 
-  if (signal?.aborted) return '';
-  cache[key] = { name, ts: Date.now() };
-  persist();
-  return name;
+    if (!name && !signal?.aborted) {
+      const gap = Math.max(0, NOMINATIM_GAP - (Date.now() - lastRequestAt));
+      if (gap) await new Promise((r) => setTimeout(r, gap));
+      lastRequestAt = Date.now();
+      const lang = currentLang() === 'zh' ? 'zh-CN' : 'en';
+      const nomi = await fetchJson(
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=16&addressdetails=1&accept-language=${lang}`,
+        signal
+      );
+      name = nominatimLabel(nomi);
+    }
+
+    if (signal?.aborted) return '';
+    cache[key] = { name, ts: Date.now() };
+    persist();
+    return name;
+  })();
+  inflight.set(key, task);
+  try {
+    return await task;
+  } finally {
+    inflight.delete(key);
+  }
 }
 
 function pointsAtDistances(points: any[], cum: number[], total: number, count: number) {

@@ -2,7 +2,8 @@
 import { t, currentLang } from '../core/i18n';
 import { get, set } from '../core/settings';
 import { on, emit } from '../core/events';
-import { rec, startRecording, pauseRecording, resumeRecording, stopRecording, continueTrip, findRecoverableTrip, createManualTrip, retryGeolocation } from '../core/recorder';
+import { rec, startRecording, pauseRecording, resumeRecording, stopRecording, continueTrip, findRecoverableTrip, createManualTrip, retryGeolocation, setRecordingActivity } from '../core/recorder';
+import { armKeepAlive, disarmKeepAlive, isKeepAliveActive } from '../core/keepalive';
 import { regionState } from '../core/region';
 import { availableBasemaps } from '../core/providers';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine, bearing } from '../core/geo';
@@ -295,7 +296,7 @@ export function createRecordView() {
     el('span', { class: 'la-chev' }, icon('chevron', 13)));
   liveActSel.onchange = async () => {
     liveActivity = liveActSel.value;
-    if (rec.tripId) await updateTrip(rec.tripId, { activity: liveActivity });
+    if (rec.tripId) { await updateTrip(rec.tripId, { activity: liveActivity }); setRecordingActivity(liveActivity); }
     if (liveActivity !== 'auto') rec.activityGuess = null;
     renderAutoTag();
   };
@@ -500,7 +501,7 @@ export function createRecordView() {
       actRow.append(liveActWrap, autoTag);
       btnRow.append(
         el('button', { class: 'rec-btn node', onclick: openRecWaypoint }, icon('pin', 20), t('record.node')),
-        el('button', { class: 'rec-btn resume', onclick: () => resumeRecording() }, icon('play', 22), t('record.resume')),
+        el('button', { class: 'rec-btn resume', onclick: () => { armKeepAlive(); resumeRecording(); } }, icon('play', 22), t('record.resume')),
         el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop'))
       );
     }
@@ -533,18 +534,22 @@ export function createRecordView() {
   }
 
   async function onStart() {
+    // Keep iOS media playback armed while the tap gesture is still valid.
+    armKeepAlive();
     if (navigator.permissions?.query) {
       try {
         const st = await navigator.permissions.query({ name: 'geolocation' });
         if (st.state === 'denied') {
           rec.permissionDenied = true;
+          disarmKeepAlive();
           renderBanners();
           toast(t('record.permissionDenied'), 'warn', 5000);
           return;
         }
       } catch { /* query unsupported — watchPosition error path still covers it */ }
     }
-    await startRecording({ activity: activitySel.value });
+    const ok = await startRecording({ activity: activitySel.value });
+    if (!ok) disarmKeepAlive();
   }
   async function onManual() {
     const trip = await createManualTrip();
@@ -692,9 +697,24 @@ export function createRecordView() {
 
   const ring = psBottom.querySelector('.ps-ring') as HTMLElement;
   const ringFg = psBottom.querySelector('.fgc') as SVGCircleElement;
+  const psSub = psBottom.querySelector('.ps-sub') as HTMLElement;
+  function updatePsSub() {
+    psSub.textContent = isKeepAliveActive()
+      ? `${t('record.lockSub')} · ${t('record.keepAliveOn')}`
+      : t('record.lockSub');
+  }
   const RING_C = 2 * Math.PI * 46;
   let holdStart = 0;
   let holdRaf = 0;
+  let pocketTimer = 0;
+  function wakePocket() {
+    if (!psActive) return;
+    ps.classList.remove('pocket');
+    clearTimeout(pocketTimer);
+    pocketTimer = window.setTimeout(() => {
+      if (psActive && document.visibilityState === 'visible') ps.classList.add('pocket');
+    }, 15_000);
+  }
   function holdLoop(ts) {
     if (!holdStart) return;
     const p = Math.min(1, (ts - holdStart) / 1500);
@@ -718,7 +738,7 @@ export function createRecordView() {
   ring.addEventListener('pointerup', resetHold);
   ring.addEventListener('pointercancel', resetHold);
   ring.addEventListener('pointerleave', resetHold);
-  ps.addEventListener('pointerdown', (e) => e.preventDefault());
+  ps.addEventListener('pointerdown', (e) => { wakePocket(); e.preventDefault(); });
   ps.addEventListener('contextmenu', (e) => e.preventDefault());
 
   function renderOled(L) {
@@ -757,8 +777,12 @@ export function createRecordView() {
       ps.classList.add('active');
       renderPsTop();
       renderOled(rec.live);
+      updatePsSub();
+      setTimeout(() => { if (psActive) updatePsSub(); }, 1200);
+      wakePocket();
     } else {
-      ps.classList.remove('active');
+      ps.classList.remove('active', 'pocket');
+      clearTimeout(pocketTimer);
       mapContainer.style.display = '';
       buildMap();
       const r = ps._restore;
@@ -949,6 +973,7 @@ export function createRecordView() {
       document.removeEventListener('keydown', onKeydown);
       document.removeEventListener('visibilitychange', onVisibility);
       offBroadcast();
+      clearTimeout(pocketTimer);
       map?.destroy();
       map = null;
       ps.remove();

@@ -12,6 +12,7 @@ import * as recorderCore from './core/recorder';
 import * as rewalkCore from './core/rewalk';
 import * as batchCore from './core/batch';
 import * as coordsCore from './core/coords';
+import * as keepaliveCore from './core/keepalive';
 import { parseShareFragment } from './core/shareLink';
 import { setActiveTrip } from './ui/state';
 import { createShell } from './ui/shell';
@@ -37,7 +38,7 @@ async function boot() {
   document.getElementById('boot-splash')?.remove();
   diag('boot', 'app ready', { lang: navigator.language });
   // debug handle for diagnostics & acceptance testing (spec: debuggability)
-  window.__lt = { recorder: recorderCore, store: storeCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore };
+  window.__lt = { recorder: recorderCore, store: storeCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, keepalive: keepaliveCore };
 
   // shared-link import (#t=…) — fragment never reaches a server
   const shared = parseShareFragment(location.hash);

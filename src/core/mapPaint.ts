@@ -10,6 +10,28 @@ import { canvasPalette } from './palette';
 const TILE = 256;
 const MAX_LAT = 85.05112878;
 const tileCache = new Map(); // url -> Promise<HTMLImageElement|null>
+const mapCache = new Map();  // view key -> prepared raster background (LRU, 4)
+const MAP_CACHE_MAX = 4;
+
+function cacheGet(key) {
+  const hit = mapCache.get(key);
+  if (!hit) return null;
+  mapCache.delete(key);
+  mapCache.set(key, hit);
+  return hit;
+}
+
+function cachePut(key, entry) {
+  mapCache.set(key, entry);
+  while (mapCache.size > MAP_CACHE_MAX) mapCache.delete(mapCache.keys().next().value);
+}
+
+function cachedMap(entry, fit, segments, waypoints) {
+  return {
+    bg: entry.bg, fit, segments, waypoints,
+    vector: entry.vector, label: entry.label, darkBg: entry.darkBg
+  };
+}
 
 const ux = (lon) => (lon + 180) / 360;
 const uy = (lat) => {
@@ -122,15 +144,26 @@ export async function prepareMap({
   bg.width = w; bg.height = h;
   const ctx = bg.getContext('2d');
   const label = provider?.id || 'vector';
+  const P = canvasPalette();
+  const vectorKey = `vector|${w}x${h}|${P.vectorBg}|${P.grid}`;
 
   if (!provider || !fit) {
+    const hit = cacheGet(vectorKey);
+    if (hit) { onProgress?.(1); return cachedMap(hit, fit, dispSegs, dispWps); }
     paintVectorBackground(ctx, w, h);
-    return mapResult(bg, fit, dispSegs, dispWps, true, 'vector');
+    const result = mapResult(bg, fit, dispSegs, dispWps, true, 'vector');
+    cachePut(vectorKey, result);
+    return result;
   }
 
   const key = provider.requiresKey ? get(provider.requiresKey) : '';
   const baseUrls = expandTiles(provider, key);
   const overlayUrls = provider.overlay ? expandTiles({ tiles: provider.overlay, subdomains: provider.subdomains }, key) : null;
+  const rasterKey = [label, `${w}x${h}`, fit.z, fit.cx.toFixed(6), fit.cy.toFixed(6), P.panel,
+    baseUrls.join('|'), overlayUrls?.join('|') || ''].join('~');
+  const cached = cacheGet(rasterKey);
+  if (cached) { onProgress?.(1); return cachedMap(cached, fit, dispSegs, dispWps); }
+
   const n = 2 ** fit.z;
   const ox = fit.cx * fit.world - w / 2;
   const oy = fit.cy * fit.world - h / 2;
@@ -158,18 +191,20 @@ export async function prepareMap({
       onProgress?.(done / jobs.length);
     }
   };
-  await Promise.all(Array.from({ length: 6 }, worker));
+  await Promise.all(Array.from({ length: 10 }, worker));
 
   if (failed) {
     paintVectorBackground(ctx, w, h);
     return mapResult(bg, fit, dispSegs, dispWps, true, 'vector');
   }
-  ctx.fillStyle = canvasPalette().panel;
+  ctx.fillStyle = P.panel;
   ctx.fillRect(0, 0, w, h);
   for (const layer of [0, 1]) {
     for (const j of jobs) if (j.layer === layer) ctx.drawImage(j.img, j.px, j.py);
   }
-  return mapResult(bg, fit, dispSegs, dispWps, false, label);
+  const result = mapResult(bg, fit, dispSegs, dispWps, false, label);
+  cachePut(rasterKey, result);
+  return result;
 }
 
 // Along-path gradient (teal → sky → indigo) with layered soft glow and a
