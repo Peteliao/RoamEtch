@@ -10,6 +10,7 @@ import { triggerDownload } from '../core/gpx';
 import { exportDiagLog } from '../core/diag';
 import { startPlayback, stopPlayback, isPlaying } from '../core/simulator';
 import { setLanguage, currentLang } from '../core/i18n';
+import { openInstallGuide, installSettingsInfo } from './install';
 import { el, icon, toast, confirmModal, filePicker } from './helpers';
 
 export function createSettingsView(navigate) {
@@ -54,8 +55,8 @@ export function createSettingsView(navigate) {
     return el('div', { class: 'setting-row' },
       el('div', { class: 'txt' }, el('div', { class: 't' }, label + (unit ? ` (${unit})` : '')), desc ? el('div', { class: 'd' }, desc) : null), inp);
   }
-  function textRow(label, hint, key, placeholder = '') {
-    const inp = el('input', { type: 'text', value: get(key) || '', placeholder });
+  function textRow(label, hint, key, placeholder = '', type = 'text') {
+    const inp = el('input', { type, value: get(key) || '', placeholder });
     inp.onchange = () => { set(key, inp.value.trim()); toast(t('settings.keySaved'), 'ok', 1800); };
     return el('div', { class: 'field' }, el('label', {}, label), inp, hint ? el('div', { class: 'hint' }, hint) : null);
   }
@@ -139,6 +140,37 @@ export function createSettingsView(navigate) {
     textRow(t('settings.customTileName'), '', 'customTileName'),
     textRow(t('settings.customTile'), t('settings.customTileHint'), 'customTileUrl', 'https://…/{z}/{x}/{y}.png'),
     textRow(t('settings.elevationEndpoint'), t('settings.elevationEndpointHint'), 'elevationEndpoint', 'https://api.open-meteo.com/v1/elevation')
+  );
+
+  // ---- live meetup relay (blind forwarding only; key stays in the fragment) ----
+  let meetRelayMode = get('meetRelayMode') || 'mqtt';
+  const meetRelayFields = el('div', {});
+  function renderMeetRelayFields() {
+    meetRelayFields.innerHTML = '';
+    if (meetRelayMode === 'ws') {
+      meetRelayFields.append(
+        textRow(t('settings.meetWsUrl'), t('settings.meetWsHint'), 'meetWsUrl', 'wss://example.workers.dev/room/{room}')
+      );
+    } else {
+      meetRelayFields.append(
+        textRow(t('settings.meetBroker'), t('settings.meetBrokerHint'), 'meetMqttUrl', 'wss://broker.emqx.io:8084/mqtt'),
+        textRow(t('settings.meetPrefix'), t('settings.meetPrefixHint'), 'meetMqttPrefix', 'trackmint/v1/meet')
+      );
+    }
+  }
+  renderMeetRelayFields();
+  const meetCard = card('meet', t('settings.meetGroup'),
+    el('div', { class: 'small muted', style: { margin: '-2px 0 10px' } }, t('settings.meetChannelNote')),
+    segRow(t('settings.meetChannel'), [
+      ['mqtt', t('settings.meetMqtt')], ['ws', t('settings.meetWs')]
+    ], meetRelayMode, (v) => { meetRelayMode = v; renderMeetRelayFields(); }, t('settings.meetSettingsNote')),
+    textRow(t('settings.meetNick'), t('settings.meetNickHint'), 'meetName', t('meet.namePlaceholder')),
+    meetRelayFields,
+    el('div', { class: 'settings-subhead' }, icon('globe', 15), t('settings.meetIce')),
+    textRow(t('settings.meetStun'), '', 'meetStun', 'stun:stun.cloudflare.com:3478'),
+    textRow(t('settings.meetTurn'), '', 'meetTurnUrl', 'turn:turn.example.com:3478'),
+    textRow(t('settings.meetTurnUser'), '', 'meetTurnUser'),
+    textRow(t('settings.meetTurnPass'), t('settings.meetIceHint'), 'meetTurnPass', '', 'password')
   );
 
   // ---- debug ----
@@ -256,6 +288,16 @@ export function createSettingsView(navigate) {
     el('div', { class: 'sep' }),
     dangerZone);
 
+  // ---- install ----
+  const installInfo = installSettingsInfo();
+  const installBtn = installInfo.installed
+    ? el('button', { class: 'btn sm', disabled: true }, icon('check', 14), t('settings.installDone'))
+    : el('button', { class: 'btn sm primary', onclick: () => openInstallGuide() }, icon('download', 14), t('settings.installAction'));
+  const installCard = card('download', t('settings.installTitle'),
+    el('div', { class: 'small muted', style: { marginBottom: '10px' } }, t('settings.installDesc')),
+    installBtn
+  );
+
   // ---- about ----
   const aboutCard = card('info', t('settings.about'),
     el('div', { class: 'small muted' }, t('settings.aboutText')),
@@ -267,7 +309,9 @@ export function createSettingsView(navigate) {
     section(t('settings.recordGroup')), recCard,
     section(t('settings.privacyGroup')), privacyCard,
     section(t('settings.mapGroup')), regionCard, advCard,
+    section(t('settings.meetGroup')), meetCard,
     section(t('settings.dataGroup')), dataCard,
+    section(t('settings.installGroup')), installCard,
     section(t('settings.debugGroup')), debugCard,
     section(t('settings.aboutGroup')), aboutCard
   );

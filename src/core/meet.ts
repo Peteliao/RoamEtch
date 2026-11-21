@@ -1,0 +1,727 @@
+// Live meetup session: ephemeral room, encrypted presence/location exchange,
+// peer staleness, host handover hints, meetup routing and 2-hour self-destruct.
+import { get, set } from './settings';
+import { emit } from './events';
+import { t } from './i18n';
+import { haversine, bearing } from './geo';
+import { deriveMeetRoom, encryptMeetPacket, decryptMeetPacket, generateMeetCode, meetLinkFor, randomMeetId } from './meetLink';
+import { createMeetRelay } from './meetRelay';
+import { routeOverRoads } from './gapRepair';
+
+const STALE_MS = 45_000;
+const REMOVE_MS = 10 * 60_000;
+const HEARTBEAT_MS = 12_000;
+const MAX_EXPIRY_MIN = 480;
+const PEER_COLORS = ['#5aa7f0', '#f5b942', '#f26d6d', '#b07cf7', '#f28ac6', '#7ed957', '#ff9e5e', '#45d1c8'];
+
+type MeetSession = any;
+let session: MeetSession = null;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function cleanName(value: any) {
+  return String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 20);
+}
+
+function fallbackName() {
+  return t('meet.guestName', { n: Math.floor(10 + Math.random() * 90) });
+}
+
+function resolveName(value: any) {
+  return cleanName(value) || cleanName(get('meetName')) || fallbackName();
+}
+
+function colorFor(id: string) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return PEER_COLORS[h % PEER_COLORS.length];
+}
+
+function clampExpiry(min: any) {
+  const n = Number(min);
+  return Math.min(MAX_EXPIRY_MIN, Math.max(15, isFinite(n) ? n : 120));
+}
+
+function expiryMinutes() {
+  return clampExpiry(get('meetExpiryMin'));
+}
+
+function setMeetFragment(code: string) {
+  if (typeof location === 'undefined') return;
+  const hash = `#meet=${code}`;
+  if (location.hash !== hash) history.replaceState(null, '', location.pathname + location.search + hash);
+}
+
+function clearMeetFragment() {
+  if (typeof location !== 'undefined' && /[#&]meet=/.test(location.hash)) {
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+}
+
+function relayStatus(s: MeetSession) {
+  if (s.relayState === 'connected') return 'live';
+  if (s.relayState === 'error') return 'error';
+  if (s.relayState === 'reconnecting') return 'reconnecting';
+  return 'connecting';
+}
+
+function peerView(p: any, self: any, hostId: string | null) {
+  const distance = self.hasFix && p.lat != null && p.lon != null
+    ? haversine(self.lat, self.lon, p.lat, p.lon)
+    : null;
+  let bearingDeg: number | null = null;
+  let clock: number | null = null;
+  if (self.hasFix && p.lat != null && p.lon != null) {
+    bearingDeg = bearing(self.lat, self.lon, p.lat, p.lon);
+    if (self.heading != null && isFinite(self.heading)) {
+      const rel = ((bearingDeg - self.heading) % 360 + 360) % 360;
+      clock = Math.round(rel / 30) % 12 || 12;
+    }
+  }
+  const age = Math.max(0, Date.now() - p.lastSeen);
+  return {
+    id: p.id,
+    name: p.name,
+    color: p.color,
+    lat: p.lat,
+    lon: p.lon,
+    acc: p.acc,
+    heading: p.heading,
+    speed: p.speed,
+    distance,
+    bearing: bearingDeg,
+    clock,
+    sharing: p.sharing !== false,
+    isHost: p.id === hostId,
+    lastSeen: p.lastSeen,
+    age,
+    stale: age > STALE_MS
+  };
+}
+
+export function getMeetSnapshot() {
+  const s = session;
+  if (!s) {
+    return {
+      active: false,
+      status: 'idle',
+      code: '',
+      codeDisplay: '',
+      link: '',
+      peers: [],
+      self: null,
+      route: null,
+      expiresAt: 0,
+      now: Date.now()
+    };
+  }
+  const peers = [...s.peers.values()].map((p) => peerView(p, s.self, s.hostId));
+  peers.sort((a, b) => (a.stale === b.stale ? (a.distance ?? Infinity) - (b.distance ?? Infinity) : a.stale ? 1 : -1));
+  return {
+    active: true,
+    status: relayStatus(s),
+    relayState: s.relayState,
+    relayError: s.relayError,
+    code: s.code,
+    codeDisplay: s.code ? s.code.replace(/(.{4})(?=.)/g, '$1-') : '',
+    link: s.link,
+    roomId: s.roomId,
+    self: {
+      id: s.self.id,
+      name: s.self.name,
+      lat: s.self.lat,
+      lon: s.self.lon,
+      acc: s.self.acc,
+      heading: s.self.heading,
+      speed: s.self.speed,
+      hasFix: s.self.hasFix,
+      fixAt: s.self.fixAt,
+      ts: s.self.ts
+    },
+    peers,
+    hostId: s.hostId,
+    isHost: s.hostId === s.self.id,
+    sharing: s.sharing,
+    geoError: s.geoError,
+    startedAt: s.startedAt,
+    expiresAt: s.expiresAt,
+    now: Date.now(),
+    route: s.route ? {
+      peerId: s.route.peerId,
+      coords: s.route.coords,
+      distance: s.route.distance,
+      provider: s.route.provider,
+      loading: false
+    } : s.routeLoading ? { loading: true, peerId: s.routeLoading } : null
+  };
+}
+
+function emitState() {
+  emit('meet:state', getMeetSnapshot());
+}
+
+function emitSelf() {
+  emit('meet:self', getMeetSnapshot());
+}
+
+function currentSession() {
+  return session;
+}
+
+function startWatch() {
+  const s = session;
+  if (!s) return;
+  stopWatch();
+  if (!navigator.geolocation) {
+    s.geoError = 'unavailable';
+    emitState();
+    return;
+  }
+  try {
+    s.watchId = navigator.geolocation.watchPosition(
+      (pos) => applyFix(pos.coords, pos.timestamp),
+      (err) => {
+        if (session !== s) return;
+        s.geoError = err?.code === 1 ? 'denied' : err?.code === 2 ? 'unavailable' : 'timeout';
+        emitState();
+      },
+      { enableHighAccuracy: true, maximumAge: 2500, timeout: 20000 }
+    );
+  } catch {
+    s.geoError = 'unavailable';
+    emitState();
+  }
+}
+
+function stopWatch() {
+  if (session?.watchId != null) {
+    try { navigator.geolocation?.clearWatch(session.watchId); } catch { /* ignore */ }
+    session.watchId = null;
+  }
+}
+
+function applyFix(coords: any, timestamp?: number) {
+  const s = session;
+  if (!s || !coords) return;
+  const hadFix = s.self.hasFix;
+  const hadGeoError = !!s.geoError;
+  const lat = Number(coords.latitude);
+  const lon = Number(coords.longitude);
+  if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
+  const heading = coords.heading != null && isFinite(coords.heading) ? Number(coords.heading) : null;
+  const speed = coords.speed != null && isFinite(coords.speed) ? Number(coords.speed) : null;
+  const acc = coords.accuracy != null && isFinite(coords.accuracy) ? Number(coords.accuracy) : null;
+  const now = Date.now();
+  s.self = {
+    ...s.self,
+    lat, lon, acc, heading, speed,
+    hasFix: true,
+    fixAt: now,
+    ts: Number(timestamp) || now
+  };
+  s.geoError = null;
+  s.lastFix = { lat, lon, at: now };
+  emitSelf();
+  if (!hadFix || hadGeoError) emitState();
+  maybePublishFix(lat, lon, now);
+}
+
+export function injectMeetFix(fix: any) {
+  if (!session) return false;
+  applyFix({
+    latitude: fix.lat,
+    longitude: fix.lon,
+    accuracy: fix.acc ?? 8,
+    heading: fix.heading ?? null,
+    speed: fix.speed ?? null
+  }, fix.ts);
+  return true;
+}
+
+function maybePublishFix(lat: number, lon: number, now: number) {
+  const s = session;
+  if (!s || !s.sharing) return;
+  const moved = s.lastPublish
+    ? haversine(s.lastPublish.lat, s.lastPublish.lon, lat, lon)
+    : Infinity;
+  if (!s.lastPublish || now - s.lastPublish.at >= 5000 || moved >= 8) {
+    s.lastPublish = { lat, lon, at: now };
+    publishLoc();
+  }
+}
+
+function startRelay() {
+  const s = session;
+  if (!s) return;
+  const relayGen = ++s.relayGen;
+  s.relayState = 'connecting';
+  s.relayError = null;
+  const relay = createMeetRelay(s.roomId, {
+    onMessage: (text) => {
+      if (session !== s || s.relayGen !== relayGen) return;
+      handleIncoming(text);
+    },
+    onState: (state, detail) => {
+      if (session !== s || s.relayGen !== relayGen) return;
+      s.relayState = state;
+      if (state === 'error') {
+        s.relayError = detail?.reason || 'relay';
+      } else if (state === 'connected') {
+        s.relayError = null;
+        publishHi();
+        sendPresence();
+      }
+      emitState();
+    }
+  });
+  s.relay = relay;
+}
+
+function publishPacket(body: any) {
+  const s = session;
+  if (!s) return Promise.resolve(false);
+  const epoch = s.epoch;
+  const job = s.sendChain.then(async () => {
+    if (session !== s || s.epoch !== epoch || !s.relay) return false;
+    try {
+      const text = await encryptMeetPacket({ v: 1, ...body }, s.room);
+      return s.relay.send(text);
+    } catch {
+      return false;
+    }
+  }).catch(() => false);
+  s.sendChain = job;
+  return job;
+}
+
+function hiPacket() {
+  const s = session;
+  const body: any = {
+    v: 1, k: 'hi', id: s.self.id, name: s.self.name,
+    c: s.self.color, hostId: s.hostId || undefined, ts: Date.now()
+  };
+  if (s.hostId === s.self.id) body.exp = s.expiresAt;
+  return body;
+}
+
+function publishHi() {
+  return publishPacket(hiPacket());
+}
+
+function publishLoc() {
+  const s = session;
+  if (!s || !s.self.hasFix) return Promise.resolve(false);
+  return publishPacket({
+    v: 1, k: 'loc', id: s.self.id, name: s.self.name, c: s.self.color,
+    la: s.self.lat, lo: s.self.lon, ac: s.self.acc,
+    hd: s.self.heading, sp: s.self.speed, sh: s.sharing,
+    ts: Date.now()
+  });
+}
+
+function publishState() {
+  const s = session;
+  if (!s) return Promise.resolve(false);
+  return publishPacket({
+    v: 1, k: 'st', id: s.self.id, name: s.self.name,
+    c: s.self.color, sh: s.sharing, ts: Date.now()
+  });
+}
+
+function sendPresence() {
+  const s = session;
+  if (!s) return;
+  publishHi();
+  if (s.sharing && s.self.hasFix) publishLoc();
+  else publishState();
+}
+
+function touchPeer(msg: any, now: number) {
+  const s = session;
+  if (!s) return null;
+  const id = String(msg.id || '').slice(0, 40);
+  if (!id || id === s.self.id) return null;
+  let p = s.peers.get(id);
+  const isNew = !p;
+  if (!p) {
+    p = {
+      id,
+      name: cleanName(msg.name) || t('meet.unnamedPeer'),
+      color: /^#[0-9a-f]{6}$/i.test(String(msg.c)) ? msg.c : colorFor(id),
+      lat: null, lon: null, acc: null, heading: null, speed: null,
+      sharing: true, ts: 0, lastSeen: now, hostId: null
+    };
+    s.peers.set(id, p);
+  }
+  if (msg.name) p.name = cleanName(msg.name) || p.name;
+  if (/^#[0-9a-f]{6}$/i.test(String(msg.c))) p.color = msg.c;
+  p.lastSeen = now;
+  return { peer: p, isNew };
+}
+
+async function handleIncoming(text: string) {
+  const s = session;
+  if (!s) return;
+  const msg = await decryptMeetPacket(text, s.room);
+  if (session !== s || !msg || msg.v !== 1 || typeof msg.k !== 'string') return;
+  const now = Date.now();
+  const ts = Number(msg.ts);
+  if (!isFinite(ts) || Math.abs(now - ts) > 5 * 60_000) return;
+  if (String(msg.id || '') === s.self.id) return;
+
+  if (msg.k === 'hi') {
+    const touched = touchPeer(msg, now);
+    if (!touched) return;
+    if (msg.id === msg.hostId) {
+      if (!s.hostId || s.hostId === s.self.id) {
+        if (!s.hostId) s.hostId = msg.id;
+      } else if (s.hostId === msg.id) {
+        // already known
+      }
+      touched.peer.hostId = msg.id;
+      if (msg.id === s.hostId && isFinite(Number(msg.exp))) {
+        const exp = Number(msg.exp);
+        if (exp > now && exp <= now + MAX_EXPIRY_MIN * 60_000) s.expiresAt = exp;
+      }
+    }
+    if (s.hostId === s.self.id) touched.peer.hostId = s.self.id;
+    if (touched.isNew) emit('meet:peerjoined', { name: touched.peer.name, id: touched.peer.id });
+    if (touched.isNew && s.hostId === s.self.id) publishHi();
+    emitState();
+    return;
+  }
+
+  if (msg.k === 'loc') {
+    const lat = Number(msg.la);
+    const lon = Number(msg.lo);
+    if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
+    const touched = touchPeer(msg, now);
+    if (!touched) return;
+    const p = touched.peer;
+    if (p.ts && ts < p.ts - 1000) return;
+    p.lat = lat;
+    p.lon = lon;
+    p.acc = isFinite(Number(msg.ac)) ? Number(msg.ac) : null;
+    p.heading = isFinite(Number(msg.hd)) ? Number(msg.hd) : null;
+    p.speed = isFinite(Number(msg.sp)) ? Number(msg.sp) : null;
+    p.sharing = msg.sh !== false;
+    p.ts = ts;
+    if (s.hostId === s.self.id) p.hostId = s.self.id;
+    if (touched.isNew) emit('meet:peerjoined', { name: p.name, id: p.id });
+    emitState();
+    return;
+  }
+
+  if (msg.k === 'st') {
+    const touched = touchPeer(msg, now);
+    if (!touched) return;
+    touched.peer.sharing = msg.sh !== false;
+    if (s.hostId === s.self.id) touched.peer.hostId = s.self.id;
+    emitState();
+    return;
+  }
+
+  if (msg.k === 'meta') {
+    if (msg.id !== msg.hostId) return;
+    if (s.hostId && s.hostId !== s.self.id && s.hostId !== msg.id) return;
+    s.hostId = msg.id;
+    const exp = Number(msg.exp);
+    if (isFinite(exp) && exp > now && exp <= now + MAX_EXPIRY_MIN * 60_000) s.expiresAt = exp;
+    for (const p of s.peers.values()) p.hostId = s.hostId;
+    emitState();
+    return;
+  }
+
+  if (msg.k === 'bye') {
+    const id = String(msg.id || '');
+    if (!id) return;
+    if (s.peers.delete(id)) {
+      if (s.hostId === id) s.hostId = null;
+      if (s.route?.peerId === id) { s.route = null; }
+      emit('meet:peerleft', { id });
+      emitState();
+    }
+    return;
+  }
+
+  if (msg.k === 'kick') {
+    const target = String(msg.target || msg.id || '');
+    const by = String(msg.by || '');
+    if (!target) return;
+    if (s.hostId === s.self.id) return;
+    if (!s.hostId || by !== s.hostId) return;
+    if (target === s.self.id) {
+      await leaveMeet('kicked');
+      return;
+    }
+    if (s.peers.delete(target)) {
+      if (s.route?.peerId === target) s.route = null;
+      emitState();
+    }
+  }
+}
+
+function tick() {
+  const s = session;
+  if (!s) return;
+  const now = Date.now();
+  const remaining = Math.max(0, s.expiresAt - now);
+  emit('meet:tick', { remaining, now });
+  if (remaining <= 0) {
+    leaveMeet('expired');
+    return;
+  }
+  s.tickCount++;
+  if (s.tickCount % 5 === 0) {
+    let changed = false;
+    for (const [id, p] of s.peers) {
+      const age = now - p.lastSeen;
+      if (age > REMOVE_MS) {
+        s.peers.delete(id);
+        if (s.hostId === id) s.hostId = null;
+        if (s.route?.peerId === id) s.route = null;
+        changed = true;
+      } else {
+        const stale = age > STALE_MS;
+        if (p.stale !== stale) { p.stale = stale; changed = true; }
+      }
+    }
+    if (changed) emitState();
+  }
+  if (s.tickCount % Math.round(HEARTBEAT_MS / 1000) === 0) {
+    if (s.sharing && s.self.hasFix) publishLoc();
+    else publishState();
+    if (s.hostId === s.self.id && s.tickCount % 36 === 0) publishHi();
+  }
+}
+
+async function beginSession({ code, name, host, expiryMin }: { code: string; name?: string; host: boolean; expiryMin?: number }) {
+  if (session) await leaveMeet('switch');
+  const room = await deriveMeetRoom(code);
+  const selfName = resolveName(name);
+  if (cleanName(name) && cleanName(name) !== get('meetName')) set('meetName', cleanName(name));
+  const selfId = randomMeetId();
+  const now = Date.now();
+  const mins = clampExpiry(host ? (expiryMin ?? expiryMinutes()) : (expiryMin ?? 120));
+  session = {
+    code: room.code,
+    room,
+    roomId: room.roomId,
+    link: meetLinkFor(room.code),
+    self: {
+      id: selfId,
+      name: selfName,
+      color: '#2bcda7',
+      lat: null, lon: null, acc: null, heading: null, speed: null,
+      hasFix: false, fixAt: 0, ts: 0
+    },
+    hostId: host ? selfId : null,
+    peers: new Map(),
+    relay: null,
+    relayState: 'connecting',
+    relayError: null,
+    relayGen: 0,
+    epoch: 0,
+    sendChain: Promise.resolve(),
+    watchId: null,
+    tickTimer: null,
+    tickCount: 0,
+    startedAt: now,
+    expiresAt: now + mins * 60_000,
+    sharing: true,
+    geoError: null,
+    lastPublish: null,
+    lastFix: null,
+    route: null,
+    routeLoading: '',
+    routeAbort: null,
+    onVisible: null
+  };
+  const s = session;
+  setMeetFragment(s.code);
+  s.onVisible = () => {
+    if (document.visibilityState !== 'visible' || session !== s) return;
+    startWatch();
+    if (s.relayState === 'connected') sendPresence();
+  };
+  document.addEventListener('visibilitychange', s.onVisible);
+  startWatch();
+  startRelay();
+  s.tickTimer = setInterval(tick, 1000);
+  emitState();
+  return getMeetSnapshot();
+}
+
+export async function createMeetSession({ name, expiryMin }: { name?: string; expiryMin?: number } = {}) {
+  return beginSession({ code: generateMeetCode(), name, host: true, expiryMin });
+}
+
+export async function joinMeetSession(code: string, { name }: { name?: string } = {}) {
+  return beginSession({ code, name, host: false, expiryMin: 120 });
+}
+
+export async function leaveMeet(reason = 'manual') {
+  const s = session;
+  if (!s || s.leaving) return;
+  s.leaving = true;
+  if (reason !== 'switch') {
+    await Promise.race([publishPacket({ v: 1, k: 'bye', id: s.self.id, ts: Date.now() }), sleep(250)]);
+  }
+  cleanupSession(s);
+  session = null;
+  clearMeetFragment();
+  emit('meet:state', getMeetSnapshot());
+  emit('meet:ended', { reason });
+}
+
+function cleanupSession(s: MeetSession) {
+  clearInterval(s.tickTimer);
+  s.routeAbort?.abort();
+  s.routeAbort = null;
+  if (s.onVisible) document.removeEventListener('visibilitychange', s.onVisible);
+  try { if (s.watchId != null) navigator.geolocation?.clearWatch(s.watchId); } catch { /* ignore */ }
+  s.watchId = null;
+  s.relayGen++;
+  try { s.relay?.close(); } catch { /* ignore */ }
+  s.relay = null;
+  s.peers.clear();
+}
+
+export async function resetMeetCode() {
+  const s = session;
+  if (!s || s.hostId !== s.self.id) return null;
+  s.epoch++;
+  s.relayGen++;
+  try { s.relay?.close(); } catch { /* ignore */ }
+  s.relay = null;
+  s.peers.clear();
+  s.routeAbort?.abort();
+  s.route = null;
+  s.routeLoading = '';
+  const code = generateMeetCode();
+  const room = await deriveMeetRoom(code);
+  if (session !== s) return null;
+  s.code = room.code;
+  s.room = room;
+  s.roomId = room.roomId;
+  s.link = meetLinkFor(room.code);
+  setMeetFragment(s.code);
+  s.hostId = s.self.id;
+  s.startedAt = Date.now();
+  s.expiresAt = Date.now() + expiryMinutes() * 60_000;
+  s.sendChain = Promise.resolve();
+  s.relayState = 'connecting';
+  s.relayError = null;
+  startRelay();
+  publishHi();
+  if (s.self.hasFix) publishLoc();
+  emitState();
+  emit('meet:codeReset', { code: s.code });
+  return getMeetSnapshot();
+}
+
+export function setMeetSharing(on: boolean) {
+  const s = session;
+  if (!s) return;
+  s.sharing = !!on;
+  if (s.sharing) sendPresence();
+  else publishState();
+  emitState();
+}
+
+export async function sendMeetNow() {
+  if (!session) return false;
+  await Promise.race([sendPresence(), sleep(500)]);
+  return true;
+}
+
+export function retryMeetGeolocation() {
+  const s = session;
+  if (!s) return;
+  s.geoError = null;
+  startWatch();
+  if (s.relayState === 'connected') sendPresence();
+  emitState();
+}
+
+export async function kickMeetPeer(peerId: string) {
+  const s = session;
+  if (!s || s.hostId !== s.self.id || !peerId || peerId === s.self.id) return false;
+  await publishPacket({ v: 1, k: 'kick', target: peerId, by: s.self.id, ts: Date.now() });
+  if (session !== s) return false;
+  s.peers.delete(peerId);
+  if (s.route?.peerId === peerId) s.route = null;
+  emitState();
+  return true;
+}
+
+export async function planMeetRoute(peerId: string) {
+  const s = session;
+  if (!s || !s.self.hasFix) return null;
+  const peer = s.peers.get(peerId);
+  if (!peer || peer.lat == null || peer.lon == null) return null;
+  s.routeAbort?.abort();
+  const ctrl = new AbortController();
+  s.routeAbort = ctrl;
+  s.routeLoading = peerId;
+  s.route = null;
+  emitState();
+  const activity = get('activity') === 'auto' ? 'hike' : (get('activity') || 'hike');
+  const route = await routeOverRoads(
+    { lat: s.self.lat, lon: s.self.lon },
+    { lat: peer.lat, lon: peer.lon },
+    activity,
+    ctrl.signal
+  ).catch(() => null);
+  if (session !== s || s.routeLoading !== peerId) return null;
+  s.routeLoading = '';
+  s.routeAbort = null;
+  if (!route) {
+    s.route = null;
+    emitState();
+    emit('meet:routefail', { peerId });
+    return null;
+  }
+  let distance = 0;
+  for (let i = 1; i < route.coords.length; i++) {
+    distance += haversine(route.coords[i - 1][1], route.coords[i - 1][0], route.coords[i][1], route.coords[i][0]);
+  }
+  s.route = {
+    peerId,
+    coords: route.coords,
+    distance,
+    provider: route.provider,
+    at: Date.now()
+  };
+  emitState();
+  emit('meet:route', { peerId, distance, provider: route.provider });
+  return s.route;
+}
+
+export function clearMeetRoute() {
+  const s = session;
+  if (!s) return;
+  s.routeAbort?.abort();
+  s.routeAbort = null;
+  s.routeLoading = '';
+  s.route = null;
+  emitState();
+}
+
+export const meet = {
+  snapshot: getMeetSnapshot,
+  create: createMeetSession,
+  join: joinMeetSession,
+  leave: leaveMeet,
+  reset: resetMeetCode,
+  setSharing: setMeetSharing,
+  sendNow: sendMeetNow,
+  retryGeo: retryMeetGeolocation,
+  kick: kickMeetPeer,
+  route: planMeetRoute,
+  clearRoute: clearMeetRoute,
+  injectFix: injectMeetFix,
+  active: () => !!session
+};

@@ -21,6 +21,16 @@ const DEFAULTS = {
   customTileUrl: '',           // advanced: {z}/{x}/{y} template, WGS84 assumed
   customTileName: '',
   elevationEndpoint: '',       // advanced override, must accept ?latitude=&longitude=
+  meetName: '',                // default display name in live meetups
+  meetExpiryMin: 120,          // self-destruct timer; host advertises it to the room
+  meetRelayMode: 'mqtt',       // mqtt | ws (webrtc reserved)
+  meetMqttUrl: 'wss://broker.emqx.io:8084/mqtt',
+  meetMqttPrefix: 'trackmint/v1/meet',
+  meetWsUrl: '',               // must contain {room}
+  meetStun: 'stun:stun.cloudflare.com:3478',
+  meetTurnUrl: '',             // reserved for future WebRTC transport
+  meetTurnUser: '',
+  meetTurnPass: '',
   sim: {                       // debug simulation switches [v1.4]
     enabled: false,
     network: 'off',            // off | cn | global | offline | corsfail

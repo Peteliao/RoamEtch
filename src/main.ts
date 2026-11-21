@@ -14,8 +14,12 @@ import * as batchCore from './core/batch';
 import * as coordsCore from './core/coords';
 import * as keepaliveCore from './core/keepalive';
 import { parseShareFragment } from './core/shareLink';
+import { parseMeetFragment } from './core/meetLink';
+import * as meetCore from './core/meet';
+import * as meetLinkCore from './core/meetLink';
 import { setActiveTrip } from './ui/state';
 import { createShell } from './ui/shell';
+import { initInstall } from './ui/install';
 import { toast } from './ui/helpers';
 import { diag } from './core/diag';
 
@@ -38,11 +42,28 @@ async function boot() {
   document.getElementById('boot-splash')?.remove();
   diag('boot', 'app ready', { lang: navigator.language });
   // debug handle for diagnostics & acceptance testing (spec: debuggability)
-  window.__lt = { recorder: recorderCore, store: storeCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, keepalive: keepaliveCore };
+  window.__lt = { recorder: recorderCore, store: storeCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore };
 
-  // shared-link import (#t=…) — fragment never reaches a server
-  const shared = parseShareFragment(location.hash);
-  if (shared) {
+  // live meetup invite (#meet=…) — code and key stay in the fragment
+  const hasMeetFragment = /[#&]meet=/.test(location.hash);
+  const meetCode = parseMeetFragment(location.hash);
+  const shared = hasMeetFragment ? null : parseShareFragment(location.hash);
+  if (hasMeetFragment && !meetCode) {
+    history.replaceState(null, '', location.pathname + location.search);
+    shell.navigate('meet');
+    toast(t('meet.autoJoinFail'), 'err', 4200);
+  } else if (meetCode) {
+    shell.navigate('meet');
+    try {
+      await meetCore.joinMeetSession(meetCode);
+      toast(t('meet.autoJoined'), 'ok', 3500);
+    } catch (e) {
+      console.warn('meet auto-join failed', e);
+      history.replaceState(null, '', location.pathname + location.search);
+      toast(t('meet.autoJoinFail'), 'err', 4200);
+    }
+  } else if (shared) {
+    // shared-link import (#t=…) — fragment never reaches a server
     try {
       const trip = await createTrip({ name: shared.name, activity: shared.activity, status: 'finished' });
       const seg = await addSegment(trip.id);
@@ -58,6 +79,8 @@ async function boot() {
   // network state toasts
   busOn('network:offline', () => toast(t('toast.offlineMode'), 'warn', 4000));
   busOn('network:online', () => toast(t('toast.backOnline'), 'ok', 2500));
+
+  initInstall({ nudge: !hasMeetFragment && !shared });
 
   // PWA service worker (app shell precache; tiles cached per provider bucket)
   try {

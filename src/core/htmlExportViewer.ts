@@ -3,10 +3,10 @@
 
 export const VIEWER_CSS = String.raw`
 :root{
-  --bg:#101820;--panel:#101820;--text:#f2f5f7;--muted:#93a1ac;--faint:#6f7e89;
+  --bg:#000;--panel:#000;--text:#fff;--muted:#b8b8b8;--faint:#7a7a7a;
   --accent:#2bcda7;--accent-soft:rgba(43,205,167,.14);--accent-ink:#06251d;
-  --amber:#f5b942;--chip:rgba(147,161,172,.08);--border:rgba(255,255,255,.14);
-  --border2:rgba(255,255,255,.24);--glass:rgba(16,24,32,.86);--sheet:#101820;
+  --amber:#f5b942;--chip:rgba(184,184,184,.08);--border:rgba(255,255,255,.14);
+  --border2:rgba(255,255,255,.24);--glass:rgba(0,0,0,.86);--sheet:#000;
   --shadow:0 20px 50px rgba(0,0,0,.42);
 }
 *{box-sizing:border-box}

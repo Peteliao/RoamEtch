@@ -5,7 +5,7 @@ import { on, emit } from '../core/events';
 import { rec, startRecording, pauseRecording, resumeRecording, stopRecording, continueTrip, findRecoverableTrip, createManualTrip, retryGeolocation, setRecordingActivity } from '../core/recorder';
 import { armKeepAlive, disarmKeepAlive, isKeepAliveActive } from '../core/keepalive';
 import { requestWakeLock, releaseWakeLock } from '../core/wakelock';
-import { setThemeColorOverride } from '../core/theme';
+import { setThemeColorOverride, setThemeModeOverride } from '../core/theme';
 import { regionState } from '../core/region';
 import { availableBasemaps } from '../core/providers';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine, bearing } from '../core/geo';
@@ -209,7 +209,9 @@ export function createRecordView() {
     host.append(bars, el('small', { class: 'sig-txt' }, lv ? t(`panel.sig${SIG_KEYS[lv]}`) : '--'));
   }
 
+  let liveActivity = 'auto';
   function currentActivity() {
+    if (rec.tripId && (rec.status === 'recording' || rec.status === 'paused')) return liveActivity;
     return appState.activeTripFull?.trip?.activity || get('activity');
   }
   function speedMode() {
@@ -286,7 +288,6 @@ export function createRecordView() {
   activitySel.value = get('activity');
   activitySel.onchange = () => set('activity', activitySel.value);
   const autoTag = el('span', { class: 'live-auto-tag' });
-  let liveActivity = 'auto';
   const liveActSel = el('select', { class: 'live-act-select' });
   for (const a of ['auto', 'hike', 'drive', 'bike', 'run', 'travel']) {
     liveActSel.append(el('option', { value: a }, a === 'auto' ? t('record.activityAuto') : t(`record.activities.${a}`)));
@@ -803,6 +804,7 @@ export function createRecordView() {
       ps.classList.add('active');
       ps.classList.remove('pocket');
       document.documentElement.classList.add('oled-lock');
+      setThemeModeOverride('dark');
       setThemeColorOverride('#000000');
       requestWakeLock();
       renderPsTop();
@@ -813,6 +815,7 @@ export function createRecordView() {
       ps.classList.remove('active', 'pocket');
       document.documentElement.classList.remove('oled-lock');
       setThemeColorOverride(null);
+      setThemeModeOverride(null);
       if (rec.status !== 'recording') releaseWakeLock();
       mapContainer.style.display = '';
       buildMap();
@@ -1006,6 +1009,7 @@ export function createRecordView() {
       offBroadcast();
       if (psActive) {
         setThemeColorOverride(null);
+        setThemeModeOverride(null);
         if (rec.status !== 'recording') releaseWakeLock();
       }
       map?.destroy();

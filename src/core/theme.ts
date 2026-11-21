@@ -10,6 +10,7 @@ let ref = null;
 let dayKey = '';
 let times = null;
 let colorOverride: string | null = null;
+let modeOverride: string | null = null;
 
 function autoEffective() {
   const now = new Date();
@@ -25,6 +26,7 @@ function autoEffective() {
 }
 
 export function effectiveTheme() {
+  if (modeOverride) return modeOverride;
   const v = get('theme');
   return v === 'auto' ? autoEffective() : v;
 }
@@ -33,8 +35,15 @@ export function applyTheme() {
   const eff = effectiveTheme();
   document.documentElement.dataset.theme = eff === 'dark' ? '' : eff;
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', colorOverride || (eff === 'light' || eff === 'contrast' ? '#f5f7f6' : '#101820'));
+  if (meta) meta.setAttribute('content', colorOverride || (eff === 'light' || eff === 'contrast' ? '#f5f7f6' : '#000000'));
   emit('theme:applied', { effective: eff });
+}
+
+/** Temporarily overrides the effective theme without changing the saved setting. */
+export function setThemeModeOverride(mode: string | null) {
+  if (modeOverride === mode) return;
+  modeOverride = mode;
+  applyTheme();
 }
 
 /** Highlights the OS status bar with a fixed color until cleared (OLED black). */

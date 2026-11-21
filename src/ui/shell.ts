@@ -7,6 +7,7 @@ import { rec } from '../core/recorder';
 import { appState } from './state';
 import { el, icon, modal } from './helpers';
 import { createRecordView } from './record';
+import { createMeetView } from './meet';
 import { createTripsView } from './trips';
 import { createAnalysisView } from './analysis';
 import { createExportView } from './export';
@@ -14,6 +15,7 @@ import { createSettingsView } from './settings';
 
 const TABS = [
   ['record', 'record'],
+  ['meet', 'meet'],
   ['trips', 'trips'],
   ['analysis', 'analysis'],
   ['export', 'export'],
@@ -114,12 +116,13 @@ export function createShell(root) {
   function buildViews() {
     setScope('views');
     const record = createRecordView();
+    const meetV = createMeetView(navigate);
     const trips = createTripsView(navigate);
     const analysis = createAnalysisView();
     const exportV = createExportView(() => record.getMap());
     const settings = createSettingsView(navigate);
     setScope('core');
-    views = { record, trips, analysis, export: exportV, settings };
+    views = { record, meet: meetV, trips, analysis, export: exportV, settings };
     viewsBox.innerHTML = '';
     for (const v of Object.values(views)) viewsBox.append(v.view);
     tabbar.innerHTML = '';

@@ -59,7 +59,7 @@ async function fetchJson(url: string, signal?: AbortSignal) {
   }
 }
 
-async function routeOverRoads(from: any, to: any, activity: string, signal?: AbortSignal) {
+export async function routeOverRoads(from: any, to: any, activity: string, signal?: AbortSignal) {
   const lonlats = `${from.lon},${from.lat}|${to.lon},${to.lat}`;
   for (const profile of profilesFor(activity)) {
     const j = await fetchJson(`https://brouter.de/brouter?lonlats=${lonlats}&profile=${profile}&alternativeidx=0&format=geojson`, signal);

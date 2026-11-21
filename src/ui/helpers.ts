@@ -21,6 +21,7 @@ export function el(tag, attrs = {}, ...children) {
 export function icon(name, size = 20) {
   const paths = {
     record: '<circle cx="12" cy="12" r="8.2" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="12" cy="12" r="3.2" fill="currentColor"/>',
+    meet: '<circle cx="9" cy="8" r="3" stroke="currentColor" stroke-width="2" fill="none"/><path d="M3.5 20c0-3 2.5-5.2 5.5-5.2s5.5 2.2 5.5 5.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><circle cx="17" cy="9.2" r="2.4" stroke="currentColor" stroke-width="2" fill="none"/><path d="M15.4 15.3c2.8 0 5 1.8 5 4.7" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
     trips: '<circle cx="5" cy="18.5" r="2.2" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="19" cy="5.5" r="2.2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M7.2 18.5h6.1a4 4 0 0 0 0-8H10a4 4 0 0 1 0-8h6.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
     routeFwd: '<circle cx="4.5" cy="19.5" r="1.9" fill="currentColor"/><path d="M6.8 19.5h7.4a4 4 0 0 0 0-8H9a4 4 0 0 1 0-8h7.2" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><path d="m14.6 1.6 3 2-3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     routeRev: '<circle cx="19.5" cy="19.5" r="1.9" fill="currentColor"/><path d="M17.2 19.5H9.8a4 4 0 0 1 0-8H15a4 4 0 0 0 0-8H7.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><path d="m9.4 1.6-3 2 3 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
@@ -56,6 +57,7 @@ export function icon(name, size = 20) {
     photo: '<rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="9" cy="10" r="1.8" fill="currentColor"/><path d="m5 17 5-4 3 2.4L17 11l2 2.4" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',
     batch: '<rect x="3" y="3" width="12" height="12" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M9 21h10a2 2 0 0 0 2-2V9" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
     more: '<circle cx="5" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="19" cy="12" r="1.7" fill="currentColor"/>',
+    refresh: '<path d="M20 11a8 8 0 1 0-2.3 6M20 4v7h-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     search: '<circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" fill="none"/><path d="m16.5 16.5 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     map: '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Zm6-3v15m6-12v15" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',
     mountain: '<path d="m3 20 6.5-12 3.6 6 2.2-3.5L21 20H3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',

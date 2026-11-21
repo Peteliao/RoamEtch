@@ -32,6 +32,10 @@ export class TrackMap {
   declare posMarker: any;
   declare hoverMarker: any;
   declare navMarker: any;
+  declare meetMarkers: Map<string, any>;
+  declare meetSelf: any;
+  declare meetPeers: any[];
+  declare meetRoute: any;
   declare tileErrors: number;
   declare tileLoaded: boolean;
   declare vectorFallback: boolean;
@@ -61,6 +65,10 @@ export class TrackMap {
     this.posMarker = null;
     this.hoverMarker = null;
     this.navMarker = null;
+    this.meetMarkers = new Map();
+    this.meetSelf = null;
+    this.meetPeers = [];
+    this.meetRoute = null;
     this.tileErrors = 0;
     this.tileLoaded = false;
     this.vectorFallback = false;
@@ -141,6 +149,7 @@ export class TrackMap {
       set('track-line', 'line-color', accent);
       set('live-line', 'line-color', accent);
       set('nav-line', 'line-color', cssVar('--warn', '#f2b14a'));
+      set('meet-route-line', 'line-color', cssVar('--info', '#5aa7f0'));
     };
     if (m.isStyleLoaded()) apply();
     else m.once('style.load', apply);
@@ -223,6 +232,12 @@ export class TrackMap {
     if (!m.getSource('nav')) {
       m.addSource('nav', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     }
+    if (!m.getSource('meet-links')) {
+      m.addSource('meet-links', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    }
+    if (!m.getSource('meet-route')) {
+      m.addSource('meet-route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    }
     const accent = cssVar('--track', '#2bcda7');
     const casing = cssVar('--track-casing', '#06251d');
     if (!m.getLayer('pos-acc')) m.addLayer({ id: 'pos-acc', type: 'fill', source: 'pos', paint: { 'fill-color': cssVar('--info', '#5aa7f0'), 'fill-opacity': 0.12 } });
@@ -232,6 +247,21 @@ export class TrackMap {
     if (!m.getLayer('nav-line')) m.addLayer({ id: 'nav-line', type: 'line', source: 'nav', paint: { 'line-color': cssVar('--warn', '#f2b14a'), 'line-width': 3, 'line-opacity': 0.9, 'line-dasharray': [1.2, 1.6] }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('live-casing')) m.addLayer({ id: 'live-casing', type: 'line', source: 'live', paint: { 'line-color': casing, 'line-width': 7, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('live-line')) m.addLayer({ id: 'live-line', type: 'line', source: 'live', paint: { 'line-color': accent, 'line-width': 4 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    if (!m.getLayer('meet-link-line')) {
+      m.addLayer({
+        id: 'meet-link-line', type: 'line', source: 'meet-links',
+        paint: {
+          'line-color': ['coalesce', ['get', 'color'], accent],
+          'line-width': 2,
+          'line-opacity': ['case', ['get', 'stale'], 0.35, 0.78],
+          'line-dasharray': [2, 2.6]
+        },
+        layout: { 'line-cap': 'round', 'line-join': 'round' }
+      });
+    }
+    if (!m.getLayer('meet-route-case')) m.addLayer({ id: 'meet-route-case', type: 'line', source: 'meet-route', paint: { 'line-color': casing, 'line-width': 8, 'line-opacity': 0.65 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    if (!m.getLayer('meet-route-line')) m.addLayer({ id: 'meet-route-line', type: 'line', source: 'meet-route', paint: { 'line-color': cssVar('--info', '#5aa7f0'), 'line-width': 4.5, 'line-opacity': 0.95 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    this._applyMeetData();
   }
 
   /** segments: [{id, points:[{lat,lon,...}]}] in WGS-84 */
@@ -383,6 +413,137 @@ export class TrackMap {
     this.posMarker?.remove();
     this.posMarker = null;
     this.map.getSource('pos')?.setData({ type: 'FeatureCollection', features: [] });
+  }
+
+  // ---------- live meetup ----------
+  setMeetData({ self = null, peers = [], route = null }: { self?: any; peers?: any[]; route?: any } = {}) {
+    this.meetSelf = self;
+    this.meetPeers = Array.isArray(peers) ? peers : [];
+    this.meetRoute = route;
+    if (!this.map || this.destroyed) return;
+    if (self?.hasFix && self.lat != null && self.lon != null) {
+      this.updatePosition(self.lat, self.lon, self.acc, self.heading);
+    } else {
+      this.clearPosition();
+    }
+    this._renderMeetMarkers();
+    this._applyMeetLinks();
+    this._applyMeetRoute();
+  }
+
+  clearMeetData() {
+    this.meetSelf = null;
+    this.meetPeers = [];
+    this.meetRoute = null;
+    for (const [, entry] of this.meetMarkers) entry.marker.remove();
+    this.meetMarkers.clear();
+    this.map?.getSource('meet-links')?.setData({ type: 'FeatureCollection', features: [] });
+    this.map?.getSource('meet-route')?.setData({ type: 'FeatureCollection', features: [] });
+  }
+
+  _renderMeetMarkers() {
+    if (!this.map || this.destroyed) return;
+    const alive = new Set<string>();
+    for (const p of this.meetPeers) {
+      if (p.lat == null || p.lon == null) continue;
+      alive.add(p.id);
+      let entry = this.meetMarkers.get(p.id);
+      if (!entry) {
+        const node = document.createElement('div');
+        node.className = 'meet-peer-marker';
+        const dot = document.createElement('span');
+        dot.className = 'mp-dot';
+        const tag = document.createElement('span');
+        tag.className = 'mp-tag';
+        node.append(dot, tag);
+        const marker = new maplibregl.Marker({ element: node, anchor: 'center' })
+          .setLngLat(toDisplay(p.lon, p.lat, this.coordSystem) as [number, number]).addTo(this.map);
+        entry = { node, dot, tag, marker, peer: p };
+        const peerId = p.id;
+        dot.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.opts.onMeetPeerClick?.(peerId);
+        });
+        this.meetMarkers.set(p.id, entry);
+      }
+      entry.peer = p;
+      entry.node.classList.toggle('stale', !!p.stale);
+      entry.node.style.setProperty('--peer', /^#[0-9a-f]{6}$/i.test(String(p.color)) ? p.color : '#2bcda7');
+      entry.tag.textContent = p.name || '';
+      const [lon, lat] = toDisplay(p.lon, p.lat, this.coordSystem);
+      entry.marker.setLngLat([lon, lat] as [number, number]);
+    }
+    for (const [id, entry] of this.meetMarkers) {
+      if (!alive.has(id)) { entry.marker.remove(); this.meetMarkers.delete(id); }
+    }
+  }
+
+  _applyMeetLinks() {
+    const source = this.map?.getSource('meet-links');
+    if (!source) return;
+    const s = this.meetSelf;
+    const features = [];
+    if (s?.hasFix && s.lat != null && s.lon != null) {
+      const [slon, slat] = toDisplay(s.lon, s.lat, this.coordSystem);
+      for (const p of this.meetPeers) {
+        if (p.lat == null || p.lon == null) continue;
+        const [plon, plat] = toDisplay(p.lon, p.lat, this.coordSystem);
+        features.push({
+          type: 'Feature',
+          properties: { color: /^#[0-9a-f]{6}$/i.test(String(p.color)) ? p.color : '#2bcda7', stale: !!p.stale },
+          geometry: { type: 'LineString', coordinates: [[slon, slat], [plon, plat]] }
+        });
+      }
+    }
+    source.setData({ type: 'FeatureCollection', features });
+  }
+
+  _applyMeetRoute() {
+    const source = this.map?.getSource('meet-route');
+    if (!source) return;
+    const coords = this.meetRoute?.coords;
+    const features = [];
+    if (Array.isArray(coords) && coords.length >= 2) {
+      features.push({
+        type: 'Feature', properties: {},
+        geometry: { type: 'LineString', coordinates: coords.map(([lon, lat]) => toDisplay(lon, lat, this.coordSystem)) }
+      });
+    }
+    source.setData({ type: 'FeatureCollection', features });
+  }
+
+  _applyMeetData() {
+    if (!this.map || this.destroyed) return;
+    if (this.meetSelf?.hasFix && this.meetSelf.lat != null) {
+      this.updatePosition(this.meetSelf.lat, this.meetSelf.lon, this.meetSelf.acc, this.meetSelf.heading);
+    }
+    this._renderMeetMarkers();
+    this._applyMeetLinks();
+    this._applyMeetRoute();
+  }
+
+  fitMeet(padding = 70) {
+    if (!this.map || this.destroyed) return;
+    const pts = [];
+    if (this.meetSelf?.hasFix && this.meetSelf.lat != null) pts.push(toDisplay(this.meetSelf.lon, this.meetSelf.lat, this.coordSystem));
+    for (const p of this.meetPeers) {
+      if (p.lat != null && p.lon != null) pts.push(toDisplay(p.lon, p.lat, this.coordSystem));
+    }
+    if (!pts.length) return;
+    this.follow = false;
+    emit('map:followoff');
+    if (pts.length === 1) {
+      this.map.easeTo({ center: pts[0], zoom: Math.max(this.map.getZoom(), 14), duration: 600 });
+      return;
+    }
+    let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+    for (const [lon, lat] of pts) {
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+    }
+    this.map.fitBounds([[minLon, minLat], [maxLon, maxLat]], { padding, duration: 650, maxZoom: 16 });
   }
 
   // ---------- re-walk approach guide ----------
@@ -543,6 +704,8 @@ export class TrackMap {
     this._offTheme?.();
     this._clearVertices();
     for (const [, mk] of this.wpMarkers) mk.remove();
+    for (const [, entry] of this.meetMarkers) entry.marker.remove();
+    this.meetMarkers.clear();
     this.posMarker?.remove();
     this.hoverMarker?.remove();
     this.navMarker?.remove();
