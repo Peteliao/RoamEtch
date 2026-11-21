@@ -4,6 +4,7 @@ import { canvasPalette } from './palette';
 import { drawBrandMark, drawQr, loadBrandFonts, SITE_URL, SPORT_FONT } from './brand';
 import { fitText, roundRectPath } from './tripScore';
 import { t } from './i18n';
+import { effectiveTheme } from './theme';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
 const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
@@ -26,14 +27,7 @@ function headlineSize(ctx: CanvasRenderingContext2D, lines: string[], maxW: numb
   return 60;
 }
 
-function drawBackground(ctx: CanvasRenderingContext2D, P) {
-  const g = ctx.createLinearGradient(0, 0, W, H);
-  g.addColorStop(0, P.panel);
-  g.addColorStop(0.55, P.vectorBg);
-  g.addColorStop(1, P.panel);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
-
+function drawBackground(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
   const glow = (cx: number, cy: number, r: number, color: string, a: number) => {
     const rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
     rg.addColorStop(0, rgba(color, a));
@@ -41,6 +35,27 @@ function drawBackground(ctx: CanvasRenderingContext2D, P) {
     ctx.fillStyle = rg;
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
   };
+
+  if (highContrast) {
+    ctx.fillStyle = P.panel;
+    ctx.fillRect(0, 0, W, H);
+    const wash = ctx.createLinearGradient(0, 0, W, 640);
+    wash.addColorStop(0, rgba(P.accent, 0.075));
+    wash.addColorStop(0.55, rgba(P.accent, 0.018));
+    wash.addColorStop(1, rgba(P.accent, 0));
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, 0, W, 640);
+    glow(W * 0.08, H * 0.92, 420, P.amber, 0.045);
+    return;
+  }
+
+  const g = ctx.createLinearGradient(0, 0, W, H);
+  g.addColorStop(0, P.panel);
+  g.addColorStop(0.55, P.vectorBg);
+  g.addColorStop(1, P.panel);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+
   const dark = P.panel === '#000000';
   glow(W * 0.88, 110, 560, P.accent, dark ? 0.17 : 0.1);
   glow(W * 0.06, H * 0.93, 420, P.amber, dark ? 0.08 : 0.06);
@@ -55,7 +70,7 @@ function drawBackground(ctx: CanvasRenderingContext2D, P) {
   }
 }
 
-function drawHeader(ctx: CanvasRenderingContext2D, P) {
+function drawHeader(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
   drawBrandMark(ctx, M, 64, 64);
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
@@ -70,12 +85,18 @@ function drawHeader(ctx: CanvasRenderingContext2D, P) {
   ctx.font = `600 21px ${FONT}`;
   const pw = ctx.measureText(pill).width + 40;
   roundRectPath(ctx, W - M - pw, 78, pw, 42, 21);
-  ctx.fillStyle = P.badgeBg;
-  ctx.fill();
-  ctx.strokeStyle = P.badgeEdge;
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-  ctx.fillStyle = P.accent;
+  if (highContrast) {
+    ctx.fillStyle = P.accent;
+    ctx.fill();
+    ctx.fillStyle = P.panel;
+  } else {
+    ctx.fillStyle = P.badgeBg;
+    ctx.fill();
+    ctx.strokeStyle = P.badgeEdge;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = P.accent;
+  }
   ctx.fillText(pill, W - M - pw + 20, 105);
 }
 
@@ -91,25 +112,32 @@ function smoothPath(ctx: CanvasRenderingContext2D, pts: number[][]) {
   ctx.quadraticCurveTo(pts[pts.length - 2][0], pts[pts.length - 2][1], last[0], last[1]);
 }
 
-function drawMapTexture(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, P) {
+function drawMapTexture(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, P, highContrast: boolean) {
   ctx.save();
   ctx.beginPath();
   ctx.rect(x, y, w, h);
   ctx.clip();
-  ctx.strokeStyle = P.grid;
+  if (highContrast) {
+    ctx.fillStyle = rgba(P.accent, 0.05);
+    ctx.fillRect(x, y, w, h);
+  }
+  ctx.strokeStyle = highContrast ? rgba(P.text, 0.08) : P.grid;
   ctx.lineWidth = 1;
-  for (let gx = x + 46; gx < x + w; gx += 66) {
+  const colStep = highContrast ? 88 : 66;
+  const rowStep = highContrast ? 72 : 54;
+  for (let gx = x + 46; gx < x + w; gx += colStep) {
     ctx.beginPath();
     ctx.moveTo(gx, y);
     ctx.lineTo(gx, y + h);
     ctx.stroke();
   }
-  for (let gy = y + 28; gy < y + h; gy += 54) {
+  for (let gy = y + 28; gy < y + h; gy += rowStep) {
     ctx.beginPath();
     ctx.moveTo(x, gy);
     ctx.lineTo(x + w, gy);
     ctx.stroke();
   }
+  ctx.strokeStyle = highContrast ? rgba(P.text, 0.15) : P.grid;
   ctx.lineWidth = 1.5;
   const contour = (cx: number, cy: number, rx: number, ry: number, rot: number) => {
     for (const k of [1, 0.68, 0.38]) {
@@ -123,22 +151,29 @@ function drawMapTexture(ctx: CanvasRenderingContext2D, x: number, y: number, w: 
   ctx.restore();
 }
 
-function drawRouteCard(ctx: CanvasRenderingContext2D, P) {
+function drawRouteCard(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
   const x = M;
   const y = 572;
   const w = W - M * 2;
   const h = 400;
 
+  if (highContrast) {
+    roundRectPath(ctx, x + 10, y + 12, w, h, 30);
+    ctx.fillStyle = 'rgba(0,0,0,0.16)';
+    ctx.fill();
+  }
   roundRectPath(ctx, x, y, w, h, 30);
   ctx.fillStyle = P.panel;
   ctx.fill();
-  ctx.fillStyle = P.cellBg;
-  ctx.fill();
-  ctx.strokeStyle = P.grid;
-  ctx.lineWidth = 1.5;
+  if (!highContrast) {
+    ctx.fillStyle = P.cellBg;
+    ctx.fill();
+  }
+  ctx.strokeStyle = highContrast ? P.text : P.grid;
+  ctx.lineWidth = highContrast ? 3 : 1.5;
   ctx.stroke();
 
-  drawMapTexture(ctx, x + 18, y + 62, w - 36, h - 118, P);
+  drawMapTexture(ctx, x + 18, y + 62, w - 36, h - 118, P, highContrast);
 
   const pts = [
     [x + 150, y + 262],
@@ -156,16 +191,16 @@ function drawRouteCard(ctx: CanvasRenderingContext2D, P) {
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   smoothPath(ctx, pts);
-  ctx.strokeStyle = rgba(P.accent, 0.2);
-  ctx.lineWidth = 20;
+  ctx.strokeStyle = rgba(P.accent, highContrast ? 0.16 : 0.2);
+  ctx.lineWidth = highContrast ? 24 : 20;
   ctx.stroke();
   smoothPath(ctx, pts);
-  ctx.strokeStyle = P.trackCasing;
-  ctx.lineWidth = 9;
+  ctx.strokeStyle = highContrast ? P.text : P.trackCasing;
+  ctx.lineWidth = highContrast ? 10 : 9;
   ctx.stroke();
   smoothPath(ctx, pts);
   ctx.strokeStyle = P.accent;
-  ctx.lineWidth = 4.5;
+  ctx.lineWidth = highContrast ? 5 : 4.5;
   ctx.stroke();
   ctx.restore();
 
@@ -198,8 +233,14 @@ function drawRouteCard(ctx: CanvasRenderingContext2D, P) {
   // card header: live dot + timer, points on the right
   const hx = x + 36;
   const hy = y + 46;
+  if (highContrast) {
+    ctx.beginPath();
+    ctx.arc(hx, hy - 7, 9, 0, Math.PI * 2);
+    ctx.fillStyle = rgba(P.accent, 0.18);
+    ctx.fill();
+  }
   ctx.beginPath();
-  ctx.arc(hx, hy - 7, 5, 0, Math.PI * 2);
+  ctx.arc(hx, hy - 7, highContrast ? 5.5 : 5, 0, Math.PI * 2);
   ctx.fillStyle = P.accent;
   ctx.fill();
   ctx.textAlign = 'left';
@@ -213,13 +254,13 @@ function drawRouteCard(ctx: CanvasRenderingContext2D, P) {
   ctx.fillText('00:42:18', hx + 16 + lw + 16, hy);
 
   ctx.textAlign = 'right';
-  ctx.fillStyle = P.muted;
+  ctx.fillStyle = highContrast ? P.text : P.muted;
   ctx.font = `500 20px ${FONT}`;
   ctx.fillText(`1,284 ${t('panel.points')}`, x + w - 36, hy);
   ctx.textAlign = 'left';
 
-  ctx.strokeStyle = P.grid;
-  ctx.lineWidth = 1;
+  ctx.strokeStyle = highContrast ? P.text : P.grid;
+  ctx.lineWidth = highContrast ? 2 : 1;
   ctx.beginPath();
   ctx.moveTo(x + 36, y + 318);
   ctx.lineTo(x + w - 36, y + 318);
@@ -237,11 +278,11 @@ function drawRouteCard(ctx: CanvasRenderingContext2D, P) {
     ctx.fillText(v, sx, y + 358);
     const vw = ctx.measureText(v).width;
     if (u) {
-      ctx.fillStyle = P.muted;
+      ctx.fillStyle = highContrast ? P.accent : P.muted;
       ctx.font = `600 20px ${FONT}`;
       ctx.fillText(u, sx + vw + 7, y + 356);
     }
-    ctx.fillStyle = P.muted;
+    ctx.fillStyle = highContrast ? P.faint : P.muted;
     ctx.font = `500 19px ${FONT}`;
     ctx.fillText(k, sx, y + 384);
   });
@@ -292,7 +333,7 @@ function featureGlyph(ctx: CanvasRenderingContext2D, kind: string, x: number, y:
   ctx.restore();
 }
 
-function drawFeatures(ctx: CanvasRenderingContext2D, P) {
+function drawFeatures(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
   const features = [
     ['shield', t('promo.f1t'), t('promo.f1d')],
     ['meet', t('promo.f2t'), t('promo.f2d')],
@@ -304,24 +345,52 @@ function drawFeatures(ctx: CanvasRenderingContext2D, P) {
     const fx = M + (i % 2) * (colW + 36);
     const fy = 1002 + Math.floor(i / 2) * 94;
     roundRectPath(ctx, fx, fy, 46, 46, 14);
-    ctx.fillStyle = P.accentSoft;
-    ctx.fill();
-    ctx.strokeStyle = P.accentLine;
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-    featureGlyph(ctx, kind, fx + 11, fy + 11, 24, P.accent);
+    if (highContrast) {
+      ctx.fillStyle = P.accent;
+      ctx.fill();
+    } else {
+      ctx.fillStyle = P.accentSoft;
+      ctx.fill();
+      ctx.strokeStyle = P.accentLine;
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+    }
+    featureGlyph(ctx, kind, fx + 11, fy + 11, 24, highContrast ? P.panel : P.accent);
 
     ctx.textAlign = 'left';
     ctx.fillStyle = P.text;
     ctx.font = `700 25px ${FONT}`;
     ctx.fillText(fitText(ctx, title, colW - 62), fx + 62, fy + 20);
-    ctx.fillStyle = P.muted;
+    ctx.fillStyle = highContrast ? P.faint : P.muted;
     ctx.font = `500 19px ${FONT}`;
     ctx.fillText(fitText(ctx, desc, colW - 62), fx + 62, fy + 48);
   });
 }
 
-function drawFooter(ctx: CanvasRenderingContext2D, P) {
+function drawFooter(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
+  if (highContrast) {
+    roundRectPath(ctx, M, 1178, W - M * 2, 148, 20);
+    ctx.fillStyle = P.accent;
+    ctx.fill();
+
+    const qrX = M + 24;
+    const qrY = 1192;
+    drawQr(ctx, SITE_URL, qrX, qrY, 120);
+
+    const tx = qrX + 142;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = P.panel;
+    ctx.font = `800 30px ${FONT}`;
+    ctx.fillText(t('promo.cta'), tx, 1236);
+    ctx.fillStyle = P.panel;
+    ctx.font = `600 23px ${SPORT_FONT}`;
+    ctx.fillText(SITE_URL, tx, 1274);
+    ctx.fillStyle = rgba(P.panel, 0.8);
+    ctx.font = `500 19px ${FONT}`;
+    ctx.fillText(t('promo.footer'), tx, 1306);
+    return;
+  }
+
   const g = ctx.createLinearGradient(M, 0, W - M, 0);
   g.addColorStop(0, rgba(P.accent, 0.55));
   g.addColorStop(1, rgba(P.accent, 0));
@@ -350,14 +419,15 @@ export function promoCaption(): string {
 export async function generatePromo(): Promise<{ blob: Blob; filename: string }> {
   await loadBrandFonts();
   const P = canvasPalette();
+  const highContrast = effectiveTheme() === 'contrast';
   const canvas = document.createElement('canvas');
   canvas.width = W;
   canvas.height = H;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D unavailable');
 
-  drawBackground(ctx, P);
-  drawHeader(ctx, P);
+  drawBackground(ctx, P, highContrast);
+  drawHeader(ctx, P, highContrast);
 
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
@@ -371,13 +441,25 @@ export async function generatePromo(): Promise<{ blob: Blob; filename: string }>
   ctx.fillStyle = P.text;
   ctx.font = `800 ${headPx}px ${FONT}`;
   ctx.fillText(head1, M, 314);
-  ctx.fillStyle = P.accent;
-  ctx.fillText(head2, M, 410);
   const hw = ctx.measureText(head2).width;
-  ctx.beginPath();
-  ctx.arc(M + hw + 22, 385, 9, 0, Math.PI * 2);
-  ctx.fillStyle = P.amber;
-  ctx.fill();
+  if (highContrast) {
+    roundRectPath(ctx, M - 18, 332, hw + 36, 108, 4);
+    ctx.fillStyle = P.accent;
+    ctx.fill();
+    ctx.fillStyle = P.panel;
+    ctx.fillText(head2, M, 410);
+    ctx.beginPath();
+    ctx.arc(M + hw + 40, 385, 9, 0, Math.PI * 2);
+    ctx.fillStyle = P.amber;
+    ctx.fill();
+  } else {
+    ctx.fillStyle = P.accent;
+    ctx.fillText(head2, M, 410);
+    ctx.beginPath();
+    ctx.arc(M + hw + 22, 385, 9, 0, Math.PI * 2);
+    ctx.fillStyle = P.amber;
+    ctx.fill();
+  }
 
   ctx.fillStyle = P.muted;
   ctx.font = `500 28px ${FONT}`;
@@ -386,9 +468,9 @@ export async function generatePromo(): Promise<{ blob: Blob; filename: string }>
   ctx.font = `500 24px ${FONT}`;
   ctx.fillText(t('promo.sub2'), M, 516);
 
-  drawRouteCard(ctx, P);
-  drawFeatures(ctx, P);
-  drawFooter(ctx, P);
+  drawRouteCard(ctx, P, highContrast);
+  drawFeatures(ctx, P, highContrast);
+  drawFooter(ctx, P, highContrast);
 
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png');
