@@ -165,7 +165,7 @@ function lut(t, stops = STOPS) {
  * points (video playback); the head point gets the amber marker.
  */
 export function paintTrack(ctx, fit, segments, waypoints, {
-  upto = Infinity, lineWidth = 6.5, dotRadius = 12, wpRadius = 6
+  upto = Infinity, lineWidth = 8.5, dotRadius = 13, wpRadius = 6
 } = {}) {
   if (!fit) return;
   const P = canvasPalette();
@@ -194,10 +194,13 @@ export function paintTrack(ctx, fit, segments, waypoints, {
     }
   }
   const chunk = Math.max(2, Math.ceil(count / 18));
+  // Dark halo + casing keep the gradient readable on pale street maps; the
+  // thin highlight prevents the line from looking flat on dark basemaps.
   const passes = [
-    { w: lineWidth * 3.2, a: 0.18 },
+    { w: lineWidth * 2.1, a: 0.20, color: P.trackHalo },
+    { w: lineWidth + 4.5, a: 0.95, color: P.trackCasing },
     { w: lineWidth, a: 1 },
-    { w: Math.max(1.6, lineWidth * 0.32), a: 0.5, color: 'rgba(255,255,255,0.85)' }
+    { w: Math.max(1.4, lineWidth * 0.24), a: 0.34, color: 'rgba(255,255,255,0.9)' }
   ];
   for (const pass of passes) {
     ctx.globalAlpha = pass.a;
@@ -229,6 +232,8 @@ export function paintTrack(ctx, fit, segments, waypoints, {
   }
   const ring = (p, fill) => {
     const [x, y] = fit.toPx(p);
+    ctx.fillStyle = P.trackCasing;
+    ctx.beginPath(); ctx.arc(x, y, dotRadius + 4, 0, 7); ctx.fill();
     ctx.fillStyle = fill;
     ctx.beginPath(); ctx.arc(x, y, dotRadius, 0, 7); ctx.fill();
     ctx.strokeStyle = P.endRing;

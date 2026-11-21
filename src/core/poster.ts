@@ -9,6 +9,7 @@ import { prepareMap, paintTrack } from './mapPaint';
 import { computeTripScore, drawScoreBadge, fitText, roundRectPath } from './tripScore';
 import { canvasPalette } from './palette';
 import { loadBrandFonts, drawBrandBlock, drawSignalChip, SPORT_FONT } from './brand';
+import { tripTimeInfo, routePlaceNames } from './shareInfo';
 import { t } from './i18n';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
@@ -50,7 +51,7 @@ function drawCaloriesCell(stats) {
   return [kcal, stats.calories != null ? 'kcal' : '', t('panel.calories')];
 }
 
-function drawInfoPanel(ctx, full, stats, x, y, w, h, { score }, P) {
+function drawInfoPanel(ctx, full, stats, x, y, w, h, { score, time, places }, P) {
   const units = get('units');
   ctx.textAlign = 'left';
   ctx.fillStyle = P.text;
@@ -58,11 +59,15 @@ function drawInfoPanel(ctx, full, stats, x, y, w, h, { score }, P) {
   const name = (full.trip.name || t('record.newTripName')).slice(0, 24);
   ctx.fillText(fitText(ctx, name, w - (score ? 190 : 0)), x, y + 56);
   ctx.fillStyle = P.muted;
-  ctx.font = `26px ${FONT}`;
-  const dateStr = new Date(full.trip.createdAt).toLocaleDateString();
-  const dateLine = `${dateStr} · ${t(`record.activities.${full.trip.activity}`)}`;
-  ctx.fillText(dateLine, x, y + 96);
-  const dw = ctx.measureText(dateLine).width;
+  ctx.font = `24px ${FONT}`;
+  const activity = t(`record.activities.${full.trip.activity}`);
+  const dateStr = time?.date || new Date(full.trip.createdAt).toLocaleDateString();
+  const dateLine = time
+    ? `${dateStr} · ${activity} · ${time.start} → ${time.end}`
+    : `${dateStr} · ${activity}`;
+  const dateShown = fitText(ctx, dateLine, w - 140);
+  ctx.fillText(dateShown, x, y + 96);
+  const dw = ctx.measureText(dateShown).width;
   drawSignalChip(ctx, x + dw + 18, y + 96, signalLevel(stats.avgAcc), { on: P.accent, off: P.grid, text: P.muted });
   if (score) {
     drawScoreBadge(ctx, score, x + w - 168, y + 8, P);
@@ -72,9 +77,10 @@ function drawInfoPanel(ctx, full, stats, x, y, w, h, { score }, P) {
   }
 
   const d = fmtDistance(stats.distance, units);
+  const dur = time ? time.duration : fmtDuration(stats.duration, { compact: true });
   const cells = [
     [`${d.v}`, d.u, t('panel.distance')],
-    [fmtDuration(stats.duration, { compact: true }), '', t('panel.duration')],
+    [dur, '', t('panel.duration')],
     [`${Math.round(stats.ascent)}`, 'm', t('panel.ascent')],
     drawCaloriesCell(stats)
   ];
@@ -82,7 +88,7 @@ function drawInfoPanel(ctx, full, stats, x, y, w, h, { score }, P) {
   cells.forEach(([v, u, k], i) => {
     const cx = x + i * cw;
     ctx.fillStyle = P.accent;
-    ctx.font = `800 54px ${MONO}`;
+    ctx.font = `800 ${v.length > 6 ? 46 : 54}px ${MONO}`;
     ctx.fillText(v, cx, y + 196);
     const vw = ctx.measureText(v).width;
     ctx.fillStyle = P.muted;
@@ -91,8 +97,26 @@ function drawInfoPanel(ctx, full, stats, x, y, w, h, { score }, P) {
     ctx.fillText(k, cx, y + 232);
   });
 
+  if (places.length) {
+    const routeLabel = t('export.route');
+    const credit = '© OpenStreetMap';
+    ctx.font = `600 20px ${FONT}`;
+    ctx.fillStyle = P.faint;
+    ctx.fillText(routeLabel, x, y + 272);
+    const lw = ctx.measureText(routeLabel).width;
+    ctx.font = `15px ${FONT}`;
+    const cwCredit = ctx.measureText(credit).width;
+    ctx.font = `22px ${FONT}`;
+    ctx.fillStyle = P.muted;
+    ctx.fillText(fitText(ctx, places.join(' → '), w - lw - cwCredit - 30), x + lw + 12, y + 272);
+    ctx.font = `15px ${FONT}`;
+    ctx.fillStyle = P.faint;
+    ctx.fillText(credit, x + w - cwCredit, y + 272);
+  }
+
   const brandY = y + h - 150;
-  drawProfile(ctx, stats, x, y + 260, w, Math.max(120, brandY - 30 - (y + 260)), P);
+  const profY = y + (places.length ? 300 : 260);
+  drawProfile(ctx, stats, x, profY, w, Math.max(120, brandY - 30 - profY), P);
   drawBrandBlock(ctx, x, brandY, 150, P, w - 170);
 }
 
@@ -105,7 +129,7 @@ function drawStatCard(ctx, x, y, w, h, v, u, label, P) {
   ctx.stroke();
   ctx.textAlign = 'left';
   ctx.fillStyle = P.accent;
-  ctx.font = `800 44px ${MONO}`;
+  ctx.font = `800 ${v.length > 6 ? 38 : 44}px ${MONO}`;
   ctx.fillText(v, x + 22, y + 50);
   const vw = ctx.measureText(v).width;
   ctx.fillStyle = P.muted;
@@ -114,7 +138,7 @@ function drawStatCard(ctx, x, y, w, h, v, u, label, P) {
   ctx.fillText(label, x + 22, y + 82);
 }
 
-function drawSquarePanel(ctx, full, stats, score, W, H, mapH, P) {
+function drawSquarePanel(ctx, full, stats, score, W, H, mapH, P, time, places) {
   const units = get('units');
   const py = mapH;
   ctx.fillStyle = P.panel;
@@ -128,21 +152,39 @@ function drawSquarePanel(ctx, full, stats, score, W, H, mapH, P) {
   const name = (full.trip.name || t('record.newTripName')).slice(0, 24);
   ctx.fillText(fitText(ctx, name, W - 120 - 190), 60, py + 92);
   ctx.fillStyle = P.muted;
-  ctx.font = `24px ${FONT}`;
-  const dateStr = new Date(full.trip.createdAt).toLocaleDateString();
-  const dateLine = `${dateStr} · ${t(`record.activities.${full.trip.activity}`)}`;
-  ctx.fillText(dateLine, 60, py + 128);
-  const dw = ctx.measureText(dateLine).width;
+  ctx.font = `22px ${FONT}`;
+  const activity = t(`record.activities.${full.trip.activity}`);
+  const dateStr = time?.date || new Date(full.trip.createdAt).toLocaleDateString();
+  const dateLine = time
+    ? `${dateStr} · ${activity} · ${time.start} → ${time.end}`
+    : `${dateStr} · ${activity}`;
+  const dateShown = fitText(ctx, dateLine, W - 260);
+  ctx.fillText(dateShown, 60, py + 128);
+  const dw = ctx.measureText(dateShown).width;
   drawSignalChip(ctx, 60 + dw + 18, py + 128, signalLevel(stats.avgAcc), { on: P.accent, off: P.grid, text: P.muted });
   drawScoreBadge(ctx, score, W - 60 - 168, py + 40, P);
+
+  const credit = places.length ? '© OpenStreetMap' : '';
+  ctx.font = `15px ${FONT}`;
+  const cwCredit = credit ? ctx.measureText(credit).width : 0;
   ctx.fillStyle = P.muted;
-  ctx.font = `22px ${FONT}`;
-  ctx.fillText(fitText(ctx, score.comment, W - 120), 60, py + 164);
+  ctx.font = `20px ${FONT}`;
+  const meta = [
+    `${t('export.elapsed')} ${time ? time.duration : '--'}`,
+    places.join(' → ')
+  ].filter(Boolean).join(' · ');
+  ctx.fillText(fitText(ctx, meta, W - 120 - cwCredit - 14), 60, py + 164);
+  if (credit) {
+    ctx.fillStyle = P.faint;
+    ctx.font = `15px ${FONT}`;
+    ctx.fillText(credit, W - 60 - cwCredit, py + 164);
+  }
 
   const d = fmtDistance(stats.distance, units);
+  const dur = time ? time.duration : fmtDuration(stats.duration, { compact: true });
   const cells = [
     [d.v, d.u, t('panel.distance')],
-    [fmtDuration(stats.duration, { compact: true }), '', t('panel.duration')],
+    [dur, '', t('panel.duration')],
     [`${Math.round(stats.ascent)}`, 'm', t('panel.ascent')],
     drawCaloriesCell(stats)
   ];
@@ -171,6 +213,13 @@ export async function generatePoster(full, {
     weightKg: get('weightKg')
   });
   const score = computeTripScore(stats, full.trip.activity);
+  const time = tripTimeInfo(full);
+  let mapP = 0, placeP = 0;
+  const report = () => onProgress?.(0.9 * mapP + 0.1 * placeP);
+  const placesPromise = routePlaceNames(cropped.segments, {
+    max: 6,
+    onProgress: (p) => { placeP = p; report(); }
+  });
   const W = 1080;
   const H = size === 'square' ? 1080 : 1920;
   const canvas = document.createElement('canvas');
@@ -181,13 +230,14 @@ export async function generatePoster(full, {
     const mapH = 600;
     const m = await prepareMap({
       w: W, h: mapH, pad: 80, segments: cropped.segments, waypoints: cropped.waypoints,
-      basemapId, vectorOnly, onProgress
+      basemapId, vectorOnly, onProgress: (p) => { mapP = p; report(); }
     });
+    const places = await placesPromise;
     ctx.drawImage(m.bg, 0, 0);
-    paintTrack(ctx, m.fit, m.segments, m.waypoints, { lineWidth: 7, dotRadius: 13 });
+    paintTrack(ctx, m.fit, m.segments, m.waypoints, { lineWidth: 8, dotRadius: 13 });
     ctx.fillStyle = P.accent;
     ctx.fillRect(0, mapH - 8, W, 8);
-    drawSquarePanel(ctx, full, stats, score, W, H, mapH, P);
+    drawSquarePanel(ctx, full, stats, score, W, H, mapH, P, time, places);
     const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
     return { canvas, blob, usedVectorFallback: m.vector };
   }
@@ -195,8 +245,9 @@ export async function generatePoster(full, {
   const mapH = 1150;
   const m = await prepareMap({
     w: W, h: mapH, pad: 90, segments: cropped.segments, waypoints: cropped.waypoints,
-    basemapId, vectorOnly, onProgress
+    basemapId, vectorOnly, onProgress: (p) => { mapP = p; report(); }
   });
+  const places = await placesPromise;
   ctx.drawImage(m.bg, 0, 0);
   paintTrack(ctx, m.fit, m.segments, m.waypoints);
   ctx.fillStyle = P.accent;
@@ -205,7 +256,7 @@ export async function generatePoster(full, {
   ctx.fillRect(0, mapH, W, H - mapH);
   ctx.fillStyle = P.accent;
   ctx.fillRect(60, mapH + 36, 64, 6);
-  drawInfoPanel(ctx, full, stats, 60, mapH + 60, W - 120, H - mapH - 100, { score }, P);
+  drawInfoPanel(ctx, full, stats, 60, mapH + 60, W - 120, H - mapH - 100, { score, time, places }, P);
 
   const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
   return { canvas, blob, usedVectorFallback: m.vector };

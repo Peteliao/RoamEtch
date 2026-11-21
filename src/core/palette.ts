@@ -16,7 +16,9 @@ const DARK = {
   progressTrack: 'rgba(16,24,32,0.65)',
   badgeBg: 'rgba(43,205,167,0.12)',
   badgeEdge: 'rgba(43,205,167,0.65)',
-  lut: [[43, 205, 167], [56, 189, 248], [129, 140, 248]],
+  lut: [[16, 143, 116], [37, 99, 235], [109, 40, 217]],
+  trackHalo: 'rgba(4,16,24,0.30)',
+  trackCasing: 'rgba(4,16,24,0.82)',
   wpRing: 'rgba(16,24,32,0.8)',
   endRing: 'rgba(255,255,255,0.92)',
   edgeShade: 'rgba(0,0,0,0.35)'
@@ -37,7 +39,9 @@ const LIGHT = {
   progressTrack: 'rgba(24,37,31,0.18)',
   badgeBg: 'rgba(19,158,125,0.10)',
   badgeEdge: 'rgba(19,158,125,0.55)',
-  lut: [[19, 158, 125], [37, 99, 235], [124, 58, 237]],
+  lut: [[15, 133, 105], [37, 99, 235], [109, 40, 217]],
+  trackHalo: 'rgba(10,30,25,0.28)',
+  trackCasing: 'rgba(10,30,25,0.78)',
   wpRing: 'rgba(255,255,255,0.9)',
   endRing: 'rgba(24,37,31,0.85)',
   edgeShade: 'rgba(24,37,31,0.18)'
@@ -61,6 +65,8 @@ const CONTRAST = {
   badgeBg: 'rgba(0,105,79,0.12)',
   badgeEdge: '#00694f',
   lut: [[0, 105, 79], [0, 68, 170], [140, 0, 140]],
+  trackHalo: 'rgba(0,0,0,0.35)',
+  trackCasing: 'rgba(0,0,0,0.88)',
   wpRing: 'rgba(255,255,255,0.95)',
   endRing: '#000000',
   edgeShade: 'rgba(0,0,0,0.25)'

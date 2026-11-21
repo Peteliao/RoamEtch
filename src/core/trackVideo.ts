@@ -8,6 +8,7 @@ import { computeTripScore, drawScoreBadge, fitText } from './tripScore';
 import { canvasPalette } from './palette';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine } from './geo';
 import { loadBrandFonts, drawQr, SITE_URL, SPORT_FONT } from './brand';
+import { tripTimeInfo, routePlaceNames } from './shareInfo';
 import { estimateCalories } from './calories';
 import { get } from './settings';
 import { t } from './i18n';
@@ -166,13 +167,22 @@ export async function generateTrackVideo(full, {
   const N = stats.pointCount;
   if (N < 2) throw new Error('no-track');
   const score = computeTripScore(stats, full.trip.activity);
+  const time = tripTimeInfo(full);
   const P = canvasPalette();
   await loadBrandFonts();
 
+  let lastProg = 0;
+  const report = (p: number) => { if (p > lastProg) { lastProg = p; onProgress?.(p); } };
+  const placesPromise = routePlaceNames(cropped.segments, {
+    max: 6, signal,
+    onProgress: (p) => report(0.02 + 0.08 * p)
+  });
   const m = await prepareMap({
     w: W, h: MAP_H, pad: 80, segments: cropped.segments, waypoints: cropped.waypoints,
-    basemapId, vectorOnly, onProgress: (p) => onProgress?.(p * 0.1)
+    basemapId, vectorOnly, onProgress: (p) => report(p * 0.1)
   });
+  const places = await placesPromise;
+  report(0.1);
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
   // playback position per point: real timestamps when present, else uniform
@@ -233,14 +243,14 @@ export async function generateTrackVideo(full, {
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
   const name = (full.trip.name || t('record.newTripName')).slice(0, 20);
-  const dateStr = new Date(full.trip.createdAt).toLocaleDateString();
+  const dateStr = time?.date || new Date(full.trip.createdAt).toLocaleDateString();
   const activity = t(`record.activities.${full.trip.activity}`);
 
   function drawFrame(idx, u) {
     ctx.drawImage(m.bg, 0, 0);
     paintTrack(ctx, m.fit, render.segs, m.waypoints, {
       upto: render.origIdx ? countUpTo(render.origIdx, idx) : idx + 1,
-      lineWidth: 7, dotRadius: 13
+      lineWidth: 9, dotRadius: 14
     });
     ctx.fillStyle = P.progressTrack;
     ctx.fillRect(0, MAP_H - 8, W, 8);
@@ -258,11 +268,16 @@ export async function generateTrackVideo(full, {
     ctx.fillText(fitText(ctx, name, W - 120 - 190), 60, py0 + 92);
     ctx.fillStyle = P.muted;
     ctx.font = `24px ${FONT}`;
-    ctx.fillText(`${dateStr} · ${activity}`, 60, py0 + 130);
+    const dateLine = time ? `${dateStr} · ${activity} · ${time.start} → ${time.end}` : `${dateStr} · ${activity}`;
+    ctx.fillText(fitText(ctx, dateLine, W - 120 - 190), 60, py0 + 130);
     drawScoreBadge(ctx, score, W - 60 - 168, py0 + 52, P);
     ctx.fillStyle = P.muted;
     ctx.font = `24px ${FONT}`;
-    ctx.fillText(fitText(ctx, score.comment, W - 120), 60, py0 + 168);
+    const metaLine = [
+      time ? `${t('export.elapsed')} ${time.duration}` : '',
+      places.join(' → ')
+    ].filter(Boolean).join(' · ');
+    ctx.fillText(fitText(ctx, metaLine, W - 120), 60, py0 + 168);
 
     const d = fmtDistance(stats.series.d[idx], units);
     const sp = fmtSpeed(stats.series.speed[idx], units);
@@ -295,6 +310,11 @@ export async function generateTrackVideo(full, {
     ctx.fillStyle = P.faint;
     ctx.font = `20px ${FONT}`;
     ctx.fillText(`${t('app.name')} · ${SITE_URL}`, 60, H - 36);
+    if (places.length) {
+      ctx.textAlign = 'right';
+      ctx.fillText('© OpenStreetMap', W - 60, H - 36);
+      ctx.textAlign = 'left';
+    }
   }
 
   // Opening recap card: trip identity, route silhouette and headline stats.
@@ -323,7 +343,8 @@ export async function generateTrackVideo(full, {
     ctx.fillText(fitText(ctx, name, W - 160), W / 2, 336);
     ctx.fillStyle = P.muted;
     ctx.font = `26px ${FONT}`;
-    ctx.fillText(`${activity} · ${dateStr}`, W / 2, 388);
+    const introTime = time ? ` · ${time.start} → ${time.end}` : '';
+    ctx.fillText(`${activity} · ${dateStr}${introTime}`, W / 2, 388);
     ctx.globalAlpha = 1;
 
     ctx.fillStyle = P.accent;
@@ -378,7 +399,7 @@ export async function generateTrackVideo(full, {
     const d = fmtDistance(stats.distance, units);
     const cols = [
       [d.v, d.u, t('panel.distance')],
-      [fmtDuration(stats.duration, { compact: true }), '', t('panel.duration')],
+      [time ? time.duration : fmtDuration(stats.duration, { compact: true }), '', t('panel.duration')],
       stats.calories != null
         ? [String(Math.round(stats.calories)), 'kcal', t('panel.calories')]
         : [String(Math.round(stats.ascent)), 'm', t('panel.ascent')]
@@ -405,6 +426,15 @@ export async function generateTrackVideo(full, {
       ctx.font = `24px ${FONT}`;
       ctx.fillText(k, cx, cy + 38);
     });
+    if (places.length) {
+      ctx.textAlign = 'center';
+      ctx.fillStyle = P.muted;
+      ctx.font = `600 24px ${FONT}`;
+      ctx.fillText(fitText(ctx, `${t('export.route')}  ${places.join(' → ')}`, W - 160), W / 2, 1258);
+      ctx.fillStyle = P.faint;
+      ctx.font = `18px ${FONT}`;
+      ctx.fillText('© OpenStreetMap contributors', W / 2, 1292);
+    }
     ctx.globalAlpha = 1;
   }
 
