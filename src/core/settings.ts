@@ -72,6 +72,13 @@ export function set(key, value) {
   emit('settings:changed', { key, value });
 }
 
+/** Restore every preference to its factory default; trips and photos are untouched. */
+export function resetSettings() {
+  const fresh = { ...DEFAULTS, sim: { ...DEFAULTS.sim } };
+  persist(fresh);
+  emit('settings:changed', { reset: true });
+}
+
 export function patch(obj) {
   const s = load();
   Object.assign(s, obj);

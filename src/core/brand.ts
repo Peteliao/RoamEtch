@@ -16,22 +16,27 @@ export function loadBrandFonts() {
   return fontsLoading;
 }
 
-function drawQrLogo(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) {
-  const pad = size * 0.12;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(cx - size / 2 - pad, cy - size / 2 - pad, size + pad * 2, size + pad * 2);
-  const x = cx - size / 2;
-  const y = cy - size / 2;
+export function drawBrandMark(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  size: number,
+  colors: { bg?: string; accent?: string; amber?: string; dot?: string } = {}
+) {
+  const bg = colors.bg || '#101820';
+  const accent = colors.accent || '#2bcda7';
+  const amber = colors.amber || '#f5b942';
+  const dotFill = colors.dot || '#f2f5f7';
   const r = size * 0.24;
   ctx.beginPath();
   if (ctx.roundRect) ctx.roundRect(x, y, size, size, r);
   else ctx.rect(x, y, size, size);
-  ctx.fillStyle = '#101820';
+  ctx.fillStyle = bg;
   ctx.fill();
   ctx.save();
   ctx.translate(x, y);
   ctx.scale(size / 512, size / 512);
-  ctx.strokeStyle = '#2bcda7';
+  ctx.strokeStyle = accent;
   ctx.lineWidth = 30;
   ctx.lineCap = 'round';
   ctx.beginPath();
@@ -46,11 +51,18 @@ function drawQrLogo(ctx: CanvasRenderingContext2D, cx: number, cy: number, size:
     ctx.fillStyle = color;
     ctx.fill();
   };
-  dot(120, 392, 34, '#2bcda7');
-  dot(400, 112, 34, '#f5b942');
-  dot(216, 208, 18, '#f2f5f7');
-  dot(352, 196, 18, '#f2f5f7');
+  dot(120, 392, 34, accent);
+  dot(400, 112, 34, amber);
+  dot(216, 208, 18, dotFill);
+  dot(352, 196, 18, dotFill);
   ctx.restore();
+}
+
+function drawQrLogo(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) {
+  const pad = size * 0.12;
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(cx - size / 2 - pad, cy - size / 2 - pad, size + pad * 2, size + pad * 2);
+  drawBrandMark(ctx, cx - size / 2, cy - size / 2, size);
 }
 
 /**

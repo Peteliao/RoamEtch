@@ -1,7 +1,7 @@
 // Settings view: region (dual-profile) control, language/units/theme, recording prefs,
 // BYOK advanced sources, debug simulation switches, storage & data management.
 import { t } from '../core/i18n';
-import { get, set, patch } from '../core/settings';
+import { get, set, patch, resetSettings } from '../core/settings';
 import { on } from '../core/events';
 import { regionState, setRegionMode, runProbe } from '../core/region';
 import { storageEstimate, eraseAll, isolateDamaged } from '../core/store';
@@ -10,8 +10,10 @@ import { triggerDownload } from '../core/gpx';
 import { exportDiagLog } from '../core/diag';
 import { startPlayback, stopPlayback, isPlaying } from '../core/simulator';
 import { setLanguage, currentLang } from '../core/i18n';
+import { generatePromo, promoCaption } from '../core/promo';
+import { exportImage } from '../core/shareEnv';
 import { openInstallGuide, installSettingsInfo } from './install';
-import { el, icon, toast, confirmModal, filePicker } from './helpers';
+import { el, icon, toast, confirmModal, filePicker, modal } from './helpers';
 
 export function createSettingsView(navigate) {
   const view = el('div', { class: 'view', id: 'view-settings' });
@@ -277,6 +279,18 @@ export function createSettingsView(navigate) {
     toast(t('settings.cleared'), 'ok');
     refreshStorage();
   };
+  const resetBtn = el('button', { class: 'btn sm' }, icon('refresh', 14), t('settings.resetAction'));
+  resetBtn.onclick = async () => {
+    const ok = await confirmModal({
+      title: t('settings.resetTitle'),
+      message: t('settings.resetConfirm'),
+      confirmText: t('settings.resetAction')
+    });
+    if (!ok) return;
+    resetSettings();
+    toast(t('settings.resetDone'), 'ok', 1600);
+    setTimeout(() => location.reload(), 450);
+  };
   async function refreshStorage() {
     const est = await storageEstimate();
     storageLine.textContent = est.quota
@@ -290,8 +304,117 @@ export function createSettingsView(navigate) {
     eraseBtn);
   const dataCard = card('database', t('settings.dataBackup'), storageLine,
     el('div', { class: 'row wrap', style: { marginTop: '8px' } }, backupBtn, restoreBtn),
+    el('div', { class: 'settings-subhead' }, icon('refresh', 15), t('settings.resetTitle')),
+    el('div', { class: 'small muted', style: { margin: '-2px 0 10px' } }, t('settings.resetDesc')),
+    resetBtn,
     el('div', { class: 'sep' }),
     dangerZone);
+
+  // ---- shareable promo image ----
+  function copyPromoCaption() {
+    const text = promoCaption();
+    const fallback = () => {
+      const area = el('textarea', { readonly: true, rows: '11' });
+      area.value = text;
+      const m = modal({
+        title: t('settings.promoCopy'),
+        body: el('div', { class: 'field' }, area),
+        footer: [el('button', { class: 'btn primary', onclick: () => m.close() }, t('common.close'))]
+      });
+      setTimeout(() => { area.focus(); area.select(); }, 60);
+      toast(t('settings.promoCopyFail'), 'warn');
+    };
+    const paste = async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        toast(t('settings.promoCopied'), 'ok');
+        return;
+      } catch { /* fall back to a hidden textarea */ }
+      try {
+        const area = el('textarea', { style: { position: 'fixed', left: '-9999px', top: '0' } });
+        area.value = text;
+        document.body.append(area);
+        area.focus();
+        area.select();
+        const ok = document.execCommand('copy');
+        area.remove();
+        if (ok) {
+          toast(t('settings.promoCopied'), 'ok');
+          return;
+        }
+      } catch { /* fall through */ }
+      fallback();
+    };
+    paste();
+  }
+  function openPromoPreview(blob, filename) {
+    const file = new File([blob], filename, { type: 'image/png' });
+    const canShare = !!navigator.share && !!navigator.canShare?.({ files: [file] });
+    const url = URL.createObjectURL(blob);
+    const img = el('img', { class: 'promo-preview-img', src: url, alt: t('settings.promoPreviewAlt') });
+    const copyBtn = el('button', { class: 'btn' }, icon('copy', 16), t('settings.promoCopy'));
+    const saveBtn = el('button', { class: `btn ${canShare ? '' : 'primary'}` }, icon('download', 16), t('settings.promoDownload'));
+    const shareBtn = canShare
+      ? el('button', { class: 'btn primary' }, icon('share', 16), t('settings.promoShare'))
+      : null;
+    const m = modal({
+      title: t('settings.promoPreviewTitle'),
+      body: el('div', {},
+        el('div', { class: 'small muted promo-preview-note' }, t('settings.promoKeep')),
+        img),
+      footer: [copyBtn, saveBtn, shareBtn].filter(Boolean),
+      onClose: () => URL.revokeObjectURL(url)
+    });
+    copyBtn.onclick = copyPromoCaption;
+    saveBtn.onclick = async () => {
+      const res = await exportImage(blob, filename);
+      if (res.mode === 'longpress') {
+        img.src = res.dataUrl;
+        toast(t('settings.promoLongPress'), 'warn');
+      } else {
+        toast(t('settings.promoDownloaded'), 'ok');
+      }
+    };
+    if (shareBtn) {
+      shareBtn.onclick = async () => {
+        try {
+          await navigator.share({ title: t('promo.shareTitle'), text: promoCaption(), files: [file] });
+        } catch (e) {
+          if (e?.name !== 'AbortError') saveBtn.click();
+        }
+      };
+    }
+  }
+  const promoBtn = el('button', { class: 'btn primary' }, icon('sparkles', 15), t('settings.promoAction'));
+  let promoBusy = false;
+  promoBtn.onclick = async () => {
+    if (promoBusy) return;
+    promoBusy = true;
+    promoBtn.disabled = true;
+    promoBtn.replaceChildren(icon('refresh', 15), t('settings.promoGenerating'));
+    try {
+      const { blob, filename } = await generatePromo();
+      openPromoPreview(blob, filename);
+    } catch (err) {
+      console.error(err);
+      toast(t('settings.promoFailed'), 'err');
+    } finally {
+      promoBusy = false;
+      promoBtn.disabled = false;
+      promoBtn.replaceChildren(icon('sparkles', 15), t('settings.promoAction'));
+    }
+  };
+  const promoCard = card('sparkles', t('settings.promoTitle'),
+    el('div', { class: 'promo-hero' },
+      el('img', { src: './icons/icon-192.png', alt: '', width: '52', height: '52', loading: 'lazy' }),
+      el('div', { style: { minWidth: '0' } },
+        el('div', { class: 'promo-headline' }, t('app.slogan')),
+        el('div', { class: 'small muted' }, t('app.brandLine')))),
+    el('div', { class: 'small muted', style: { margin: '10px 0' } }, t('settings.promoDesc')),
+    promoBtn,
+    el('div', { class: 'small faint', style: { marginTop: '8px' } }, t('settings.promoKeep'))
+  );
+  promoCard.classList.add('promo-card');
 
   // ---- install ----
   const installInfo = installSettingsInfo();
@@ -316,6 +439,7 @@ export function createSettingsView(navigate) {
     section(t('settings.mapGroup')), regionCard, advCard,
     section(t('settings.meetGroup')), meetCard,
     section(t('settings.dataGroup')), dataCard,
+    section(t('settings.shareGroup')), promoCard,
     section(t('settings.installGroup')), installCard,
     section(t('settings.debugGroup')), debugCard,
     section(t('settings.aboutGroup')), aboutCard

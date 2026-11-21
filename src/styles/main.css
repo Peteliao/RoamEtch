@@ -1130,6 +1130,20 @@ html.oled-lock { color-scheme: dark; }
   0%, 100% { box-shadow: 0 0 0 0 transparent; }
   12%, 70% { box-shadow: 0 0 0 2px var(--accent), 0 10px 30px var(--accent-soft); }
 }
+.card.promo-card { background: linear-gradient(150deg, var(--accent-soft), var(--bg-card) 58%); }
+.promo-hero {
+  display: flex; align-items: center; gap: 12px; padding: 12px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: linear-gradient(135deg, var(--accent-soft), transparent 72%);
+}
+.promo-hero img { width: 52px; height: 52px; border-radius: 13px; flex: none; }
+.promo-headline { font-size: 14px; font-weight: 700; color: var(--text); }
+.promo-hero .small { margin-top: 3px; }
+.promo-preview-note { margin-bottom: 8px; }
+.promo-preview-img {
+  display: block; width: 100%; height: auto;
+  border: 1px solid var(--border); border-radius: 12px;
+}
 
 /* ---------- narrow screens ---------- */
 @media (max-width: 640px) {

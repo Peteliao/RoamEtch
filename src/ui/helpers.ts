@@ -51,6 +51,7 @@ export function icon(name, size = 20) {
     x: '<path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
     chevron: '<path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     download: '<path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3h16v-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+    copy: '<rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
     share: '<circle cx="6" cy="12" r="2.6" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="17" cy="5.5" r="2.6" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="17" cy="18.5" r="2.6" stroke="currentColor" stroke-width="2" fill="none"/><path d="m8.4 10.8 6.2-3.6m-6.2 6 6.2 3.6" stroke="currentColor" stroke-width="2"/>',
     globe: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><path d="M3 12h18M12 3c3 3.6 3 14.4 0 18-3-3.6-3-14.4 0-18Z" stroke="currentColor" stroke-width="1.6" fill="none"/>',
     layers: '<path d="m12 3 9 5-9 5-9-5 9-5Zm-9 9 9 5 9-5m-18 4 9 5 9-5" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',
