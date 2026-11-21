@@ -1,55 +1,120 @@
-# TrackMint迹刻
+# TrackMint迹刻：开源、本地优先的 GPS 轨迹记录与实时会合 PWA
 
 简体中文 | [English](README.en.md)
 
-**Track（轨迹）+ Mint（铸造/焕新）**；中文名“迹刻”谐音**“即刻”**——打开网页即刻记录，当场生成可分享的海报与轨迹视频。PWA 桌面图标短名：**TrackMint**。
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-2bcda7?style=flat-square)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-no%20framework-3178c6?style=flat-square)](https://www.typescriptlang.org/)
+[![PWA](https://img.shields.io/badge/PWA-offline--ready-5a67d8?style=flat-square)](https://peteliao.github.io/TrackMint/)
+[![Live demo](https://img.shields.io/badge/demo-peteliao.github.io%2FTrackMint-2bcda7?style=flat-square)](https://peteliao.github.io/TrackMint/)
 
-TrackMint迹刻 是一个纯前端、离线优先的行程记录与分析分享工具：无后端、无需注册，轨迹与照片只保存在本机浏览器（IndexedDB）；国内/海外地图服务自动切换，安装为 PWA 后可离线使用。
+**TrackMint迹刻**（英文名 **TrackMint**，中文谐音“即刻”，读音 jìkè）是一款免费开源、无需注册的 GPS 轨迹记录 Web 应用。它把徒步、骑行、自驾、跑步和旅行轨迹记录、海拔与速度分析、GPX 导入导出、分享海报、轨迹视频、自包含网页，以及端到端加密的实时会合放在同一个页面里。数据默认只保存在本机浏览器，安装为 PWA 后可像原生应用一样从桌面启动。
 
-**在线体验：<https://peteliao.github.io/TrackMint/>**
+**在线体验：[https://peteliao.github.io/TrackMint/](https://peteliao.github.io/TrackMint/)**<br>
+手机浏览器可直接打开；iPhone / iPad 请使用 Safari，并从分享菜单添加到主屏幕。
+
+> **快速了解**：如果你在寻找一款隐私优先的 GPX 轨迹记录器、可离线使用的徒步/骑行/自驾轨迹 App，或支持实时队友位置共享的户外 PWA，TrackMint 不需要账号、不上传行程库，打开网页即可开始记录。
 
 ## 界面预览
 
 <table>
   <tr>
-    <td align="center" width="50%"><img src="docs/screenshots/zh/record.png" width="280" alt="实时记录"><br><sub><b>实时记录</b> · 活动自动识别、GPS 信号</sub></td>
-    <td align="center" width="50%"><img src="docs/screenshots/zh/trips.png" width="280" alt="行程列表"><br><sub><b>行程管理</b> · 本地优先、批量导入</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/zh/record.png" width="280" alt="实时 GPS 轨迹记录：里程、时长、速度、海拔、爬升与 GPS 信号"><br><sub><b>实时记录</b> · 轨迹、海拔、爬升、GPS 信号与活动识别</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/zh/meet.png" width="280" alt="实时会合：加密房间、队友位置、距离与方向"><br><sub><b>实时会合</b> · 队友位置、距离方向、加密临时房间</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/zh/analysis.png" width="390" alt="行程分析"><br><sub><b>行程分析</b> · 高程/速度曲线、坡度分布</sub></td>
-    <td align="center"><img src="docs/screenshots/zh/poster.png" width="292" alt="分享海报"><br><sub><b>分享海报</b> · 主题感知、品牌二维码</sub></td>
+    <td align="center"><img src="docs/screenshots/zh/trips.png" width="280" alt="本地优先的 GPX 行程列表"><br><sub><b>行程管理</b> · 本地轨迹库、筛选、批量导入导出</sub></td>
+    <td align="center"><img src="docs/screenshots/zh/analysis.png" width="390" alt="行程分析：高程、速度、坡度、热量与地图节点"><br><sub><b>行程分析</b> · 高程/速度曲线、坡度、评分与地图节点</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/zh/share.png" width="280" alt="分享与导出"><br><sub><b>分享与隐私</b> · 隐私圈裁剪、海报与视频</sub></td>
-    <td align="center"><img src="docs/screenshots/zh/settings.png" width="280" alt="设置"><br><sub><b>个性化</b> · 中英双语、三套主题</sub></td>
+    <td align="center"><img src="docs/screenshots/zh/poster.png" width="292" alt="分享海报：轨迹地图、行程评分、高程剖面与二维码"><br><sub><b>分享海报</b> · 轨迹地图、评分、高程与品牌二维码</sub></td>
+    <td align="center"><img src="docs/screenshots/zh/share.png" width="280" alt="分享与导出：隐私圈、海报、视频、GPX 与网页"><br><sub><b>分享与隐私</b> · 隐私圈裁剪、海报视频、GPX/网页导出</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/zh/settings.png" width="280" alt="设置：中英双语、公制英制、深色浅色与高对比主题"><br><sub><b>个性化</b> · 中英双语、单位制、OLED 友好主题</sub></td>
+    <td align="center"><img src="docs/screenshots/zh/install.png" width="280" alt="安装引导：iPhone Safari 添加到主屏幕"><br><sub><b>安装到桌面</b> · iOS / Android / 桌面逐步引导</sub></td>
   </tr>
 </table>
 
-## 功能
+## 为什么选择 TrackMint
 
-- **记录**：实时轨迹、距离/时长/速度/海拔/爬升、GPS 信号强度；活动类型自动识别，结束时可命名并自动生成默认名称；支持防误触与省电锁屏模式
-- **分析**：高程剖面、速度曲线，悬停曲线地图同步定位；坡度分布、分段间隙识别、时间线与难度参考
-- **节点**：起点/终点/观光/餐饮/补给/危险等类型，可添加说明与照片；照片 EXIF 在本地剥离后再存储
-- **隐私**：起终点隐私圈裁剪、敏感节点隐藏；分享链接中的行程数据只放在 URL `#` 片段，永不经过服务器
-- **分享**：主题感知的方形/竖版海报、轨迹回顾视频、行程评分与评语、系统分享；海报与视频二维码中心带品牌标志
-- **重走行程**：沿参考轨迹跟随导航，偏离提醒；到达节点时语音播报类型、名称与说明
-- **行程管理**：GPX / GeoJSON / ZIP 批量导入导出、整库备份与恢复、损坏数据自动隔离
-- **双区自适应**：国内优先高德/天地图，海外使用 OSM/OpenTopo/Esri 等服务；按网络环境自动探测切换，也可手动选择图源
-- **坐标策略**：存储、分析、导出始终使用 WGS-84；仅当底图为 GCJ-02（如高德）时在渲染层做本地偏移，数据本身绝不污染
-- **主题与语言**：深色 / 浅色 / 阳光高对比，可跟随日出日落自动切换；界面支持简体中文与 English
-- **PWA**：离线应用外壳、瓦片缓存，可安装到桌面或主屏
+- **本地优先，数据主权归你**：行程、轨迹点、节点与照片保存在浏览器 IndexedDB 中，没有账号、没有云端行程库；可随时整库备份、恢复或导出。
+- **一个网页，完整闭环**：记录 → 分析 → 海报/视频/网页 → GPX/GeoJSON/KML，全流程在本地完成，不需要在多个工具之间搬运数据。
+- **隐私不是附加选项**：分享数据只放在 URL `#` 片段；起终点隐私圈可裁剪轨迹；照片写入前剥离 EXIF；坐标始终以 WGS-84 存储和导出。
+- **实时会合，中继只见密文**：12 位会合码同时作为端到端密钥，位置经 AES-GCM 加密后由公共 MQTT 或自建 WS 中继盲转发；房间不存入云端。
+- **国内 / 海外地图自适应**：按网络环境选择高德、天地图或 OpenStreetMap、OpenTopoMap、Esri，并允许手动切换或使用自定义瓦片；坐标偏移只在渲染层处理。
+- **开源可审计**：GPL-3.0 许可，TypeScript + 原生 DOM，无黑盒 SDK；可以自行部署到任意静态托管。
 
-## 技术栈
+**适合**：周末徒步、越野跑训练、城市骑行、长途自驾、旅行足迹、露营与车队协同、景区找人，以及需要把轨迹导入两步路、Garmin、Strava 等兼容工具的用户。
 
-- 构建：[Vite 6](https://vite.dev/) + TypeScript + 原生 ES Modules（无框架）
-- 地图：[MapLibre GL JS](https://maplibre.org/)（栅格底图，样式自包含，无外部样式/字体依赖）
-- 存储：[Dexie](https://dexie.org/)（IndexedDB）
-- 图表：[uPlot](https://github.com/leeoniya/uPlot)
-- 国际化：[i18next](https://www.i18next.com/)
-- 文件：fflate（ZIP）、exifr（EXIF 解析/剥离）
-- 离线：[vite-plugin-pwa](https://vite-pwa-org.netlify.app/)（Workbox）
+## 功能一览
 
-## 本地开发
+### 记录：打开网页就能出发
+
+- 实时显示里程、总时长、移动/静止时间、当前速度、平均速度、配速、海拔、累计爬升/下降、热量与 GPS 搜星强度。
+- 按速度自动识别徒步、自驾、骑行、跑步与旅行，也可在记录中随时修改活动类型。
+- 支持暂停/继续、记录中打点、结束后重命名；切后台或锁屏中断后自动分段续记，并识别轨迹断点。
+- 记录频率提供高精度、均衡、省电三档；支持屏幕常亮、全屏与 OLED 纯黑口袋锁，减少长时间记录的误触与耗电。
+- **重走行程**：沿参考轨迹跟随导航，偏离提醒，接近节点时语音播报类型、名称与说明。
+
+### 分析：把一条轨迹读懂
+
+- 13 项统计卡：距离、时长、平均/最高速度、配速、移动/静止时间、爬升/下降、最高/最低海拔、热量与轨迹点数。
+- 高程剖面与速度曲线联动地图；悬停曲线可在地图同步定位并查看数值。
+- 坡度分布、难度参考、分段间隙识别、时间线与沿途节点；可选活动类型后估算热量与完成质量评分。
+- 支持一键将断点两端坐标发送至公开路网服务（BRouter / OSRM）补全道路轨迹。
+
+### 分享与导出：从轨迹到作品
+
+- **图片海报**：竖版 1080×1920 与方形 1080×1080，包含轨迹地图、起止时间、评分、GPS 信号、高程剖面、路线地名与品牌二维码；根据深浅主题自适应配色。
+- **轨迹视频**：10 / 15 / 30 秒地图回放，参数同步展示，输出 MP4 或 WebM（取决于浏览器支持），可下载或调用系统分享。
+- **自包含网页**：导出一个可离线打开的单文件 HTML，内含完整统计、海拔曲线、可缩放地图、节点与照片，适合发给没有安装 App 的朋友。
+- **标准文件**：GPX（WGS-84，兼容两步路 / Garmin / Strava 等）、GeoJSON、KML；支持 GPX、XML 与 ZIP 批量导入，批量导出 ZIP，以及整库备份与恢复。
+- **轻量分享链接**：把简化轨迹与节点压缩进 1.5 KB 以内的 URL `#` 片段，对方打开即可导入，不生成公开网页，也不包含照片。
+- **隐私检查**：起终点隐私圈、敏感节点隐藏、照片 EXIF 剥离、WGS-84 导出提示集中在同一页，导出前一眼确认。
+
+### 实时会合：和同行者保持在一起
+
+- 发起 12 位会合码，或通过链接、二维码邀请队友；支持 1 / 2 / 4 / 8 小时自动结束。
+- 地图实时显示自己与队友位置、距离和方向，列表给出最近队友与信号中断状态；可为指定队友规划会合路线。
+- 会合码同时用作端到端密钥，位置在设备端加密；默认使用公共 EMQX MQTT WSS 节点，可在设置中切换为自建 WS 中继，中继只转发密文。
+- 支持暂停共享、恢复共享、发起人移除队友、重置会合码和主动结束；到期或关闭后清除本机会话。
+- 会合码与房间只存在于链接 `#` 片段和本机内存，不会写入云端；适合徒步队伍、自驾车队、露营与景区找人。
+
+> 会合依赖网络与浏览器定位。锁屏或切后台时系统可能暂停 GPS；它不是 SOS 或专业救援工具。纯前端应用无法强制恶意客户端下线，也无法删除对方设备已经收到的位置。
+
+### 安装到桌面与离线
+
+- 移动端首次访问会出现一次性安装提示，设置页也保留永久入口；iOS、Android 与桌面端分别展示对应步骤。
+- 安装为 PWA 后可从桌面图标直接打开，应用外壳与浏览过的地图瓦片会进入离线缓存。
+- 已加载的界面可离线打开，记录、统计、海报、视频和文件导出均可在本机完成；首次访问、未缓存地图区域、会合与部分地名/路网服务仍需联网。
+- 定位能力需要 HTTPS（或 localhost）与浏览器定位权限。
+
+### 地图与坐标
+
+- 国内环境优先高德街道/卫星、天地图；海外环境使用 OpenStreetMap、OpenTopoMap、Esri 影像等，并可按网络自动探测或手动选择图源。
+- 支持自定义栅格瓦片；底图 CORS 受限或离线时可降级为纯矢量绘制。
+- 存储、分析、GPX/GeoJSON/KML 导出始终使用 WGS-84；仅当底图为 GCJ-02（如高德）时在渲染层做本地偏移，原始数据不被污染。
+
+### 主题与语言
+
+- 深色（OLED 友好纯黑）、浅色、阳光高对比三套主题，可按当地日出日落自动切换。
+- 简体中文与 English 界面，支持公制/英制；语言与服务环境相互独立，出国使用不会被强制切换地图。
+
+## 安装到手机桌面
+
+1. **iPhone / iPad**：使用 Safari 打开 [在线地址](https://peteliao.github.io/TrackMint/)，点击底部「分享」，选择「添加到主屏幕」，再点「添加」。iOS 只能通过 Safari 分享菜单安装。
+2. **Android**：使用 Chrome 或 Edge 打开，打开浏览器菜单，选择「安装应用」或「添加到主屏幕」。
+3. **桌面浏览器**：Chrome / Edge 地址栏出现安装图标时点击即可；也可在应用内「设置 → 手机桌面图标」查看步骤。
+
+安装不会上传任何数据；轨迹与照片仍只保存在这台设备。删除浏览器数据或卸载 PWA 前，请先在「行程」中导出整库备份。
+
+## 快速开始
+
+直接打开在线体验即可，无需安装：
+
+**<https://peteliao.github.io/TrackMint/>**
+
+本地开发或自行部署：
 
 ```bash
 npm install
@@ -59,22 +124,109 @@ npm run build     # 类型检查 + 生产构建（dist/）
 npm run preview   # 预览生产构建
 ```
 
-> 定位能力需要 HTTPS 或 localhost；手机端请通过部署后的 HTTPS 地址访问，并在浏览器中“添加到主屏幕”以获得接近原生的体验。
+`dist/` 是完全静态的，可部署到 GitHub Pages、Cloudflare Pages、Netlify、Vercel 或任意静态服务器。项目没有业务后端，不需要数据库。
 
-## 目录
+## 技术架构
 
+- 构建：[Vite 6](https://vite.dev/) + TypeScript + 原生 ES Modules，无前端框架
+- 地图：[MapLibre GL JS](https://maplibre.org/)，栅格底图样式自包含，无外部样式/字体依赖
+- 存储：[Dexie](https://dexie.org/)（IndexedDB），统计计算使用 Web Worker
+- 图表：[uPlot](https://github.com/leeoniya/uPlot)
+- 国际化：[i18next](https://www.i18next.com/)
+- 文件与图片：fflate（ZIP）、exifr（EXIF 解析与剥离）
+- 离线：[vite-plugin-pwa](https://vite-pwa-org.netlify.app/)（Workbox）
+- 会合：12 位会合码 + HKDF-SHA-256 派生密钥 + AES-GCM 端到端加密；MQTT WSS 或自定义 WS 盲转发
+
+```text
+GPS / GPX / 照片
+       │
+       ▼
+  记录引擎 ──────► IndexedDB（Dexie） ──────► 统计 Worker
+       │                    │
+       ├── 实时地图          ├── 分析曲线 / 评分 / 断点
+       │                    ├── 海报 / 视频 / 单文件网页
+       │                    └── GPX / GeoJSON / KML / 备份
+       │
+       └── 实时会合：设备加密 ──► 公共或自建中继（仅密文）
 ```
-src/
-  core/        存储、定位引擎、坐标转换、区域探测、分享导出、重走等核心逻辑
-  ui/          外壳、记录、行程、分析、分享、设置各视图与地图封装
-  styles/      主题与组件样式
-public/icons/  PWA 图标
-docs/          README 截图
+
+## 与常见方案对比
+
+| 能力 | 典型云端运动平台 | 通用 GPS 记录器 | TrackMint |
+| --- | --- | --- | --- |
+| 账号与云端 | 通常需要账号 | 不一定 | 不需要账号，无云端行程库 |
+| 轨迹数据位置 | 平台云端 | 本机或文件 | 本机 IndexedDB，可整库备份 |
+| GPX 导入 / 导出 | 常有格式或会员限制 | 通常支持 | 导入 GPX/XML/ZIP，导出 GPX/GeoJSON/KML |
+| 高程、速度与坡度分析 | 有 | 基础或需另装工具 | 内置统计、曲线、评分与断点补全 |
+| 海报 / 视频 / 单文件网页 | 较少 | 少见 | 全部在本地生成 |
+| 实时队友位置 | 有，依赖云端账号 | 少见 | 端到端加密的临时会合房间 |
+| 国内 / 海外底图 | 视产品而定 | 多为手动配置 | 自动探测，也可手动选择 |
+| 离线能力 | 有限 | 记录可离线 | PWA 外壳 + 浏览过的瓦片 |
+| 开源可审计 | 否 | 视项目而定 | GPL-3.0，代码完全公开 |
+
+## 隐私与数据边界
+
+TrackMint 的设计原则是“数据默认留在设备上”，但这不等于所有网络请求都消失。实际边界如下：
+
+- **本机保存**：行程、轨迹点、节点、照片缩略图与设置保存在 IndexedDB / localStorage；没有账号体系、业务后端或应用内统计上报。
+- **分享链接**：行程数据、会合码只放在 URL `#` 片段。浏览器不会把 `#` 后的内容发送给服务器；但收到链接的人可以读取其中的数据，请只分享给信任对象。
+- **实时会合**：位置在设备端加密，默认公共 MQTT 中继与自建中继只能看到密文和随机主题标识，不保存房间；会合码同时是解密密钥，泄露会合码等同于泄露位置。
+- **照片**：写入存储前剥离 EXIF 位置信息；导出的海报、视频与网页只使用本地处理后的图片。
+- **外部服务请求**：底图瓦片、海拔、地名与路网服务需要联网，并会收到渲染或计算所需的坐标/视口请求及常规网络信息（如 IP）。生成海报/视频时，抽样坐标可能用于 OpenStreetMap 系逆地理编码以生成路线地名，结果缓存在本机；断点补全和会合路线规划只在你主动操作时发送必要的端点坐标。这些请求不会上传照片或整库数据。
+- **设备风险**：清除浏览器数据、卸载 PWA 或更换设备会丢失本地行程；请定期使用整库备份。设备本身被他人解锁时，浏览器中的数据也可能被读取。
+
+## 常见问题
+
+### TrackMint 是免费开源的吗？
+
+是。项目以 GPL-3.0 开源，在线版免费使用，无账号、无付费墙；你也可以把 `dist/` 部署到自己的静态托管。
+
+### 会不会上传我的轨迹？
+
+不会上传到 TrackMint 的业务服务器，因为项目没有业务后端和云端行程库。底图、海拔、地名与路网等第三方服务会收到完成对应功能所需的坐标请求；详见上面的“隐私与数据边界”。
+
+### 可以离线记录吗？
+
+可以。安装为 PWA 后应用外壳和浏览过的地图瓦片会缓存，记录、统计与导出在本机完成。未浏览过的地图区域、在线地名、会合与部分路网服务需要网络。
+
+### 支持哪些文件格式？
+
+导入支持 GPX、XML 以及包含 GPX/XML 的 ZIP；导出支持 GPX、GeoJSON、KML，另有图片海报、MP4/WebM 轨迹视频、自包含 HTML 网页和整库备份。GPX 与 GeoJSON/KML 均使用 WGS-84。
+
+### 实时会合安全吗？
+
+会合位置使用 AES-GCM 端到端加密，12 位会合码同时作为密钥；公共或自建中继只转发密文。请通过可信渠道发送会合码，不要把链接发到公开群。它不是 SOS/救援工具，也不能阻止已收到位置的人保存数据。
+
+### 锁屏后还能继续记录吗？
+
+记录时默认申请屏幕常亮，并提供 OLED 口袋锁与后台恢复分段。iOS/Android 仍可能在锁屏或切后台时暂停浏览器定位；返回后应用会重新定位并续记。不同系统与省电策略下表现不同，重要活动建议保持应用在前台。
+
+### 为什么国内和海外看到的地图不一样？
+
+TrackMint 会根据网络环境选择服务栈：国内优先高德/天地图，海外使用 OpenStreetMap、OpenTopoMap、Esri 等。也可以手动切换图源；坐标在渲染层适配 GCJ-02，存储和导出始终为 WGS-84。
+
+### 手机上如何安装？
+
+iPhone/iPad 用 Safari 打开后「分享 → 添加到主屏幕」；Android 用 Chrome/Edge 菜单中的「安装应用」或「添加到主屏幕」；桌面 Chrome/Edge 点击地址栏安装图标。应用内设置页也提供逐步引导。
+
+### 如何删除数据或迁移到新手机？
+
+在行程页删除单条行程，或在浏览器设置中清除本站数据即可删除全部本地数据。迁移请使用“整库备份/恢复”；分享链接与导出文件不包含完整照片库，不能替代整库备份。
+
+### 为什么叫“迹刻”？
+
+Track（轨迹）+ Mint（铸造/焕新），中文名“迹刻”谐音“即刻”——打开网页就能即刻记录，并把旅程刻在地图上。
+
+## 参与贡献
+
+欢迎提交 Issue 或 Pull Request：报告 bug 时请说明浏览器/系统、复现步骤与预期行为；提交代码前请运行：
+
+```bash
+npm run typecheck
+npm run build
 ```
 
-## 隐私
-
-数据仅保存在本机浏览器中，不上传、不采集；海报、视频与评分均在本地生成。分享链接的行程数据只存在于 URL `#` 片段中，不会到达任何服务器。照片在写入前会剥离 EXIF 位置信息；如需迁移数据，请使用整库备份功能。
+项目坚持本地优先、无账号、无云端行程库和 WGS-84 数据标准；新增依赖或外部服务时，请同时说明隐私影响。
 
 ## 许可
 
