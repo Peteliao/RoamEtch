@@ -154,9 +154,18 @@ export function createSettingsView(navigate) {
         textRow(t('settings.meetWsUrl'), t('settings.meetWsHint'), 'meetWsUrl', 'wss://example.workers.dev/room/{room}')
       );
     } else {
+      const resetBtn = el('button', { class: 'btn sm ghost', type: 'button' },
+        icon('refresh', 14), t('settings.meetBrokerReset'));
+      resetBtn.onclick = () => {
+        set('meetMqttUrl', 'wss://broker.emqx.io:8084/mqtt');
+        set('meetMqttPrefix', 'trackmint/v1/meet');
+        renderMeetRelayFields();
+        toast(t('settings.meetBrokerResetDone'), 'ok', 2200);
+      };
       meetRelayFields.append(
         textRow(t('settings.meetBroker'), t('settings.meetBrokerHint'), 'meetMqttUrl', 'wss://broker.emqx.io:8084/mqtt'),
-        textRow(t('settings.meetPrefix'), t('settings.meetPrefixHint'), 'meetMqttPrefix', 'trackmint/v1/meet')
+        textRow(t('settings.meetPrefix'), t('settings.meetPrefixHint'), 'meetMqttPrefix', 'trackmint/v1/meet'),
+        el('div', { class: 'row wrap', style: { marginTop: '-4px' } }, resetBtn)
       );
     }
   }

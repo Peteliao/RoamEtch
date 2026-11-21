@@ -1,4 +1,4 @@
-# TrackMint: Open-source GPS tracker, GPX trip recorder, and encrypted live meetup PWA
+# TrackMint: Open-source GPS tracker, GPX trip recorder, and encrypted live meetup chat PWA
 
 [简体中文](README.md) | English
 
@@ -7,7 +7,7 @@
 [![PWA](https://img.shields.io/badge/PWA-offline--ready-5a67d8?style=flat-square)](https://peteliao.github.io/TrackMint/)
 [![Live demo](https://img.shields.io/badge/demo-peteliao.github.io%2FTrackMint-2bcda7?style=flat-square)](https://peteliao.github.io/TrackMint/)
 
-**TrackMint** (Chinese name **迹刻**, pronounced *jìkè*) is a free, open-source GPS tracker and trip recorder that runs in your browser. Record hikes, bike rides, runs, road trips, and travel; analyze elevation and speed; import and export GPX; mint shareable posters, replay videos, and self-contained trip pages; and stay together with end-to-end encrypted live meetups. No account and no cloud trip library — your journeys stay in your own browser, and the installed PWA can open from your home screen like a native app.
+**TrackMint** (Chinese name **迹刻**, pronounced *jìkè*) is a free, open-source GPS tracker and trip recorder that runs in your browser. Record hikes, bike rides, runs, road trips, and travel; analyze elevation and speed; import and export GPX; mint shareable posters, replay videos, and self-contained trip pages; and stay together with end-to-end encrypted live meetups and ephemeral team chat. No account and no cloud trip library — your journeys stay in your own browser, and the installed PWA can open from your home screen like a native app.
 
 **Try it online: [https://peteliao.github.io/TrackMint/](https://peteliao.github.io/TrackMint/)**<br>
 Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose “Add to Home Screen”.
@@ -19,7 +19,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 <table>
   <tr>
     <td align="center" width="50%"><img src="docs/screenshots/en/record.png" width="280" alt="Live GPS track recorder with distance, duration, speed, altitude, ascent, and GPS signal"><br><sub><b>Live recording</b> · track, altitude, ascent, GPS signal, activity detection</sub></td>
-    <td align="center" width="50%"><img src="docs/screenshots/en/meet.png" width="280" alt="Live meetup with an encrypted room, teammate positions, distance, and direction"><br><sub><b>Live meetup</b> · teammate positions, distance and bearing, encrypted room</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/en/meet.png" width="280" alt="Live meetup with an encrypted room, teammate positions, distance, and direction"><br><sub><b>Live meetup</b> · teammate positions, distance and bearing, encrypted chat</sub></td>
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/en/trips.png" width="280" alt="Local-first GPX trip library"><br><sub><b>Trip library</b> · local tracks, filters, batch import and export</sub></td>
@@ -40,7 +40,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 - **Local-first, data ownership included**: trips, track points, waypoints, and photos live in your browser's IndexedDB. There is no account and no cloud trip library; back up, restore, or export whenever you want.
 - **One page, complete workflow**: record → analyze → poster/video/HTML → GPX/GeoJSON/KML. The whole pipeline runs locally, so you do not need to move files between several tools.
 - **Privacy is the default**: shared trip data lives only in the URL `#` fragment; start/end privacy circles trim sensitive track sections; photo EXIF is stripped before storage; coordinates stay in WGS-84.
-- **Live meetup with ciphertext-only relays**: a 12-character code doubles as the end-to-end key. Positions are encrypted with AES-GCM and forwarded by a public MQTT broker or your own WebSocket relay; rooms are not stored in the cloud.
+- **Live meetup and encrypted chat with ciphertext-only relays**: a 12-character code doubles as the end-to-end key. Positions and chat messages are encrypted with AES-GCM and forwarded by a public MQTT broker or your own WebSocket relay; rooms and messages are not stored in the cloud.
 - **Maps that adapt to the network**: AMap and Tianditu in mainland China; OpenStreetMap, OpenTopoMap, and Esri elsewhere — automatically selected or manually overridden, with custom raster tiles supported. GCJ-02 offsets are applied only at render time.
 - **Open source and auditable**: GPL-3.0, TypeScript with native DOM, no opaque SDKs. Deploy the static build to any host you trust.
 
@@ -76,9 +76,10 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 
 - Create a 12-character meetup code or invite teammates with a link or QR code; the session auto-ends after 1, 2, 4, or 8 hours.
 - The map shows your position and every teammate with live distance and bearing; the list highlights the nearest teammate and stale signals, and can plan a meetup route to a selected teammate.
-- The meetup code is also the end-to-end key. Positions are encrypted on-device and forwarded by the default public EMQX MQTT WSS broker or a custom WebSocket relay configured in Settings; the relay sees ciphertext only.
+- The meetup code is also the end-to-end key. Positions and chat messages are encrypted on-device and forwarded by the default public EMQX MQTT WSS broker (custom MQTT URL and topic prefix supported in Settings) or a custom WebSocket relay; the relay sees ciphertext only.
+- Chat with online teammates after joining, with an unread badge. Messages live only in this tab's memory: late joiners see no history, messages are not replayed after disconnection, and everything is cleared when the session ends.
 - Pause or resume sharing, remove a teammate on the host device, reset the meetup code, or end the session. Expiry and manual end clear the local session.
-- The code and room exist only in the link `#` fragment and local memory; no cloud room is stored. Useful for hiking groups, convoys, camping, and crowded venues.
+- The code, room, and chat exist only in the link `#` fragment and local memory; no cloud room is stored. Useful for hiking groups, convoys, camping, and crowded venues.
 
 > Live meetup needs a network connection and browser location. Mobile operating systems may pause GPS when the screen is locked or the app is backgrounded. It is not an SOS or professional rescue tool. A frontend-only app cannot force a hostile client offline or erase positions already received by another device.
 
@@ -135,7 +136,7 @@ npm run preview   # preview the production build
 - i18n: [i18next](https://www.i18next.com/)
 - Files and photos: fflate (ZIP), exifr (EXIF parsing and stripping)
 - Offline: [vite-plugin-pwa](https://vite-pwa-org.netlify.app/) (Workbox)
-- Meetup: 12-character code + HKDF-SHA-256 key derivation + AES-GCM end-to-end encryption; MQTT WSS or a custom WebSocket blind relay
+- Meetup: 12-character code + HKDF-SHA-256 key derivation + AES-GCM end-to-end encryption; positions and ephemeral chat both use MQTT WSS or a custom WebSocket blind relay
 
 ```text
 GPS / GPX / photos
@@ -159,7 +160,7 @@ GPS / GPX / photos
 | GPX import / export | Often limited by plan or format | Usually supported | Import GPX/XML/ZIP; export GPX/GeoJSON/KML |
 | Elevation, speed, slope analysis | Yes | Basic or external tools | Built in, with charts, score, and gap repair |
 | Poster / video / standalone HTML | Rare | Rare | All generated locally |
-| Live teammate locations | Yes, through cloud accounts | Uncommon | End-to-end encrypted temporary rooms |
+| Live teammate locations and chat | Yes, through cloud accounts | Uncommon | End-to-end encrypted temporary rooms and chat |
 | China / global basemaps | Depends on product | Usually manual setup | Automatic detection plus manual override |
 | Offline use | Limited | Recording often works offline | PWA shell + previously viewed map tiles |
 | Open source and auditable | No | Depends on project | GPL-3.0, full source available |
@@ -170,7 +171,7 @@ TrackMint is designed to keep data on your device, but “local-first” does no
 
 - **Stored locally**: trips, track points, waypoints, photo thumbnails, and settings live in IndexedDB/localStorage. There is no account system, business backend, or in-app analytics reporting.
 - **Share links**: trip data and meetup codes are placed only in the URL `#` fragment. Browsers do not send the fragment to servers; anyone who receives the link can read the data inside, so share only with people you trust.
-- **Live meetup**: positions are encrypted on-device. The default public MQTT relay and any custom relay see only ciphertext and a random topic identifier, and rooms are not stored. The meetup code is also the decryption key — leaking the code leaks the positions.
+- **Live meetup**: positions and chat messages are encrypted on-device. The default public MQTT relay and any custom relay see only ciphertext and a random topic identifier; rooms and messages are not stored. The meetup code is also the decryption key — leaking the code leaks positions and chat.
 - **Photos**: EXIF location data is stripped before storage; exported posters, videos, and HTML use the locally processed images only.
 - **External service requests**: basemap tiles, elevation, place-name, and routing services require network access and receive the coordinates/viewport needed to render or compute a result, plus normal network information such as your IP. When generating a poster or video, sampled coordinates may be sent to OpenStreetMap-based reverse geocoding to label the route, and the result is cached locally. Gap repair and meetup routing send endpoints only when you explicitly trigger them. These requests never upload photos or the full trip library.
 - **Device risk**: clearing browser data, uninstalling the PWA, or changing devices removes local trips — keep a full backup. Anyone who can unlock your device may be able to read browser storage.
@@ -195,7 +196,7 @@ Import: GPX, XML, and ZIP archives containing GPX/XML. Export: GPX, GeoJSON, KML
 
 ### Is live meetup secure?
 
-Positions use AES-GCM end-to-end encryption, and the 12-character meetup code doubles as the key. Public or custom relays only forward ciphertext. Send codes through a trusted channel, not a public group. TrackMint is not an SOS/rescue device and cannot stop someone who has received a position from saving it.
+Positions and chat messages use AES-GCM end-to-end encryption, and the 12-character meetup code doubles as the key. Public or custom relays only forward ciphertext; chat lives only in memory and has no replay history. Send codes through a trusted channel, not a public group. TrackMint is not an SOS/rescue device and cannot stop someone who has received a position or message from saving it.
 
 ### Does recording continue with the screen off?
 

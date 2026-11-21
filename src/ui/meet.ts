@@ -3,7 +3,7 @@
 import { t } from '../core/i18n';
 import { get, set } from '../core/settings';
 import { on } from '../core/events';
-import { meet, getMeetSnapshot } from '../core/meet';
+import { meet, getMeetSnapshot, MEET_CHAT_MAX_LEN } from '../core/meet';
 import { normalizeMeetCode, formatMeetCode } from '../core/meetLink';
 import { fmtDistance, fmtDuration } from '../core/geo';
 import { regionState } from '../core/region';
@@ -38,7 +38,12 @@ export function createMeetView(navigate) {
     class: 'iconbtn', type: 'button', title: t('meet.shareTitle'), 'aria-label': t('meet.shareTitle'),
     onclick: () => openShareSheet()
   }, icon('share'));
-  tools.append(followBtn, fitBtn, shareBtn);
+  const chatBadge = el('span', { class: 'meet-chat-badge', hidden: true });
+  const chatBtn = el('button', {
+    class: 'iconbtn meet-chat-btn', type: 'button', title: t('meet.chat'), 'aria-label': t('meet.chat'),
+    onclick: () => openChatSheet()
+  }, icon('chat'), chatBadge);
+  tools.append(chatBtn, followBtn, fitBtn, shareBtn);
 
   const empty = el('div', { class: 'meet-empty' });
   const panel = el('div', { class: 'meet-panel' });
@@ -62,6 +67,8 @@ export function createMeetView(navigate) {
   let lastCode = '';
   let panelCollapsed = false;
   let lastTickRender = 0;
+  let chatModal = null;
+  let chatRefresh: (() => void) | null = null;
 
   function initialCenter() {
     if (snap.active && snap.self?.hasFix) return [snap.self.lon, snap.self.lat] as any;
@@ -103,6 +110,128 @@ export function createMeetView(navigate) {
     ));
   }
   buildEmpty();
+
+  function updateChatBadge(s = snap) {
+    const n = Number(s?.chatUnread) || 0;
+    chatBadge.hidden = n <= 0;
+    chatBadge.textContent = n > 99 ? '99+' : String(n);
+    const label = n > 0 ? t('meet.chatUnread', { n }) : t('meet.chat');
+    chatBtn.title = label;
+    chatBtn.setAttribute('aria-label', label);
+    chatBtn.disabled = !s?.active;
+  }
+
+  function closeChat() {
+    const m = chatModal;
+    chatModal = null;
+    chatRefresh = null;
+    m?.close();
+  }
+
+  function chatEmptyState() {
+    return el('div', { class: 'meet-chat-empty' },
+      el('span', { class: 'mce-ic' }, icon('chat', 28)),
+      el('div', { class: 'mce-t' }, t('meet.chatEmpty')),
+      el('div', { class: 'mce-d' }, t('meet.chatEmptyHint')));
+  }
+
+  function chatRow(s, msg) {
+    const own = !!msg.self || msg.fromId === s.self?.id;
+    const time = new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const main = el('div', { class: 'mc-main' },
+      own ? null : el('div', { class: 'mc-name' }, msg.name),
+      el('div', { class: 'mc-bubble' }, msg.text),
+      el('div', { class: 'mc-time' }, time));
+    const row = el('div', { class: 'meet-chat-row' + (own ? ' self' : '') });
+    if (!own) {
+      row.append(el('span', { class: 'mc-avatar', style: { background: msg.color || 'var(--accent)' } },
+        String(msg.name || '?').slice(0, 1)));
+    }
+    row.append(main);
+    return row;
+  }
+
+  function openChatSheet() {
+    if (chatModal) return;
+    const initial = getMeetSnapshot();
+    if (!initial.active) return;
+    const list = el('div', { class: 'meet-chat-list', role: 'log', 'aria-live': 'polite' });
+    const note = el('div', { class: 'meet-chat-note' },
+      icon('shield', 15),
+      el('div', {}, t('meet.chatPrivacy')));
+    const input = el('textarea', {
+      class: 'meet-chat-input', rows: '1', maxlength: String(MEET_CHAT_MAX_LEN),
+      placeholder: t('meet.chatPlaceholder'), 'aria-label': t('meet.chatPlaceholder'),
+      enterkeyhint: 'send'
+    });
+    const sendBtn = el('button', {
+      class: 'meet-chat-send', type: 'button', title: t('meet.chatSend'),
+      'aria-label': t('meet.chatSend'), disabled: true
+    }, icon('send', 18));
+    const composer = el('div', { class: 'meet-chat-compose' }, input, sendBtn);
+    const body = el('div', { class: 'meet-chat' }, note, list, composer);
+    let sending = false;
+
+    const grow = () => {
+      input.style.height = 'auto';
+      input.style.height = `${Math.min(96, input.scrollHeight)}px`;
+    };
+    const syncSend = () => { sendBtn.disabled = sending || !input.value.trim(); };
+    const render = (jump = false) => {
+      const s = getMeetSnapshot();
+      const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+      list.innerHTML = '';
+      if (!s.messages.length) list.append(chatEmptyState());
+      else for (const msg of s.messages) list.append(chatRow(s, msg));
+      if (jump || nearBottom) {
+        requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+      }
+    };
+    const send = async () => {
+      if (sending) return;
+      const text = input.value;
+      if (!text.trim()) return;
+      sending = true;
+      syncSend();
+      const ok = await meet.sendMessage(text);
+      sending = false;
+      if (ok) {
+        input.value = '';
+        grow();
+        syncSend();
+        render(true);
+        input.focus();
+      } else {
+        syncSend();
+        toast(t('meet.chatSendFail'), 'err');
+      }
+    };
+
+    input.addEventListener('input', () => { grow(); syncSend(); });
+    input.addEventListener('keydown', (e: any) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+        e.preventDefault();
+        void send();
+      }
+    });
+    sendBtn.addEventListener('click', () => void send());
+
+    const m = modal({
+      title: t('meet.chatTitle'),
+      body,
+      onClose: () => {
+        chatModal = null;
+        chatRefresh = null;
+      }
+    });
+    m.box.classList.add('meet-chat-modal');
+    chatModal = m;
+    chatRefresh = () => render(false);
+    render(true);
+    meet.markChatRead();
+    updateChatBadge(getMeetSnapshot());
+    setTimeout(() => { input.focus(); grow(); }, 80);
+  }
 
   function fmtDist(m) {
     if (m == null) return '--';
@@ -330,8 +459,10 @@ export function createMeetView(navigate) {
 
   function applySnapshot(s) {
     snap = s;
+    if (!s.active) closeChat();
     view.classList.toggle('meet-active', !!s.active);
     empty.style.display = s.active ? 'none' : 'flex';
+    updateChatBadge(s);
     renderTop(s);
     renderPanel(s);
     syncMap(s);
@@ -583,12 +714,23 @@ export function createMeetView(navigate) {
       renderPanel(getMeetSnapshot());
     }
   });
+  on('meet:chat', () => {
+    const s = getMeetSnapshot();
+    updateChatBadge(s);
+    if (!chatModal) return;
+    if (s.chatUnread) meet.markChatRead();
+    chatRefresh?.();
+  });
   on('meet:ended', ({ reason }) => {
+    closeChat();
     if (reason === 'expired') toast(t('meet.expired'), 'warn', 4200);
     else if (reason === 'kicked') toast(t('meet.kickedOut'), 'warn', 4200);
     else if (reason === 'manual') toast(t('meet.left'), 'ok');
   });
-  on('meet:codeReset', () => toast(t('meet.resetDone'), 'ok', 3500));
+  on('meet:codeReset', () => {
+    closeChat();
+    toast(t('meet.resetDone'), 'ok', 3500);
+  });
 
   applySnapshot(snap);
 
@@ -597,6 +739,6 @@ export function createMeetView(navigate) {
     resize: () => { ensureMap(); map.resize(); },
     refresh: () => applySnapshot(getMeetSnapshot()),
     getMap: () => map,
-    destroy: () => { map?.destroy(); map = null; }
+    destroy: () => { closeChat(); map?.destroy(); map = null; }
   };
 }

@@ -12,6 +12,11 @@ const STALE_MS = 45_000;
 const REMOVE_MS = 10 * 60_000;
 const HEARTBEAT_MS = 12_000;
 const MAX_EXPIRY_MIN = 480;
+export const MEET_CHAT_MAX_LEN = 500;
+const MAX_CHAT_MESSAGES = 120;
+const CHAT_SEEN_LIMIT = 240;
+const CHAT_RATE_WINDOW_MS = 3_000;
+const CHAT_RATE_LIMIT = 6;
 const PEER_COLORS = ['#5aa7f0', '#f5b942', '#f26d6d', '#b07cf7', '#f28ac6', '#7ed957', '#ff9e5e', '#45d1c8'];
 
 type MeetSession = any;
@@ -27,6 +32,40 @@ function cleanName(value: any) {
 
 function fallbackName() {
   return t('meet.guestName', { n: Math.floor(10 + Math.random() * 90) });
+}
+
+function cleanChatText(value: any) {
+  const text = String(value ?? '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return Array.from(text).slice(0, MEET_CHAT_MAX_LEN).join('').trim();
+}
+
+function rememberChatId(s: MeetSession, id: string) {
+  s.chatSeen.add(id);
+  while (s.chatSeen.size > CHAT_SEEN_LIMIT) {
+    const oldest = s.chatSeen.values().next().value;
+    if (!oldest) break;
+    s.chatSeen.delete(oldest);
+  }
+}
+
+function pushChatMessage(s: MeetSession, message: any) {
+  s.messages.push(message);
+  if (s.messages.length > MAX_CHAT_MESSAGES) s.messages.splice(0, s.messages.length - MAX_CHAT_MESSAGES);
+}
+
+function chatRateOk(s: MeetSession, peerId: string, now: number) {
+  const recent = (s.chatRate.get(peerId) || []).filter((at: number) => now - at < CHAT_RATE_WINDOW_MS);
+  if (recent.length >= CHAT_RATE_LIMIT) {
+    s.chatRate.set(peerId, recent);
+    return false;
+  }
+  recent.push(now);
+  s.chatRate.set(peerId, recent);
+  return true;
 }
 
 function resolveName(value: any) {
@@ -113,6 +152,8 @@ export function getMeetSnapshot() {
       peers: [],
       self: null,
       route: null,
+      messages: [],
+      chatUnread: 0,
       expiresAt: 0,
       now: Date.now()
     };
@@ -141,6 +182,8 @@ export function getMeetSnapshot() {
       ts: s.self.ts
     },
     peers,
+    messages: s.messages.map((m: any) => ({ ...m })),
+    chatUnread: s.chatUnread,
     hostId: s.hostId,
     isHost: s.hostId === s.self.id,
     sharing: s.sharing,
@@ -393,6 +436,39 @@ async function handleIncoming(text: string) {
     return;
   }
 
+  if (msg.k === 'msg') {
+    const mid = String(msg.mid || '');
+    if (!/^[A-Za-z0-9_-]{8,32}$/.test(mid) || s.chatSeen.has(mid)) return;
+    const text = cleanChatText(msg.tx);
+    if (!text) return;
+    const id = String(msg.id || '').slice(0, 40);
+    if (!id || id === s.self.id) return;
+    if (!chatRateOk(s, id, now)) return;
+    const touched = touchPeer(msg, now);
+    if (!touched) return;
+    if (touched.isNew) {
+      if (s.hostId === s.self.id) {
+        touched.peer.hostId = s.self.id;
+        publishHi();
+      }
+      emit('meet:peerjoined', { name: touched.peer.name, id: touched.peer.id });
+      emitState();
+    }
+    rememberChatId(s, mid);
+    pushChatMessage(s, {
+      id: mid,
+      fromId: id,
+      name: touched.peer.name,
+      color: touched.peer.color,
+      text,
+      ts,
+      self: false
+    });
+    s.chatUnread = Math.min(999, s.chatUnread + 1);
+    emit('meet:chat', { unread: s.chatUnread });
+    return;
+  }
+
   if (msg.k === 'loc') {
     const lat = Number(msg.la);
     const lon = Number(msg.lo);
@@ -519,6 +595,10 @@ async function beginSession({ code, name, host, expiryMin }: { code: string; nam
     },
     hostId: host ? selfId : null,
     peers: new Map(),
+    messages: [],
+    chatUnread: 0,
+    chatSeen: new Set(),
+    chatRate: new Map(),
     relay: null,
     relayState: 'connecting',
     relayError: null,
@@ -587,6 +667,10 @@ function cleanupSession(s: MeetSession) {
   try { s.relay?.close(); } catch { /* ignore */ }
   s.relay = null;
   s.peers.clear();
+  s.messages.length = 0;
+  s.chatUnread = 0;
+  s.chatSeen.clear();
+  s.chatRate.clear();
 }
 
 export async function resetMeetCode() {
@@ -597,6 +681,10 @@ export async function resetMeetCode() {
   try { s.relay?.close(); } catch { /* ignore */ }
   s.relay = null;
   s.peers.clear();
+  s.messages.length = 0;
+  s.chatUnread = 0;
+  s.chatSeen.clear();
+  s.chatRate.clear();
   s.routeAbort?.abort();
   s.route = null;
   s.routeLoading = '';
@@ -629,6 +717,39 @@ export function setMeetSharing(on: boolean) {
   if (s.sharing) sendPresence();
   else publishState();
   emitState();
+}
+
+export async function sendMeetMessage(raw: string) {
+  const s = session;
+  if (!s) return false;
+  const text = cleanChatText(raw);
+  if (!text) return false;
+  const mid = randomMeetId();
+  const now = Date.now();
+  const ok = await publishPacket({
+    v: 1, k: 'msg', id: s.self.id, name: s.self.name, c: s.self.color,
+    mid, tx: text, ts: now
+  });
+  if (session !== s || !ok) return false;
+  rememberChatId(s, mid);
+  pushChatMessage(s, {
+    id: mid,
+    fromId: s.self.id,
+    name: s.self.name,
+    color: s.self.color,
+    text,
+    ts: now,
+    self: true
+  });
+  emit('meet:chat', { unread: s.chatUnread });
+  return true;
+}
+
+export function markMeetChatRead() {
+  const s = session;
+  if (!s || !s.chatUnread) return;
+  s.chatUnread = 0;
+  emit('meet:chat', { unread: 0 });
 }
 
 export async function sendMeetNow() {
@@ -717,6 +838,8 @@ export const meet = {
   leave: leaveMeet,
   reset: resetMeetCode,
   setSharing: setMeetSharing,
+  sendMessage: sendMeetMessage,
+  markChatRead: markMeetChatRead,
   sendNow: sendMeetNow,
   retryGeo: retryMeetGeolocation,
   kick: kickMeetPeer,
