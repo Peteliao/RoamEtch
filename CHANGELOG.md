@@ -4,6 +4,44 @@ All notable changes to TrackMint are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] - 2026-11-22
+
+### Added
+
+- Yearly footprint sharing: export a 1080×1350 summary card or a 9-second
+  1080×1920 video with the original on-device soundtrack. Both show yearly
+  aggregates only — trip count, distance, ascent, active days, and the 12-month
+  rhythm — with preview, save, native share, and copy-caption actions. Trip
+  names, tracks, coordinates, waypoints, and photos never enter the artwork.
+- Three promo designs per theme: a local-first journey card, a yearly-footprint
+  card, and an encrypted-meetup card. “Generate promo image” picks one at random
+  without immediate repeats and pairs it with the matching caption.
+- Continuous touch scrubbing on the analysis elevation and speed charts: press
+  and drag to move the map marker and live readout, while vertical page scrolling
+  remains available.
+- Unit tests for the footprint recap summary (active months, top month, units,
+  and empty years).
+
+### Changed
+
+- The OLED pocket lock is now the only on-screen mode. The artificial blackout /
+  “sleep” submode was removed because browsers suspend geolocation while the page
+  is hidden or the device is locked; the lock copy now states this plainly.
+- The analysis statistics card is more compact: four hero metrics plus nine
+  secondary metrics in a 3×3 grid (426 px → 308 px on a 390 px-wide phone).
+- Replay and footprint videos now share one MediaRecorder helper with MP4/H.264
+  preferred and a WebM fallback.
+
+### Fixed
+
+- Lifting the finger after the 1.5-second OLED unlock no longer synthesizes a
+  click on the Start button underneath, which could accidentally begin a trip.
+
+### Security
+
+- Footprint share art and captions expose annual aggregates only. Promo artwork
+  is generic and contains no trip or personal data.
+
 ## [1.7.0] - 2026-11-22
 
 ### Added

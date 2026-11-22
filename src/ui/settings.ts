@@ -10,7 +10,7 @@ import { exportDiagLog } from '../core/diag';
 import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
 import { startPlayback, stopPlayback, isPlaying } from '../core/simulator';
 import { setLanguage, currentLang } from '../core/i18n';
-import { generatePromo, promoCaption } from '../core/promo';
+import { generatePromo } from '../core/promo';
 import { exportImage } from '../core/shareEnv';
 import { openInstallGuide, installSettingsInfo } from './install';
 import { el, icon, toast, confirmModal, filePicker, modal } from './helpers';
@@ -322,8 +322,8 @@ export function createSettingsView(navigate) {
     dangerZone);
 
   // ---- shareable promo image ----
-  function copyPromoCaption() {
-    const text = promoCaption();
+  function copyPromoCaption(caption) {
+    const text = caption;
     const fallback = () => {
       const area = el('textarea', { readonly: true, rows: '11' });
       area.value = text;
@@ -358,11 +358,12 @@ export function createSettingsView(navigate) {
     };
     paste();
   }
-  function openPromoPreview(blob, filename) {
+  function openPromoPreview(blob, filename, caption, variant) {
     const file = new File([blob], filename, { type: 'image/png' });
     const canShare = !!navigator.share && !!navigator.canShare?.({ files: [file] });
     const url = URL.createObjectURL(blob);
     const img = el('img', { class: 'promo-preview-img', src: url, alt: t('settings.promoPreviewAlt') });
+    img.dataset.variant = String(variant);
     const copyBtn = el('button', { class: 'btn' }, icon('copy', 16), t('settings.promoCopy'));
     const saveBtn = el('button', { class: `btn ${canShare ? '' : 'primary'}` }, icon('download', 16), t('settings.promoDownload'));
     const shareBtn = canShare
@@ -376,7 +377,7 @@ export function createSettingsView(navigate) {
       footer: [copyBtn, saveBtn, shareBtn].filter(Boolean),
       onClose: () => URL.revokeObjectURL(url)
     });
-    copyBtn.onclick = copyPromoCaption;
+    copyBtn.onclick = () => copyPromoCaption(caption);
     saveBtn.onclick = async () => {
       const res = await exportImage(blob, filename);
       if (res.mode === 'longpress') {
@@ -389,7 +390,7 @@ export function createSettingsView(navigate) {
     if (shareBtn) {
       shareBtn.onclick = async () => {
         try {
-          await navigator.share({ title: t('promo.shareTitle'), text: promoCaption(), files: [file] });
+          await navigator.share({ title: t('promo.shareTitle'), text: caption, files: [file] });
         } catch (e) {
           if (e?.name !== 'AbortError') saveBtn.click();
         }
@@ -404,8 +405,8 @@ export function createSettingsView(navigate) {
     promoBtn.disabled = true;
     promoBtn.replaceChildren(icon('refresh', 15), t('settings.promoGenerating'));
     try {
-      const { blob, filename } = await generatePromo();
-      openPromoPreview(blob, filename);
+      const { blob, filename, caption, variant } = await generatePromo();
+      openPromoPreview(blob, filename, caption, variant);
     } catch (err) {
       console.error(err);
       toast(t('settings.promoFailed'), 'err');

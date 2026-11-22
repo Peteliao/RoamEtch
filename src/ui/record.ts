@@ -31,6 +31,27 @@ export function createRecordView() {
 
   let map = null;
   let psActive = false;
+  let unlockGuardUntil = 0;
+  let unlockReleaseTimer = 0;
+  const swallowUnlockGhostClick = (e) => {
+    if (performance.now() >= unlockGuardUntil) return;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  const releaseUnlockGuard = () => {
+    unlockGuardUntil = performance.now() + 500;
+    document.removeEventListener('pointerup', releaseUnlockGuard, true);
+    document.removeEventListener('pointercancel', releaseUnlockGuard, true);
+    clearTimeout(unlockReleaseTimer);
+  };
+  function armUnlockGuard() {
+    unlockGuardUntil = Infinity;
+    document.addEventListener('pointerup', releaseUnlockGuard, true);
+    document.addEventListener('pointercancel', releaseUnlockGuard, true);
+    clearTimeout(unlockReleaseTimer);
+    unlockReleaseTimer = window.setTimeout(releaseUnlockGuard, 6000);
+  }
+  document.addEventListener('click', swallowUnlockGhostClick, true);
   let oledThemeActive = false;
   let viewingTrip = null;
   let recoverable = null;
@@ -700,16 +721,6 @@ export function createRecordView() {
         </div>
         <div class="ps-hint">${t('record.lockHint')}</div>
       </div>
-      <div class="ps-act">
-        <div class="ps-ring ps-sleep" role="button" aria-label="${t('record.sleepHint')}">
-          <svg width="104" height="104" viewBox="0 0 104 104">
-            <circle class="bgc" cx="52" cy="52" r="46" fill="none" stroke-width="6"/>
-            <circle class="fgc" cx="52" cy="52" r="46" fill="none" stroke-width="6" stroke-linecap="round"/>
-          </svg>
-          <div class="ps-lock"><svg width="25" height="25" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 14.6A8.6 8.6 0 0 1 9.4 3.8a8.6 8.6 0 1 0 10.8 10.8Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/></svg></div>
-        </div>
-        <div class="ps-hint">${t('record.sleepHint')}</div>
-      </div>
     </div>
     <div class="ps-sub">${t('record.lockSub')}</div>`;
   ps.append(psTop, odGrid, psBottom);
@@ -727,8 +738,6 @@ export function createRecordView() {
 
   const unlockRing = psBottom.querySelector('.ps-unlock') as HTMLElement;
   const unlockFg = psBottom.querySelector('.ps-unlock .fgc') as SVGCircleElement;
-  const sleepRing = psBottom.querySelector('.ps-sleep') as HTMLElement;
-  const sleepFg = psBottom.querySelector('.ps-sleep .fgc') as SVGCircleElement;
   const psSub = psBottom.querySelector('.ps-sub') as HTMLElement;
   function updatePsSub() {
     psSub.textContent = isKeepAliveActive()
@@ -736,16 +745,6 @@ export function createRecordView() {
       : t('record.lockSub');
   }
   const RING_C = 2 * Math.PI * 46;
-  function wakePocket() {
-    if (!psActive || !ps.classList.contains('pocket')) return;
-    ps.classList.remove('pocket');
-    requestWakeLock();
-  }
-  function enterPocket() {
-    if (!psActive) return;
-    ps.classList.add('pocket');
-    requestWakeLock();
-  }
   function bindHold(ringEl, fgEl, duration, onDone) {
     let start = 0;
     let raf = 0;
@@ -778,8 +777,6 @@ export function createRecordView() {
     ringEl.addEventListener('pointerleave', reset);
   }
   bindHold(unlockRing, unlockFg, 1500, () => setPowerLock(false));
-  bindHold(sleepRing, sleepFg, 3000, enterPocket);
-  ps.addEventListener('pointerdown', (e) => { wakePocket(); e.preventDefault(); });
   ps.addEventListener('contextmenu', (e) => e.preventDefault());
 
   function renderOled(L) {
@@ -820,18 +817,21 @@ export function createRecordView() {
       document.documentElement.classList.add('oled-lock');
       ps.setAttribute('aria-hidden', 'false');
       ps.classList.add('active');
-      ps.classList.remove('pocket');
       requestWakeLock();
       renderPsTop();
       renderOled(rec.live);
       updatePsSub();
       setTimeout(() => { if (psActive) updatePsSub(); }, 1200);
     } else {
+      // A finger still on the glass can synthesize a click on whatever sits under
+      // the ring after the overlay disappears; swallow that lift click, however
+      // long the user keeps holding.
+      armUnlockGuard();
       // Restore the saved theme first, then fade the overlay to reveal it.
       leaveOledTheme();
       document.documentElement.classList.remove('oled-lock');
       ps.setAttribute('aria-hidden', 'true');
-      ps.classList.remove('active', 'pocket');
+      ps.classList.remove('active');
       if (rec.status !== 'recording') releaseWakeLock();
       mapContainer.style.display = '';
       buildMap();
@@ -1022,6 +1022,10 @@ export function createRecordView() {
     destroy: () => {
       document.removeEventListener('keydown', onKeydown);
       document.removeEventListener('visibilitychange', onVisibility);
+      document.removeEventListener('click', swallowUnlockGhostClick, true);
+      document.removeEventListener('pointerup', releaseUnlockGuard, true);
+      document.removeEventListener('pointercancel', releaseUnlockGuard, true);
+      clearTimeout(unlockReleaseTimer);
       offBroadcast();
       leaveOledTheme();
       document.documentElement.classList.remove('oled-lock');

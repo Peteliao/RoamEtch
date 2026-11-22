@@ -55,13 +55,13 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 - Live distance, total and moving time, current/average speed, pace, altitude, ascent/descent, calories, and GPS signal strength.
 - Automatic activity detection for hiking, driving, cycling, running, and travel; change the activity at any time while recording.
 - Pause/resume, add waypoints mid-recording, rename on finish, and resume as a new segment after the browser is backgrounded or the screen locks.
-- Three recording-frequency presets (high accuracy, balanced, power saving), screen wake lock, fullscreen, and a true-black OLED pocket lock to reduce accidental touches and battery drain on long trips.
+- Three recording-frequency presets (high accuracy, balanced, power saving), screen wake lock, fullscreen, and a true-black OLED pocket lock to reduce accidental touches and battery drain on long trips. Locking the screen with the power button or backgrounding the browser can still pause geolocation.
 - **Re-walk**: follow a reference track with off-route alerts and spoken waypoint type, name, and notes as you approach each node.
 
 ### Analyze: understand the route, not just the line
 
-- Thirteen metric cards covering distance, duration, average/max speed, pace, moving/stopped time, ascent/descent, max/min altitude, calories, and track points.
-- Elevation profile and speed chart linked to the map; hover the chart to locate the same point on the map.
+- A compact 13-metric card (4 hero metrics + 9 details) covering distance, duration, average/max speed, pace, moving/stopped time, ascent/descent, max/min altitude, calories, and track points.
+- Elevation profile and speed chart linked to the map; hover on desktop or press and drag on touch to locate the same point on the map and read live values.
 - Slope distribution, difficulty estimate, gap detection, timeline, and waypoints; calorie and trip-score estimates based on the selected activity.
 - **GPS quality report** built from real samples: average fix accuracy, poor-fix ratio, time gaps, and altitude jumps, summarized as a 0–100 score with practical hints.
 - One-click gap repair that sends only the endpoints of a detected gap to a public routing service (BRouter / OSRM) to rebuild the missing road track.
@@ -70,7 +70,8 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 
 - Favorite and pin trips, add up to 8 tags, search names and tags, and filter by activity or favorites; sort by recently updated, newest, longest distance, or name.
 - **Yearly footprint**: trips, distance, ascent, active days, and a 12-month distribution for each year, computed entirely from local trips.
-- Favorites, tags, and footprint stats stay on this device — nothing is uploaded.
+- **Footprint sharing**: export a 1080×1350 yearly summary card or a 9-second 1080×1920 video with the original on-device soundtrack, with preview, save, and native share. Only yearly totals are drawn — no trip names, tracks, places, waypoints, or photos.
+- Favorites, tags, footprint stats, and share artwork stay on this device — nothing is uploaded.
 
 ### Share and export: turn a track into something people open
 
@@ -81,6 +82,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 - **Verifiable backup**: the full-library ZIP carries SHA-256 content checksums. Restore shows the export time, contents, duplicate trips, and verification result, can download a snapshot of the current database first, and refuses corrupted archives. The backup is not encrypted — store it safely.
 - **Compact import link**: pack a simplified track and waypoints into a URL `#` fragment under 1.5 KB. Opening it imports the trip; it is not a public page and contains no photos.
 - **Privacy review**: start/end privacy circles, sensitive-waypoint hiding, EXIF stripping, and WGS-84 export are shown together before you share or download.
+- **Promo artwork**: generate a 1080×1350 card from Settings. Each theme ships three designs — local-first, yearly footprint, and encrypted meetup — with matching captions, picked at random without immediate repeats. Product info and a QR code only; no personal data.
 
 ### Live meetup: stay together in real time
 
@@ -241,7 +243,7 @@ Positions and chat messages use AES-GCM end-to-end encryption, and the 12-charac
 
 ### Does recording continue with the screen off?
 
-TrackMint requests a screen wake lock while recording and can resume as a new segment after interruptions, including the OLED pocket lock. iOS and Android may still pause browser geolocation when the screen is locked or the app is backgrounded; TrackMint re-locates and resumes when you return. Behavior depends on the OS and battery policy, so keep the app in the foreground for critical activities.
+TrackMint requests a screen wake lock while recording, and the OLED pocket lock keeps a true-black dashboard visible and awake without hiding the page. It cannot prevent system sleep: iOS and Android may still pause browser geolocation when the screen is locked with the power button or the app is backgrounded. TrackMint re-locates and resumes when you return; behavior depends on the OS and battery policy, so keep the app in the foreground for critical activities.
 
 ### Why do maps differ between regions?
 

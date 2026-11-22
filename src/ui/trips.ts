@@ -7,13 +7,156 @@ import { exportTripsZip, importTripFiles } from '../core/batch';
 import { startRewalk } from '../core/rewalk';
 import { importDemoTrip } from '../core/demo';
 import { buildFootprints } from '../core/footprint';
+import { generateFootprintImage, generateFootprintVideo, footprintCaption } from '../core/footprintShare';
+import { videoSupported } from '../core/videoCapture';
 import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
 import { triggerDownload } from '../core/gpx';
 import { fmtDistance, fmtDuration, simplify } from '../core/geo';
 import { get } from '../core/settings';
-import { isWeChat, wechatFileGuidance } from '../core/shareEnv';
+import { exportImage, exportFile, isWeChat, wechatFileGuidance } from '../core/shareEnv';
 import { appState, setActiveTrip } from './state';
 import { el, icon, toast, confirmModal, filePicker, filePickerMulti, modal } from './helpers';
+
+function copyFootprintCaption(fp) {
+  const text = footprintCaption(fp);
+  const fallback = () => {
+    const area = el('textarea', { readonly: true, rows: '10' });
+    area.value = text;
+    const m = modal({
+      title: t('settings.promoCopy'),
+      body: el('div', { class: 'field' }, area),
+      footer: [el('button', { class: 'btn primary', onclick: () => m.close() }, t('common.close'))]
+    });
+    setTimeout(() => { area.focus(); area.select(); }, 60);
+    toast(t('settings.promoCopyFail'), 'warn');
+  };
+  const paste = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(t('settings.promoCopied'), 'ok');
+      return;
+    } catch { /* fall back to a hidden textarea */ }
+    try {
+      const area = el('textarea', { style: { position: 'fixed', left: '-9999px', top: '0' } });
+      area.value = text;
+      document.body.append(area);
+      area.focus();
+      area.select();
+      const ok = document.execCommand('copy');
+      area.remove();
+      if (ok) { toast(t('settings.promoCopied'), 'ok'); return; }
+    } catch { /* fall through */ }
+    fallback();
+  };
+  paste();
+}
+
+function openFootprintImagePreview(result, fp) {
+  const file = new File([result.blob], result.filename, { type: 'image/png' });
+  const canShare = !!navigator.share && !!navigator.canShare?.({ files: [file] });
+  const url = URL.createObjectURL(result.blob);
+  const img = el('img', { class: 'promo-preview-img', src: url, alt: t('trips.footprintImageTitle') });
+  const copyBtn = el('button', { class: 'btn' }, icon('copy', 16), t('trips.footprintCopy'));
+  const saveBtn = el('button', { class: `btn ${canShare ? '' : 'primary'}` }, icon('download', 16), t('settings.promoDownload'));
+  const shareBtn = canShare
+    ? el('button', { class: 'btn primary' }, icon('share', 16), t('export.shareImage'))
+    : null;
+  const m = modal({
+    title: t('trips.footprintImageTitle'),
+    body: el('div', {},
+      el('div', { class: 'small muted promo-preview-note' }, t('trips.footprintShareHint')),
+      img),
+    footer: [copyBtn, saveBtn, shareBtn].filter(Boolean),
+    onClose: () => URL.revokeObjectURL(url)
+  });
+  copyBtn.onclick = () => copyFootprintCaption(fp);
+  saveBtn.onclick = async () => {
+    const res = await exportImage(result.blob, result.filename);
+    if (res.mode === 'longpress') {
+      img.src = res.dataUrl;
+      toast(t('settings.promoLongPress'), 'warn');
+    } else {
+      toast(t('settings.promoDownloaded'), 'ok');
+    }
+  };
+  if (shareBtn) {
+    shareBtn.onclick = async () => {
+      try {
+        await navigator.share({ title: t('trips.footprintTitle'), text: footprintCaption(fp), files: [file] });
+      } catch (e) {
+        if (e?.name !== 'AbortError') saveBtn.click();
+      }
+    };
+  }
+}
+
+function openFootprintVideoPreview(fp) {
+  const caption = footprintCaption(fp);
+  const controller = new AbortController();
+  let closed = false;
+  let url = null;
+  let blob = null;
+  const stage = el('div', { class: 'fp-video-stage' },
+    el('div', { class: 'fp-spinner' }),
+    el('div', { class: 'small muted fp-video-progress' }, t('trips.footprintGenerating', { p: 0 })));
+  const note = el('div', { class: 'small muted promo-preview-note' }, t('trips.footprintVideoKeep'));
+  const copyBtn = el('button', { class: 'btn', style: { display: 'none' } }, icon('copy', 16), t('trips.footprintCopy'));
+  const saveBtn = el('button', { class: 'btn', style: { display: 'none' } }, icon('download', 16), t('trips.footprintSaveVideo'));
+  const shareBtn = el('button', { class: 'btn primary', style: { display: 'none' } }, icon('share', 16), t('export.shareVideo'));
+  const m = modal({
+    title: t('trips.footprintVideoTitle'),
+    body: el('div', {}, note, stage),
+    footer: [copyBtn, saveBtn, shareBtn],
+    onClose: () => {
+      closed = true;
+      controller.abort();
+      if (url) URL.revokeObjectURL(url);
+    }
+  });
+  copyBtn.onclick = () => copyFootprintCaption(fp);
+  saveBtn.onclick = () => {
+    if (!blob) return;
+    exportFile(blob, `trackmint-footprint-${fp.year}-${Date.now()}.${blob.type.includes('mp4') ? 'mp4' : 'webm'}`);
+    toast(t('export.exported'), 'ok');
+  };
+  shareBtn.onclick = async () => {
+    if (!blob) return;
+    const file = new File([blob], `trackmint-footprint-${fp.year}.${blob.type.includes('mp4') ? 'mp4' : 'webm'}`, { type: blob.type });
+    try {
+      await navigator.share({ title: t('trips.footprintTitle'), text: caption, files: [file] });
+    } catch (e) {
+      if (e?.name !== 'AbortError') saveBtn.click();
+    }
+  };
+
+  generateFootprintVideo(fp, {
+    signal: controller.signal,
+    onProgress: (p) => {
+      if (!closed) stage.querySelector('.fp-video-progress').textContent = t('trips.footprintGenerating', { p: Math.round(p * 100) });
+    }
+  }).then((result) => {
+    if (closed) return;
+    blob = result.blob;
+    url = URL.createObjectURL(blob);
+    const video = el('video', {
+      controls: true, playsinline: true, autoplay: true, loop: true, muted: true,
+      poster: result.cover || '', src: url, class: 'fp-video'
+    });
+    stage.replaceChildren(video);
+    note.textContent = t('trips.footprintVideoReady', { size: (blob.size / 1048576).toFixed(1) + ' MB' });
+    copyBtn.style.display = '';
+    saveBtn.style.display = '';
+    if (navigator.share && navigator.canShare?.({ files: [new File([blob], 'a', { type: blob.type })] })) {
+      shareBtn.style.display = '';
+    }
+  }).catch((err) => {
+    if (err?.name === 'AbortError' || closed) return;
+    console.error(err);
+    note.textContent = err?.message === 'video-unsupported' ? t('export.videoUnsupported') : '';
+    stage.replaceChildren(el('div', { class: 'fp-video-fail' }, icon('warn', 22), el('div', {}, t('trips.footprintVideoFailed'))));
+    toast(t('trips.footprintVideoFailed'), 'err');
+  });
+}
 
 export function createTripsView(navigate) {
   const view = el('div', { class: 'view', id: 'view-trips' });
@@ -218,6 +361,27 @@ export function createTripsView(navigate) {
     yearSel.value = String(fp.year);
     yearSel.onchange = () => { footprintYear = Number(yearSel.value); renderFootprint(); };
     const max = Math.max(1, ...fp.months.map((m) => m.distance));
+    const imageBtn = el('button', { class: 'btn sm' }, icon('photo', 14), t('trips.footprintShareImage'));
+    imageBtn.onclick = async () => {
+      imageBtn.disabled = true;
+      imageBtn.replaceChildren(icon('refresh', 14), t('common.loading'));
+      try {
+        const result = await generateFootprintImage(fp);
+        openFootprintImagePreview(result, fp);
+      } catch (err) {
+        console.error(err);
+        toast(t('trips.footprintImageFailed'), 'err');
+      } finally {
+        imageBtn.disabled = false;
+        imageBtn.replaceChildren(icon('photo', 14), t('trips.footprintShareImage'));
+      }
+    };
+    const videoOk = videoSupported();
+    const videoBtn = el('button', {
+      class: 'btn sm', disabled: !videoOk,
+      title: videoOk ? '' : t('export.videoUnsupported')
+    }, icon('play', 14), t('trips.footprintShareVideo'));
+    if (videoOk) videoBtn.onclick = () => openFootprintVideoPreview(fp);
     footprintBody.innerHTML = '';
     footprintBody.append(
       el('div', { class: 'footprint-head' },
@@ -235,7 +399,10 @@ export function createTripsView(navigate) {
             el('div', { class: 'bar-wrap' },
               el('div', { class: 'bar' + (m.month === new Date().getMonth() + 1 && fp.year === new Date().getFullYear() ? ' current' : ''), style: { height: `${Math.round((m.distance / max) * 100)}%` } })),
             el('span', { class: 'm' }, String(m.month)));
-        })));
+        })),
+      el('div', { class: 'footprint-actions' },
+        imageBtn, videoBtn,
+        el('div', { class: 'fp-share-note small faint' }, icon('shield', 12), t('trips.footprintShareHint'))));
     footprintCard.style.display = '';
   }
 

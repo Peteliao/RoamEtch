@@ -19,7 +19,7 @@ fullscreen        │                 ├── trips / segments / chunks      m
 visibility        │                 ├── waypoints / media / elevCache  trips
                   │                 └── settings (localStorage)        analysis
                   ├── rewalk / simulator                            export
-                  ├── poster / video / standalone HTML              settings
+                  ├── poster / replay + footprint video / promo     settings
                   └── meetup crypto ──► MQTT WSS or WS relay
 ```
 
@@ -46,11 +46,14 @@ Key principles:
 | `src/core/recorder.ts` | GPS watch, fix validation, gap segmentation, incremental persistence, live stats, wake lock and keep-alive. |
 | `src/worker/compute.worker.ts` | Statistics, simplification, and coordinate transforms off the main thread, with a synchronous fallback. |
 | `src/ui/map.ts` | MapLibre setup, region-specific raster styles, tile providers, and GCJ-02 render adapter. |
-| `src/ui/analysis.ts` | Metric cards, elevation/speed charts, gap repair, GPS quality report, timeline and waypoints. |
-| `src/ui/trips.ts` | Trip library: favorites, tags, search, filters, sorting, yearly footprint, import/export, backup entry points. |
+| `src/ui/analysis.ts` | Compact metric card (4 hero + 9 details), elevation/speed charts with hover and touch scrubbing, gap repair, GPS quality report, timeline and waypoints. |
+| `src/ui/trips.ts` | Trip library: favorites, tags, search, filters, sorting, yearly footprint and its image/video share preview, import/export, backup entry points. |
 | `src/ui/backupFlow.ts` | Shared backup/restore UX: download, restore preview, integrity status, duplicate strategy, pre-restore snapshot. |
 | `src/ui/export.ts` | Posters, replay videos, standalone HTML, share link, privacy review. |
-| `src/core/trackVideo.ts` | Realtime canvas replay, intro/outro cards, MediaRecorder capture, and muxing the generated music track. |
+| `src/core/trackVideo.ts` | Realtime canvas replay, intro/outro cards, and muxing the generated music track. |
+| `src/core/footprintShare.ts` | Aggregate-only yearly footprint artwork: 1080×1350 image and 9-second 1080×1920 video with original music. |
+| `src/core/videoCapture.ts` | Shared MediaRecorder support check and MIME/bitrate selection (MP4/H.264 preferred, WebM fallback). |
+| `src/core/promo.ts` | Generic promo artwork: three designs per theme, immediate-repeat avoidance, and matching captions. |
 | `src/core/music.ts` | Four original procedural loops: composition data, Web Audio synthesis, seamless tail wrap, random/manual selection, and MediaStream output. |
 | `src/core/backup.ts` | Backup format v2: ZIP manifest, payload digest, per-media checksums, inspect/restore. |
 | `src/core/integrity.ts` | Deterministic JSON serialization and SHA-256 helpers. |
@@ -102,8 +105,11 @@ Backups serialize every table plus binary media into a `.trip` ZIP:
 4. Accepted points are buffered and flushed to `trackChunks` in small batches.
    Live distance, ascent, speed, and accuracy are updated incrementally.
 5. Wake lock, keep-alive audio, recorder locks, and visibility handling reduce the
-   chance of the browser suspending a long recording. Operating-system limits still
-   apply; recording is not guaranteed with the screen off on every device.
+   chance of the browser suspending a long recording. The OLED pocket lock is a
+   true-black dashboard that stays in the foreground and adds no hidden/blackout
+   mode, because a hidden page lets browsers suspend geolocation. Operating-system
+   limits still apply; recording is not guaranteed with the screen off on every
+   device.
 6. Finishing writes `statsCache` through the statistics worker so the trip list and
    footprint can render without recomputing every track.
 
@@ -114,8 +120,10 @@ time, speed, pace, ascent/descent, altitude range, calories, and a difficulty /
 quality score. The compute worker runs statistics, simplification, and coordinate
 transforms; `workerBridge.ts` falls back to synchronous execution if the worker
 cannot start. `analysis.ts` renders uPlot elevation and speed charts and links
-hover position to the MapLibre marker. `gpsQuality.ts` evaluates the raw samples
-that produced the track, not a synthetic model.
+hover position to the MapLibre marker. Touch uses pointer capture for continuous
+scrubbing, while `touch-action: pan-y` on the plot leaves vertical page scrolling
+intact. `gpsQuality.ts` evaluates the raw samples that produced the track, not a
+synthetic model.
 
 ## Maps and coordinates
 
@@ -138,6 +146,12 @@ caches are bounded per provider and evicted on quota errors.
   into its start for seamless repetition; the user chooses a track or leaves the
   default random selection. The audio track is muxed with the canvas stream, so
   no external music file or network request is involved.
+- Yearly footprint sharing builds a 1080×1350 card or a 9-second 1080×1920 video
+  from aggregate totals only. Names, track geometry, coordinates, waypoints, and
+  photos are never passed to the artwork or its caption.
+- Promo artwork is generic product art: three layouts per theme (local-first,
+  yearly footprint, encrypted meetup), randomly selected without an immediate
+  repeat, with a caption that matches the chosen layout. It reads no trip data.
 - Privacy checks (start/end circles, hidden waypoints, EXIF stripping) are shown
   before sharing or export.
 
@@ -163,7 +177,8 @@ worker if an old build appears.
 
 Vitest covers pure modules: coordinates, geo math, statistics, privacy cropping,
 GPX/KML/GeoJSON, compact links, demo data, meetup crypto, backup integrity,
-footprints, GPS quality, and procedural video-music composition. GitHub Actions
+footprint aggregation and recap summaries, GPS quality, and procedural
+video-music composition. GitHub Actions
 runs typecheck, the full test suite, the production build, and a separate relay
 test job. The Pages workflow runs the same tests before publishing `dist/`.
 

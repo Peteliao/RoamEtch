@@ -1,4 +1,6 @@
 // Year / month footprint aggregation for the local trip library.
+import { fmtAltitude, fmtDistance } from './geo';
+
 function startDate(trip) {
   const d = new Date(trip?.createdAt);
   return isNaN(d.getTime()) ? null : d;
@@ -50,4 +52,22 @@ export function buildFootprints(trips, now = new Date()) {
     months: Array.from({ length: 12 }, (_, i) => ({ month: i + 1, trips: 0, distance: 0, ascent: 0, days: 0 }))
   };
   return { years: list, current };
+}
+
+export function recapFootprint(fp, units = 'metric') {
+  const activeMonths = fp.months.filter((m) => m.trips > 0).length;
+  let top = null;
+  for (const m of fp.months) {
+    if (m.trips > 0 && (!top || m.distance > top.distance)) top = m;
+  }
+  return {
+    year: fp.year,
+    trips: fp.trips,
+    days: fp.days,
+    distance: fmtDistance(fp.distance, units),
+    ascent: fmtAltitude(fp.ascent, units),
+    activeMonths,
+    topMonth: top,
+    maxMonthDistance: Math.max(1, ...fp.months.map((m) => m.distance))
+  };
 }

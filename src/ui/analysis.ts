@@ -26,8 +26,7 @@ export function createAnalysisView() {
     el('div', { class: 'search-bar', style: { margin: '10px 0 14px' } }, icon('analysis', 18), tripSel));
   tripSel.onchange = async () => { if (tripSel.value) await setActiveTrip(tripSel.value); };
 
-  const statsBox = el('div', { class: 'stat-grid' });
-  const diffBox = el('div', {});
+  const statsBox = el('div', { class: 'stat-summary card' });
   const qualityBox = el('div', {});
   const advisory = el('div', {});
   const gapBody = el('div', {});
@@ -47,7 +46,7 @@ export function createAnalysisView() {
   const tlCard = el('div', { class: 'card' }, el('h3', {}, t('analysis.timeline')), el('div', { id: 'timeline' }));
   const disclaimer = el('div', { class: 'small faint', style: { padding: '4px 2px 20px' } }, '⚠ ' + t('analysis.disclaimer'));
 
-  scroll.append(head, advisory, statsBox, diffBox, qualityBox, gapCard, miniMapBox, chartCard, slopeCard, segCard, tlCard, disclaimer);
+  scroll.append(head, advisory, statsBox, qualityBox, gapCard, miniMapBox, chartCard, slopeCard, segCard, tlCard, disclaimer);
 
   let miniMap = null;
   let chart = null;
@@ -76,8 +75,14 @@ export function createAnalysisView() {
     tripSel.value = appState.activeTripId || '';
   }
 
-  function statBox(label, valueHtml, primary = false) {
-    return el('div', { class: 'stat-box' + (primary ? ' primary' : '') }, el('div', { class: 'v', html: valueHtml }), el('div', { class: 'k' }, label));
+  function heroStat(label, valueHtml, accent = false) {
+    return el('div', { class: 'stat-hero-item' + (accent ? ' accent' : '') },
+      el('div', { class: 'v', html: valueHtml }),
+      el('div', { class: 'k' }, label));
+  }
+
+  function miniStat(label, value) {
+    return el('div', { class: 'stat-mini' }, el('div', { class: 'v' }, value), el('div', { class: 'k' }, label));
   }
 
   function renderQuality() {
@@ -111,7 +116,6 @@ export function createAnalysisView() {
   function renderStats(stats) {
     const units = get('units');
     statsBox.innerHTML = '';
-    diffBox.innerHTML = '';
     if (!stats) return;
     const d = fmtDistance(stats.distance, units);
     const sp = fmtSpeed(stats.avgSpeed, units);
@@ -119,28 +123,34 @@ export function createAnalysisView() {
     const pc = fmtPace(stats.avgSpeed, units);
     const ha = fmtAltitude(stats.maxAlt, units);
     const la = fmtAltitude(stats.minAlt, units);
-    statsBox.append(
-      statBox(t('analysis.distance'), `${d.v}<small> ${d.u}</small>`, true),
-      statBox(t('analysis.duration'), fmtDuration(stats.duration), true),
-      statBox(t('analysis.avgSpeed'), `${sp.v}<small> ${sp.u}</small>`, true),
-      statBox(t('analysis.ascent'), `↑${Math.round(stats.ascent)}<small> m</small>`, true),
-      statBox(t('analysis.movingTime'), fmtDuration(stats.movingMs, { compact: true })),
-      statBox(t('analysis.stillTime'), fmtDuration(stats.stillMs, { compact: true })),
-      statBox(t('analysis.maxSpeed'), `${mx.v}<small> ${mx.u}</small>`),
-      statBox(t('analysis.avgPace'), `${pc.v}<small> ${pc.u}</small>`),
-      statBox(t('analysis.descent'), `↓${Math.round(stats.descent)}<small> m</small>`),
-      statBox(t('analysis.calories'), stats.calories != null ? `${Math.round(stats.calories)}<small> kcal</small>` : '—'),
-      statBox(t('analysis.maxAlt'), `${ha.v}<small> ${ha.u}</small>`),
-      statBox(t('analysis.minAlt'), `${la.v}<small> ${la.u}</small>`),
-      statBox(t('analysis.points'), `${stats.pointCount}<small> / ${stats.segCount} ${t('analysis.segShort')}</small>`)
-    );
-    // difficulty (indicative only)
+    const asc = fmtAltitude(stats.ascent, units);
+    const desc = fmtAltitude(stats.descent, units);
     const score = Math.max(1, Math.min(5, Math.round(stats.distance / 8000 + stats.ascent / 600)));
-    const diff = el('div', { class: 'card', style: { display: 'flex', alignItems: 'center', gap: '10px' } },
-      el('span', {}, t('analysis.difficulty')),
-      el('span', { style: { color: 'var(--warn)', letterSpacing: '2px' } }, '★'.repeat(score) + '☆'.repeat(5 - score)),
-      el('span', { class: 'small faint' }, t('analysis.difficultyNote')));
-    diffBox.append(diff);
+    statsBox.append(
+      el('div', { class: 'stat-hero' },
+        heroStat(t('analysis.distance'), `${d.v}<small>${d.u}</small>`, true),
+        heroStat(t('analysis.duration'), fmtDuration(stats.duration)),
+        heroStat(t('analysis.avgSpeed'), `${sp.v}<small>${sp.u}</small>`),
+        heroStat(t('analysis.ascent'), `↑${asc.v}<small>${asc.u}</small>`)),
+      el('div', { class: 'stat-more' },
+        el('div', { class: 'stat-more-row' },
+          miniStat(t('analysis.movingTime'), fmtDuration(stats.movingMs, { compact: true })),
+          miniStat(t('analysis.stillTime'), fmtDuration(stats.stillMs, { compact: true })),
+          miniStat(t('analysis.maxSpeed'), `${mx.v} ${mx.u}`)),
+        el('div', { class: 'stat-more-row' },
+          miniStat(t('analysis.avgPace'), `${pc.v} ${pc.u}`),
+          miniStat(t('analysis.descent'), `↓${desc.v}${desc.u}`),
+          miniStat(t('analysis.calories'), stats.calories != null ? `${Math.round(stats.calories)} kcal` : '—')),
+        el('div', { class: 'stat-more-row' },
+          miniStat(t('analysis.maxAlt'), `${ha.v} ${ha.u}`),
+          miniStat(t('analysis.minAlt'), `${la.v} ${la.u}`),
+          miniStat(t('analysis.points'), String(stats.pointCount)))),
+      el('div', { class: 'stat-foot' },
+        el('span', { class: 'stat-diff' }, t('analysis.difficulty'),
+          el('span', { class: 'stat-stars' }, '★'.repeat(score) + '☆'.repeat(5 - score))),
+        el('span', { class: 'stat-note' }, t('analysis.difficultyNote')),
+        el('span', { class: 'stat-seg' }, `${stats.segCount} ${t('analysis.segShort')}`))
+    );
     // fatigue advisory for driving
     advisory.innerHTML = '';
     const act = appState.activeTripFull?.trip?.activity;
@@ -177,6 +187,33 @@ export function createAnalysisView() {
       if (idx == null || !flatPoints[idx] || !miniMap) { miniMap?.clearHover(); return; }
       miniMap.showHover(flatPoints[idx].lat, flatPoints[idx].lon, valueLabel ? valueLabel(idx) : null);
     };
+  }
+
+  function attachScrub(u) {
+    const over = u.over;
+    let pointerId = null;
+    const scrub = (e) => {
+      const rect = over.getBoundingClientRect();
+      const left = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+      const top = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+      u.setCursor({ left, top });
+    };
+    over.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse') return;
+      pointerId = e.pointerId;
+      try { over.setPointerCapture(pointerId); } catch { /* capture unsupported */ }
+      scrub(e);
+    });
+    over.addEventListener('pointermove', (e) => {
+      if (e.pointerId === pointerId) scrub(e);
+    });
+    const end = (e) => {
+      if (e.pointerId !== pointerId) return;
+      pointerId = null;
+      try { over.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    };
+    over.addEventListener('pointerup', end);
+    over.addEventListener('pointercancel', end);
   }
 
   function renderCharts(stats) {
@@ -235,6 +272,7 @@ export function createAnalysisView() {
       };
       chart = new uPlot(opts, [xs, speeds], chartWrap);
     }
+    attachScrub(chart);
     renderSlope(stats);
   }
 
@@ -362,7 +400,6 @@ export function createAnalysisView() {
     const stats = appState.stats;
     if (!full) {
       statsBox.innerHTML = '';
-      diffBox.innerHTML = '';
       qualityBox.innerHTML = '';
       advisory.innerHTML = '';
       gapCard.style.display = 'none';

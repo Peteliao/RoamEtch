@@ -14,6 +14,9 @@ import { estimateCalories } from './calories';
 import { get } from './settings';
 import { t } from './i18n';
 import { createMusicSession } from './music';
+import { makeVideoRecorder, videoSupported } from './videoCapture';
+
+export { videoSupported };
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
 const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
@@ -21,38 +24,6 @@ const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
 const W = 1080, H = 1920, MAP_H = 1080;
 const INTRO_MS = 2600, OUTRO_MS = 3400, FADE_MS = 500;
 const NODE_LEAD_MS = 500, NODE_SHOW_MS = 2600;
-
-export const videoSupported = () =>
-  typeof MediaRecorder !== 'undefined' && typeof HTMLCanvasElement !== 'undefined' && !!HTMLCanvasElement.prototype.captureStream;
-
-function pickMime(hasAudio = false) {
-  const candidates = hasAudio ? [
-    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
-    'video/mp4',
-    'video/webm;codecs=vp9,opus',
-    'video/webm;codecs=vp8,opus',
-    'video/webm'
-  ] : [
-    'video/mp4;codecs=avc1.42E01E',
-    'video/mp4',
-    'video/webm;codecs=vp9',
-    'video/webm;codecs=vp8',
-    'video/webm'
-  ];
-  return candidates.find((m) => MediaRecorder.isTypeSupported(m)) || '';
-}
-
-function makeRecorder(stream, hasAudio) {
-  const mime = pickMime(hasAudio);
-  const options: MediaRecorderOptions = { videoBitsPerSecond: 6_000_000, audioBitsPerSecond: 128_000 };
-  if (mime) options.mimeType = mime;
-  try {
-    return new MediaRecorder(stream, options);
-  } catch {
-    try { return new MediaRecorder(stream, { videoBitsPerSecond: 6_000_000 }); }
-    catch { return new MediaRecorder(stream); }
-  }
-}
 
 // Heavy tracks drop capture frames below 30fps, which truncates the recorded
 // timeline; stroke a decimated path instead (stats stay full-resolution).
@@ -723,7 +694,7 @@ export async function generateTrackVideo(full, {
   const stream = audioTrack
     ? new MediaStream([...canvasStream.getVideoTracks(), audioTrack])
     : canvasStream;
-  const rec = makeRecorder(stream, !!audioTrack);
+  const rec = makeVideoRecorder(stream, !!audioTrack);
   const chunks = [];
   rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
   const stopped = new Promise<void>((res) => { rec.onstop = () => res(); });

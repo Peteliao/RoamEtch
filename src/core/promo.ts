@@ -27,6 +27,58 @@ function headlineSize(ctx: CanvasRenderingContext2D, lines: string[], maxW: numb
   return 60;
 }
 
+const VARIANT_COUNT = 3;
+let lastVariant = -1;
+
+export function pickPromoVariant(random = Math.random) {
+  const pool = [];
+  for (let i = 0; i < VARIANT_COUNT; i++) if (i !== lastVariant) pool.push(i);
+  const next = pool[Math.min(pool.length - 1, Math.floor(random() * pool.length))];
+  lastVariant = next;
+  return next;
+}
+
+function drawHeroCopy(ctx: CanvasRenderingContext2D, P, highContrast: boolean, copy: { eyebrow: string; l1: string; l2: string; s1: string; s2?: string }) {
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = P.accent;
+  ctx.font = `700 20px ${FONT}`;
+  ctx.fillText(copy.eyebrow, M, 220);
+
+  const headPx = headlineSize(ctx, [copy.l1, copy.l2], W - M * 2);
+  ctx.fillStyle = P.text;
+  ctx.font = `800 ${headPx}px ${FONT}`;
+  ctx.fillText(copy.l1, M, 314);
+  const hw = ctx.measureText(copy.l2).width;
+  if (highContrast) {
+    roundRectPath(ctx, M - 18, 332, hw + 36, 108, 4);
+    ctx.fillStyle = P.accent;
+    ctx.fill();
+    ctx.fillStyle = P.panel;
+    ctx.fillText(copy.l2, M, 410);
+    ctx.beginPath();
+    ctx.arc(M + hw + 40, 385, 9, 0, Math.PI * 2);
+    ctx.fillStyle = P.amber;
+    ctx.fill();
+  } else {
+    ctx.fillStyle = P.accent;
+    ctx.fillText(copy.l2, M, 410);
+    ctx.beginPath();
+    ctx.arc(M + hw + 22, 385, 9, 0, Math.PI * 2);
+    ctx.fillStyle = P.amber;
+    ctx.fill();
+  }
+
+  ctx.fillStyle = P.muted;
+  ctx.font = `500 28px ${FONT}`;
+  ctx.fillText(fitText(ctx, copy.s1, W - M * 2), M, 476);
+  if (copy.s2) {
+    ctx.fillStyle = P.faint;
+    ctx.font = `500 24px ${FONT}`;
+    ctx.fillText(fitText(ctx, copy.s2, W - M * 2), M, 516);
+  }
+}
+
 function drawBackground(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
   const glow = (cx: number, cy: number, r: number, color: string, a: number) => {
     const rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
@@ -420,11 +472,248 @@ function drawFooter(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
   ctx.fillText(t('promo.footer'), tx, 1316);
 }
 
-export function promoCaption(): string {
-  return t('promo.caption', { url: SITE_URL });
+function drawPanel(ctx: CanvasRenderingContext2D, P, highContrast: boolean, x: number, y: number, w: number, h: number) {
+  roundRectPath(ctx, x, y, w, h, 30);
+  ctx.fillStyle = P.panel;
+  ctx.fill();
+  if (!highContrast) {
+    ctx.fillStyle = P.cellBg;
+    ctx.fill();
+  }
+  ctx.strokeStyle = highContrast ? P.text : P.grid;
+  ctx.lineWidth = highContrast ? 3 : 1.5;
+  roundRectPath(ctx, x, y, w, h, 30);
+  ctx.stroke();
 }
 
-export async function generatePromo(): Promise<{ blob: Blob; filename: string }> {
+function drawYearCard(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
+  const x = M, y = 566, w = W - M * 2, h = 500;
+  drawPanel(ctx, P, highContrast, x, y, w, h);
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = P.text;
+  ctx.font = `700 28px ${FONT}`;
+  ctx.fillText(t('trips.footprintTitle'), x + 38, y + 54);
+
+  const pill = t('promo.yPill');
+  ctx.font = `600 19px ${FONT}`;
+  const pw = ctx.measureText(pill).width + 40;
+  roundRectPath(ctx, x + w - 38 - pw, y + 26, pw, 40, 20);
+  if (highContrast) {
+    ctx.fillStyle = P.accent;
+    ctx.fill();
+    ctx.fillStyle = P.panel;
+  } else {
+    ctx.fillStyle = P.badgeBg;
+    ctx.fill();
+    ctx.strokeStyle = P.badgeEdge;
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.fillStyle = P.accent;
+  }
+  ctx.fillText(pill, x + w - 38 - pw + 20, y + 53);
+
+  ctx.fillStyle = P.accent;
+  ctx.font = `800 172px ${SPORT_FONT}`;
+  ctx.fillText('12', x + 34, y + 272);
+  ctx.fillStyle = P.muted;
+  ctx.font = `600 24px ${FONT}`;
+  ctx.fillText(t('promo.yMonthUnit'), x + 41, y + 306);
+
+  const bars = [0.36, 0.58, 0.44, 0.72, 0.5, 0.86, 0.64, 1, 0.74, 0.56, 0.9, 0.68];
+  const left = x + 350, right = x + w - 38;
+  const base = y + 292, maxH = 172;
+  const gap = 9;
+  const bw = (right - left - gap * 11) / 12;
+  ctx.strokeStyle = highContrast ? rgba(P.text, 0.2) : P.grid;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(left, base);
+  ctx.lineTo(right, base);
+  ctx.stroke();
+  bars.forEach((v, i) => {
+    const bx = left + i * (bw + gap);
+    const bh = Math.max(6, v * maxH);
+    if (!highContrast) {
+      const g = ctx.createLinearGradient(0, base - bh, 0, base);
+      g.addColorStop(0, i === 7 ? rgba(P.amber, 0.92) : rgba(P.accent, 0.86));
+      g.addColorStop(1, i === 7 ? rgba(P.amber, 0.3) : rgba(P.accent, 0.2));
+      ctx.fillStyle = g;
+    } else {
+      ctx.fillStyle = i === 7 ? P.amber : P.accent;
+    }
+    roundRectPath(ctx, bx, base - bh, bw, bh, 7);
+    ctx.fill();
+    ctx.fillStyle = i === 7 ? (highContrast ? P.text : P.amber) : P.faint;
+    ctx.font = `${i === 7 ? '700' : '500'} 13px ${MONO}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(String(i + 1).padStart(2, '0'), bx + bw / 2, base + 26);
+  });
+  ctx.textAlign = 'left';
+
+  ctx.strokeStyle = highContrast ? P.text : P.grid;
+  ctx.lineWidth = highContrast ? 2 : 1;
+  ctx.beginPath();
+  ctx.moveTo(x + 38, y + 356);
+  ctx.lineTo(x + w - 38, y + 356);
+  ctx.stroke();
+
+  const stats = [
+    ['128', '', t('trips.sumTrips')],
+    ['1,284', 'km', t('analysis.distance')],
+    ['16,800', 'm', t('analysis.ascent')],
+    ['365', '', t('trips.sumDays')]
+  ];
+  const cw = (w - 76) / 4;
+  stats.forEach(([v, u, k], i) => {
+    const sx = x + 38 + i * cw;
+    ctx.fillStyle = i === 1 ? P.accent : P.text;
+    ctx.font = `800 46px ${SPORT_FONT}`;
+    ctx.fillText(v, sx, y + 422);
+    const vw = ctx.measureText(v).width;
+    if (u) {
+      ctx.fillStyle = P.muted;
+      ctx.font = `600 20px ${FONT}`;
+      ctx.fillText(u, sx + vw + 6, y + 420);
+    }
+    ctx.fillStyle = P.faint;
+    ctx.font = `500 19px ${FONT}`;
+    ctx.fillText(fitText(ctx, k, cw - 16), sx, y + 456);
+  });
+}
+
+function drawLock(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(size / 24, size / 24);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 2.2;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.arc(12, 10.5, 5, Math.PI, 0);
+  ctx.stroke();
+  roundRectPath(ctx, 5.5, 10.5, 13, 10.5, 2.2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(12, 15.6, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawMeetCard(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
+  const x = M, y = 566, w = W - M * 2, h = 500;
+  drawPanel(ctx, P, highContrast, x, y, w, h);
+  drawMapTexture(ctx, x + 18, y + 82, w - 36, h - 116, P, highContrast);
+
+  if (highContrast) {
+    ctx.beginPath();
+    ctx.arc(x + 49, y + 45, 9, 0, Math.PI * 2);
+    ctx.fillStyle = rgba(P.accent, 0.18);
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.arc(x + 49, y + 45, 5, 0, Math.PI * 2);
+  ctx.fillStyle = P.accent;
+  ctx.fill();
+  ctx.textAlign = 'left';
+  ctx.fillStyle = P.accent;
+  ctx.font = `700 21px ${FONT}`;
+  ctx.fillText(t('promo.mOnline'), x + 66, y + 53);
+
+  const enc = t('promo.mEnc');
+  ctx.font = `600 19px ${FONT}`;
+  const pw = ctx.measureText(enc).width + 64;
+  roundRectPath(ctx, x + w - 38 - pw, y + 24, pw, 42, 21);
+  if (highContrast) {
+    ctx.fillStyle = P.accent;
+    ctx.fill();
+    drawLock(ctx, x + w - 38 - pw + 19, y + 35, 20, P.panel);
+    ctx.fillStyle = P.panel;
+  } else {
+    ctx.fillStyle = P.badgeBg;
+    ctx.fill();
+    ctx.strokeStyle = P.badgeEdge;
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    drawLock(ctx, x + w - 38 - pw + 19, y + 35, 20, P.accent);
+    ctx.fillStyle = P.accent;
+  }
+  ctx.fillText(enc, x + w - 38 - pw + 46, y + 53);
+
+  const nodes: [number, number, string, string][] = [
+    [x + 206, y + 254, P.accent, 'A'],
+    [x + 472, y + 158, P.amber, 'B'],
+    [x + 744, y + 274, P.accent, 'C']
+  ];
+  ctx.save();
+  ctx.setLineDash([9, 11]);
+  ctx.strokeStyle = rgba(P.accent, highContrast ? 0.55 : 0.4);
+  ctx.lineWidth = 3;
+  smoothPath(ctx, [[nodes[0][0], nodes[0][1]], [nodes[1][0], nodes[1][1]], [nodes[2][0], nodes[2][1]]]);
+  ctx.stroke();
+  ctx.restore();
+
+  for (const [nx, ny, color, label] of nodes) {
+    ctx.beginPath();
+    ctx.arc(nx, ny, 54, 0, Math.PI * 2);
+    ctx.fillStyle = rgba(color, highContrast ? 0.14 : 0.11);
+    ctx.fill();
+    ctx.strokeStyle = rgba(color, 0.45);
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(nx, ny, 34, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.fillStyle = P.panel;
+    ctx.font = `800 27px ${SPORT_FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(label, nx, ny + 1);
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  const chips = [t('promo.mChip1'), t('promo.mChip2'), t('promo.mChip3')];
+  let cx = x + 38;
+  const cy = y + 404;
+  ctx.font = `600 20px ${FONT}`;
+  for (const label of chips) {
+    const cw = ctx.measureText(label).width + 44;
+    roundRectPath(ctx, cx, cy, cw, 48, 24);
+    if (highContrast) {
+      ctx.fillStyle = P.accent;
+      ctx.fill();
+      ctx.fillStyle = P.panel;
+    } else {
+      ctx.fillStyle = P.accentSoft;
+      ctx.fill();
+      ctx.strokeStyle = P.accentLine;
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+      ctx.fillStyle = P.accent;
+    }
+    ctx.textAlign = 'center';
+    ctx.fillText(label, cx + cw / 2, cy + 32);
+    cx += cw + 12;
+  }
+  ctx.textAlign = 'left';
+}
+
+function drawNoteLine(ctx: CanvasRenderingContext2D, P, text: string) {
+  ctx.textAlign = 'center';
+  ctx.fillStyle = P.muted;
+  ctx.font = `500 21px ${FONT}`;
+  ctx.fillText(fitText(ctx, text, W - M * 2), W / 2, 1120);
+  ctx.textAlign = 'left';
+}
+
+export function promoCaption(variant = 0): string {
+  const key = variant === 0 ? 'promo.caption' : `promo.caption${variant + 1}`;
+  return t(key, { url: SITE_URL });
+}
+
+export async function generatePromo(variant = pickPromoVariant()): Promise<{ blob: Blob; filename: string; variant: number; caption: string }> {
   await loadBrandFonts();
   const P = canvasPalette();
   const highContrast = effectiveTheme() === 'contrast';
@@ -433,55 +722,46 @@ export async function generatePromo(): Promise<{ blob: Blob; filename: string }>
   canvas.height = H;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D unavailable');
+  const v = Math.max(0, Math.min(VARIANT_COUNT - 1, Math.trunc(variant) || 0));
 
   drawBackground(ctx, P, highContrast);
   drawHeader(ctx, P, highContrast);
 
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'alphabetic';
-  ctx.fillStyle = P.accent;
-  ctx.font = `700 20px ${FONT}`;
-  ctx.fillText(t('promo.eyebrow'), M, 220);
-
-  const head1 = t('promo.headline1');
-  const head2 = t('promo.headline2');
-  const headPx = headlineSize(ctx, [head1, head2], W - M * 2);
-  ctx.fillStyle = P.text;
-  ctx.font = `800 ${headPx}px ${FONT}`;
-  ctx.fillText(head1, M, 314);
-  const hw = ctx.measureText(head2).width;
-  if (highContrast) {
-    roundRectPath(ctx, M - 18, 332, hw + 36, 108, 4);
-    ctx.fillStyle = P.accent;
-    ctx.fill();
-    ctx.fillStyle = P.panel;
-    ctx.fillText(head2, M, 410);
-    ctx.beginPath();
-    ctx.arc(M + hw + 40, 385, 9, 0, Math.PI * 2);
-    ctx.fillStyle = P.amber;
-    ctx.fill();
+  if (v === 1) {
+    drawHeroCopy(ctx, P, highContrast, {
+      eyebrow: t('promo.yEyebrow'),
+      l1: t('promo.yHeadline1'),
+      l2: t('promo.yHeadline2'),
+      s1: t('promo.ySub1'),
+      s2: t('promo.ySub2')
+    });
+    drawYearCard(ctx, P, highContrast);
+    drawNoteLine(ctx, P, t('promo.yNote'));
+  } else if (v === 2) {
+    drawHeroCopy(ctx, P, highContrast, {
+      eyebrow: t('promo.mEyebrow'),
+      l1: t('promo.mHeadline1'),
+      l2: t('promo.mHeadline2'),
+      s1: t('promo.mSub1'),
+      s2: t('promo.mSub2')
+    });
+    drawMeetCard(ctx, P, highContrast);
+    drawNoteLine(ctx, P, t('promo.mNote'));
   } else {
-    ctx.fillStyle = P.accent;
-    ctx.fillText(head2, M, 410);
-    ctx.beginPath();
-    ctx.arc(M + hw + 22, 385, 9, 0, Math.PI * 2);
-    ctx.fillStyle = P.amber;
-    ctx.fill();
+    drawHeroCopy(ctx, P, highContrast, {
+      eyebrow: t('promo.eyebrow'),
+      l1: t('promo.headline1'),
+      l2: t('promo.headline2'),
+      s1: t('promo.sub1'),
+      s2: t('promo.sub2')
+    });
+    drawRouteCard(ctx, P, highContrast);
+    drawFeatures(ctx, P, highContrast);
   }
-
-  ctx.fillStyle = P.muted;
-  ctx.font = `500 28px ${FONT}`;
-  ctx.fillText(t('promo.sub1'), M, 476);
-  ctx.fillStyle = P.faint;
-  ctx.font = `500 24px ${FONT}`;
-  ctx.fillText(t('promo.sub2'), M, 516);
-
-  drawRouteCard(ctx, P, highContrast);
-  drawFeatures(ctx, P, highContrast);
   drawFooter(ctx, P, highContrast);
 
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png');
   });
-  return { blob, filename: `trackmint-promo-${Date.now()}.png` };
+  return { blob, filename: `trackmint-promo-${v + 1}-${Date.now()}.png`, variant: v, caption: promoCaption(v) };
 }
