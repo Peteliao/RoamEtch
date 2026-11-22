@@ -36,7 +36,7 @@ npm test
 2. Add or update tests for pure logic you touch. `tests/` covers coordinate
    conversion, track math, statistics, privacy cropping, backups and integrity
    checks, yearly footprints, GPS quality, GPX/KML/GeoJSON, compact links, meetup
-   crypto, and the demo track.
+   crypto, procedural video music, and the demo track.
 3. Run `npm run typecheck && npm test && npm run build`. If you changed the relay,
    also run `cd relay && npm test`.
 4. For UI changes, test in a real browser at desktop and mobile widths. Include a

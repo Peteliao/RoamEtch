@@ -4,6 +4,35 @@ All notable changes to TrackMint are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [1.7.0] - 2026-11-22
+
+### Added
+
+- Original soundtrack for replay videos: four instrumental loops (Dawn Mist,
+  Far Ridges, Starlight, Breeze) synthesized on-device with Web Audio and a
+  generated reverb tail. No audio files, samples, vocals, or third-party
+  recordings are bundled.
+- Music selection in the video card: random by default, or a specific track. The
+  choice persists locally, and the selected track is shown after rendering.
+- Audio is muxed into the MP4/WebM export with fade-in/out, looping for the full
+  intro + replay + outro duration. Browsers without Web Audio fall back to a
+  silent video.
+- Refreshed promo artwork for 1.7 with shorter bilingual copy, new footprint,
+  verified-backup, encrypted-meetup, and soundtracked-recap tiles, and matching
+  share captions.
+- Unit tests for the music catalog, random/manual resolution, loop composition,
+  tempos, and note bounds.
+
+### Changed
+
+- Replay-video helper text now mentions the original looping music.
+- About text and diagnostic version report 1.7.
+
+### Security
+
+- Video music is generated locally and makes no network request; it is not
+  derived from copyrighted recordings.
+
 ## [1.6.0] - 2026-11-22
 
 ### Added

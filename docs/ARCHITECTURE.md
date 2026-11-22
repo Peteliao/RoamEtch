@@ -50,6 +50,8 @@ Key principles:
 | `src/ui/trips.ts` | Trip library: favorites, tags, search, filters, sorting, yearly footprint, import/export, backup entry points. |
 | `src/ui/backupFlow.ts` | Shared backup/restore UX: download, restore preview, integrity status, duplicate strategy, pre-restore snapshot. |
 | `src/ui/export.ts` | Posters, replay videos, standalone HTML, share link, privacy review. |
+| `src/core/trackVideo.ts` | Realtime canvas replay, intro/outro cards, MediaRecorder capture, and muxing the generated music track. |
+| `src/core/music.ts` | Four original procedural loops: composition data, Web Audio synthesis, seamless tail wrap, random/manual selection, and MediaStream output. |
 | `src/core/backup.ts` | Backup format v2: ZIP manifest, payload digest, per-media checksums, inspect/restore. |
 | `src/core/integrity.ts` | Deterministic JSON serialization and SHA-256 helpers. |
 | `src/core/footprint.ts` | Year/month aggregation over `statsCache` for the footprint card. |
@@ -131,6 +133,11 @@ caches are bounded per provider and evicted on quota errors.
   fragments never reach the hosting server, and links contain no photos.
 - Posters and videos read the active theme palette and regenerate when the theme
   changes.
+- Replay videos synthesize one of four original loops on-device with Web Audio
+  oscillators and a generated reverb impulse. The loop's reverb tail is wrapped
+  into its start for seamless repetition; the user chooses a track or leaves the
+  default random selection. The audio track is muxed with the canvas stream, so
+  no external music file or network request is involved.
 - Privacy checks (start/end circles, hidden waypoints, EXIF stripping) are shown
   before sharing or export.
 
@@ -156,9 +163,9 @@ worker if an old build appears.
 
 Vitest covers pure modules: coordinates, geo math, statistics, privacy cropping,
 GPX/KML/GeoJSON, compact links, demo data, meetup crypto, backup integrity,
-footprints, and GPS quality. GitHub Actions runs typecheck, the full test suite,
-the production build, and a separate relay test job. The Pages workflow runs the
-same tests before publishing `dist/`.
+footprints, GPS quality, and procedural video-music composition. GitHub Actions
+runs typecheck, the full test suite, the production build, and a separate relay
+test job. The Pages workflow runs the same tests before publishing `dist/`.
 
 ## Related documents
 

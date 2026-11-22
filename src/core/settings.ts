@@ -38,7 +38,8 @@ const DEFAULTS = {
   },
   panelCollapsed: false,
   lastTripId: null,
-  lastBackupAt: 0
+  lastBackupAt: 0,
+  videoMusic: 'random'        // random | dawn | ridge | star | breeze
 };
 
 let cache = null;

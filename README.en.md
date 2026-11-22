@@ -75,7 +75,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 ### Share and export: turn a track into something people open
 
 - **Posters**: portrait 1080×1920 and square 1080×1080, with route map, start/end time, trip score, GPS signal, elevation profile, sampled place names, and a branded QR code — theme-aware for dark and light canvases.
-- **Replay videos**: 10 / 15 / 30-second map replays with synchronized metrics, exported as MP4 or WebM depending on browser support, then downloaded or opened in the system share sheet.
+- **Replay videos**: 10 / 15 / 30-second map replays with synchronized metrics and one of four original looping soundtracks, synthesized on-device, randomly chosen by default or selected manually, and muxed into the MP4 or WebM export.
 - **Self-contained HTML**: a single offline-capable page with full stats, elevation profile, zoomable map, waypoints, and photos — ideal for people who do not have the app.
 - **Standard files**: WGS-84 GPX (works with Garmin, Strava, TwoNav, and similar tools), GeoJSON, and KML. Import GPX, XML, and ZIP batches; batch-export ZIP.
 - **Verifiable backup**: the full-library ZIP carries SHA-256 content checksums. Restore shows the export time, contents, duplicate trips, and verification result, can download a snapshot of the current database first, and refuses corrupted archives. The backup is not encrypted — store it safely.
@@ -215,6 +215,7 @@ TrackMint is designed to keep data on your device, but “local-first” does no
 - **External service requests**: basemap tiles, elevation, place-name, and routing services require network access and receive the coordinates/viewport needed to render or compute a result, plus normal network information such as your IP. When generating a poster or video, sampled coordinates may be sent to OpenStreetMap-based reverse geocoding to label the route, and the result is cached locally. Gap repair and meetup routing send endpoints only when you explicitly trigger them. These requests never upload photos or the full trip library.
 - **Device risk**: clearing browser data, uninstalling the PWA, or changing devices removes local trips — keep a full backup. Anyone who can unlock your device may be able to read browser storage.
 - **Full backups**: the backup ZIP contains complete tracks, waypoints, and photos and is **not encrypted**. Anyone with the file can read it, so store it somewhere you trust.
+- **Original music**: replay-video soundtracks are synthesized in the browser; no external music files are downloaded or bundled.
 
 ## FAQ
 

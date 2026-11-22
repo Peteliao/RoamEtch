@@ -268,6 +268,9 @@ const zh = {
     dueShort: '建议尽快备份', now: '立即备份',
     nudge: '已有 {{n}} 条行程，建议整库备份', exportErr: '备份导出失败'
   },
+  music: {
+    random: '随机选择', dawn: '晨雾', ridge: '远山', star: '星河', breeze: '微风'
+  },
   rewalk: {
     title: '重走行程', progress: '已完成', remaining: '剩余',
     onTrack: '沿轨迹行进', offTrack: '偏离轨迹 {{m}} m',
@@ -385,10 +388,11 @@ const zh = {
     linkTooBig: '轨迹或节点过多，链接超过 1.5 KB。可增大隐私半径或隐藏部分节点后重试。',
     qr: '二维码', qrTooBig: '轨迹过大，无法生成二维码（限 1.5KB）',
     video: '视频回顾', videoUnsupported: '当前浏览器不支持视频导出',
-    videoHint: '上半屏地图轨迹回放，下半屏参数实时同步',
+    videoHint: '地图回放 + 实时参数，自制循环配乐',
     videoGenerate: '生成视频', videoDuration: '回放时长', videoSeconds: '{{s}} 秒',
     videoDownload: '下载视频', videoRendering: '渲染中 {{p}}%',
     videoReady: '视频已生成（{{size}}）', videoKeepVisible: '生成期间请保持页面在前台',
+    videoMusic: '配乐', videoMusicUsed: '配乐：{{name}}',
     videoWechatHint: '微信内可能无法下载视频，请在浏览器中打开后生成',
     videoNoTrack: '轨迹点过少，无法生成视频', videoElapsed: '已用时',
     elapsed: '用时', route: '路线',
@@ -443,21 +447,21 @@ const zh = {
     hlQuality: '轨迹完整、数据齐全'
   },
   promo: {
-    pill: '免费 · 开源 · 无需注册',
-    eyebrow: '本地优先的轨迹记录 · 没有云端账户',
-    headline1: '把每一段旅程',
-    headline2: '刻在地图上',
-    sub1: '无需注册 · 数据只存本机 · 离线也能记录',
-    sub2: '实时组队聊天 · 精美海报 · 轨迹回放视频',
+    pill: '免费 · 开源 · v1.7',
+    eyebrow: '本地优先 · 可验证备份 · 没有云端账户',
+    headline1: '轨迹留在本机',
+    headline2: '旅程变成作品',
+    sub1: '无需注册 · 离线记录 · 数据自己掌控',
+    sub2: '年度足迹 · 验证备份 · 配乐回顾',
     cardLive: '记录中',
     cta: '扫码免费体验',
     footer: '免费开源 · 中文 / English · 可添加到手机桌面',
-    f1t: '纯本地存储', f1d: '行程与照片只留在本机',
-    f2t: '实时组队', f2d: '位置加密 · 队伍内临时聊天',
-    f3t: '一键分享', f3d: '海报 · 轨迹视频 · GPX',
-    f4t: '全球底图', f4d: '国内 / 海外自动切换',
-    shareTitle: 'TrackMint迹刻 · 本地优先的轨迹记录',
-    caption: '把每一段旅程，刻在地图上｜TrackMint迹刻\n\n不注册，不用云端账户，行程和照片只留在自己的设备里。\n\n纯本地存储 · 行程与照片只留本机\n实时组队 · 位置加密，队友间临时聊天\n一键分享 · 海报、轨迹视频、GPX\n全球底图 · 国内 / 海外自动切换\n\n免费开源，中文 / English。打开网页即可记录，也能添加到手机桌面。\n{{url}}\n\n#TrackMint #迹刻 #轨迹记录 #开源 #隐私保护'
+    f1t: '年度足迹', f1d: '收藏、标签与年度统计',
+    f2t: '验证备份', f2d: 'SHA-256 校验，换机安心',
+    f3t: '加密组队', f3d: '位置与聊天端到端加密',
+    f4t: '配乐回顾', f4d: '自制循环音乐，随视频导出',
+    shareTitle: 'TrackMint迹刻 · 把旅程留在本机',
+    caption: '把轨迹留在本机，把旅程变成作品｜TrackMint迹刻\n\n不注册，不上传云端。行程、照片与年度足迹都在自己的设备里。\n\n年度足迹 · 收藏、标签与年度统计\n可验证备份 · SHA-256 校验，换机更安心\n加密组队 · 位置与聊天端到端加密\n配乐回顾 · 自制循环音乐，视频一键生成\n\n免费开源，中文 / English。打开网页即可记录，也能添加到手机桌面。\n{{url}}\n\n#TrackMint #迹刻 #轨迹记录 #开源 #隐私保护'
   },
   settings: {
     title: '设置', language: '界面语言', langAuto: '跟随系统', langZh: '简体中文', langEn: 'English',
@@ -502,7 +506,7 @@ const zh = {
     simStart: '开始回放', simStop: '停止回放', simSpeed: '回放倍速',
     simBuiltin: '使用内置示例轨迹', simFile: '选择 GPX 文件…',
     diagLog: '导出诊断日志', diagLogOk: '诊断日志已导出（已脱敏）',
-    about: '关于', aboutText: 'TrackMint迹刻 v1.4 · 纯前端 · 数据仅存本机 IndexedDB · WGS-84 标准存储',
+    about: '关于', aboutText: 'TrackMint迹刻 v1.7 · 纯前端 · 数据仅存本机 IndexedDB · WGS-84 标准存储',
     disclaimer: '免责声明：海拔、坡度、难度评分、热量估算与轨迹仅供参考。',
     storageUsage: '存储占用', clearAll: '清空所有数据',
     installTitle: '手机桌面图标', installDesc: '添加到主屏幕，下次一键打开；应用界面可离线启动。',
@@ -810,6 +814,9 @@ const en = {
     dueShort: 'back up soon', now: 'Back up now',
     nudge: '{{n}} trips are only stored on this device — back them up', exportErr: 'Backup export failed'
   },
+  music: {
+    random: 'Shuffle', dawn: 'Dawn Mist', ridge: 'Far Ridges', star: 'Starlight', breeze: 'Breeze'
+  },
   rewalk: {
     title: 'Re-walk', progress: 'Done', remaining: 'Left',
     onTrack: 'On track', offTrack: '{{m}} m off track',
@@ -927,10 +934,11 @@ const en = {
     linkTooBig: 'Too many track points or nodes — link exceeds 1.5 KB. Increase the privacy radius or hide some nodes and retry.',
     qr: 'QR code', qrTooBig: 'Track too large for QR (1.5 KB limit)',
     video: 'Video recap', videoUnsupported: 'Video export not supported in this browser',
-    videoHint: 'Map replay on top, live stats synced below',
+    videoHint: 'Map replay, live stats and original looping music',
     videoGenerate: 'Generate video', videoDuration: 'Replay duration', videoSeconds: '{{s}}s',
     videoDownload: 'Download video', videoRendering: 'Rendering {{p}}%',
     videoReady: 'Video ready ({{size}})', videoKeepVisible: 'Keep this page in the foreground while rendering',
+    videoMusic: 'Music', videoMusicUsed: 'Music: {{name}}',
     videoWechatHint: 'WeChat may block video downloads — open in a browser to generate',
     videoNoTrack: 'Not enough track points for a video', videoElapsed: 'Elapsed',
     elapsed: 'Elapsed', route: 'Route',
@@ -985,21 +993,21 @@ const en = {
     hlQuality: 'Complete track, full data'
   },
   promo: {
-    pill: 'Free · Open source · No sign-up',
-    eyebrow: 'LOCAL-FIRST TRACK RECORDING · NO CLOUD ACCOUNT',
-    headline1: 'Carve every journey',
-    headline2: 'onto the map',
-    sub1: 'No account. No upload. Nothing leaves your device.',
-    sub2: 'Live team chat · share-ready posters · replay videos',
+    pill: 'Free · Open source · v1.7',
+    eyebrow: 'LOCAL-FIRST · VERIFIED BACKUP · NO CLOUD ACCOUNT',
+    headline1: 'Your tracks stay local',
+    headline2: 'Your journeys become stories',
+    sub1: 'No account · offline-ready · your data, your device',
+    sub2: 'Yearly footprint · verified backup · soundtracked recaps',
     cardLive: 'RECORDING',
     cta: 'Scan to try free',
     footer: 'Open source · 中文 / English · Add to home screen',
-    f1t: 'Local by design', f1d: 'Trips & photos stay on your phone',
-    f2t: 'Live meetups', f2d: 'Encrypted positions & team chat',
-    f3t: 'One-tap shares', f3d: 'Posters, replay videos, GPX',
-    f4t: 'Global basemaps', f4d: 'CN / global maps, auto-switch',
-    shareTitle: 'TrackMint — local-first trip recording',
-    caption: 'Carve every journey onto the map — TrackMint\n\nNo sign-up. No cloud trip storage. Your trips and photos stay on your device.\n\nLocal by design · trips and photos stay on your phone\nLive meetups · encrypted positions & private team chat\nOne-tap shares · posters, replay videos and GPX\nGlobal basemaps · automatic China / global switching\n\nFree and open source, in Chinese and English. Record from your browser or add it to your home screen.\n{{url}}\n\n#TrackMint #GPSJournal #Hiking #Cycling #OpenSource'
+    f1t: 'Yearly footprint', f1d: 'Favorites, tags and annual stats',
+    f2t: 'Verified backup', f2d: 'SHA-256 checked before restore',
+    f3t: 'Encrypted meetups', f3d: 'Live positions and team chat',
+    f4t: 'Replay with music', f4d: 'Original loops, muxed into video',
+    shareTitle: 'TrackMint — your journeys, kept local',
+    caption: 'Your tracks stay local. Your journeys become stories — TrackMint\n\nNo sign-up. No cloud trip storage. Your trips, photos and yearly footprint stay on your device.\n\nYearly footprint · favorites, tags and annual stats\nVerified backup · SHA-256 checked, easier migration\nEncrypted meetups · live positions and team chat\nSoundtracked recaps · original looping music in replay videos\n\nFree and open source, in Chinese and English. Record from your browser or add it to your home screen.\n{{url}}\n\n#TrackMint #GPSJournal #Hiking #Cycling #OpenSource'
   },
   settings: {
     title: 'Settings', language: 'Language', langAuto: 'System', langZh: '简体中文', langEn: 'English',
@@ -1044,7 +1052,7 @@ const en = {
     simStart: 'Start playback', simStop: 'Stop playback', simSpeed: 'Playback speed',
     simBuiltin: 'Use built-in demo track', simFile: 'Choose GPX file…',
     diagLog: 'Export diagnostic log', diagLogOk: 'Diagnostic log exported (sanitized)',
-    about: 'About', aboutText: 'TrackMint v1.4 · pure frontend · data stays in IndexedDB · WGS-84 storage',
+    about: 'About', aboutText: 'TrackMint v1.7 · pure frontend · data stays in IndexedDB · WGS-84 storage',
     disclaimer: 'Disclaimer: altitude, slope, difficulty, calorie estimates and track data are for reference only.',
     storageUsage: 'Storage used', clearAll: 'Erase all data',
     installTitle: 'Home-screen icon', installDesc: 'Add TrackMint to your home screen for one-tap access; cached app screens can open offline.',

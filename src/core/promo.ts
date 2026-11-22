@@ -317,16 +317,24 @@ function featureGlyph(ctx: CanvasRenderingContext2D, kind: string, x: number, y:
     ctx.moveTo(15.4, 15.3);
     ctx.bezierCurveTo(18.2, 15.3, 20.4, 17.1, 20.4, 20);
     ctx.stroke();
-  } else if (kind === 'share') {
-    circle(6, 12, 2.6);
-    circle(17, 5.5, 2.6);
-    circle(17, 18.5, 2.6);
+  } else if (kind === 'calendar') {
+    ctx.stroke(new Path2D('M4 6.5h16v14H4v-14Zm0 4.5h16M8 3.5v5m8-5v5'));
+    ctx.fillStyle = color;
+    ctx.fillRect(7.5, 14, 3, 2.2);
+    ctx.fillRect(13.5, 14, 3, 2.2);
+  } else if (kind === 'music') {
     ctx.beginPath();
-    ctx.moveTo(8.4, 10.8);
-    ctx.lineTo(14.6, 7.2);
-    ctx.moveTo(8.4, 13.2);
-    ctx.lineTo(14.6, 16.8);
+    ctx.moveTo(9, 17.5);
+    ctx.lineTo(9, 6);
+    ctx.lineTo(19, 4);
+    ctx.lineTo(19, 15.5);
     ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(6.5, 17.5, 2.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(16.5, 15.5, 2.6, 0, Math.PI * 2);
+    ctx.fill();
   } else {
     ctx.stroke(new Path2D('m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Zm6-3v15m6-12v15'));
   }
@@ -335,10 +343,10 @@ function featureGlyph(ctx: CanvasRenderingContext2D, kind: string, x: number, y:
 
 function drawFeatures(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
   const features = [
-    ['shield', t('promo.f1t'), t('promo.f1d')],
-    ['meet', t('promo.f2t'), t('promo.f2d')],
-    ['share', t('promo.f3t'), t('promo.f3d')],
-    ['map', t('promo.f4t'), t('promo.f4d')]
+    ['calendar', t('promo.f1t'), t('promo.f1d')],
+    ['shield', t('promo.f2t'), t('promo.f2d')],
+    ['meet', t('promo.f3t'), t('promo.f3d')],
+    ['music', t('promo.f4t'), t('promo.f4d')]
   ];
   const colW = (W - M * 2 - 36) / 2;
   features.forEach(([kind, title, desc], i) => {

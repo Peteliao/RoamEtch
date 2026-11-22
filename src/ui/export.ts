@@ -9,6 +9,7 @@ import { buildGPX, buildGeoJSON, buildKML } from '../core/gpx';
 import { buildSelfContainedHTML } from '../core/htmlExport';
 import { buildShareLink } from '../core/shareLink';
 import { generateTrackVideo, videoSupported } from '../core/trackVideo';
+import { MUSIC_TRACKS, MUSIC_PREF_RANDOM, isMusicTrackId, musicSupported } from '../core/music';
 import { exportImage, exportFile, isWeChat, nativeShare } from '../core/shareEnv';
 import { listTrips, loadTripFull } from '../core/store';
 import { prepareMap } from '../core/mapPaint';
@@ -208,6 +209,17 @@ export function createExportView(getRecordMap) {
   vShareBtn.onclick = () => { if (videoBlob) shareMedia(videoBlob, `localtrace-video-${Date.now()}.${videoExt}`, 'video'); };
   const vPreview = el('video', { controls: true, playsinline: true, 'webkit-playsinline': '', preload: 'metadata', style: { width: '100%', display: 'none', marginTop: '10px', borderRadius: '10px', background: '#000' } });
   const vNote = el('div', { class: 'small faint', style: { marginTop: '6px' } });
+  const musicPref = get('videoMusic');
+  const musicSel = el('select', { class: 'trip-sort video-music', 'aria-label': t('export.videoMusic') },
+    el('option', { value: MUSIC_PREF_RANDOM }, t('music.random')),
+    ...MUSIC_TRACKS.map((track) => el('option', { value: track.id }, t(track.labelKey))));
+  musicSel.value = musicPref === MUSIC_PREF_RANDOM || isMusicTrackId(musicPref) ? musicPref : MUSIC_PREF_RANDOM;
+  musicSel.onchange = () => set('videoMusic', musicSel.value);
+  const musicRow = musicSupported()
+    ? el('label', { class: 'video-music-row' }, icon('music', 16),
+      el('span', {}, t('export.videoMusic')),
+      musicSel)
+    : null;
   vCancelBtn.onclick = () => videoAbort?.abort();
   vGenBtn.onclick = async () => {
     const full = curFull;
@@ -216,6 +228,7 @@ export function createExportView(getRecordMap) {
     vGenBtn.disabled = true;
     tripSel.disabled = true;
     durToggle.querySelectorAll('button').forEach((x) => { x.disabled = true; });
+    musicSel.disabled = true;
     vCancelBtn.style.display = '';
     vDlBtn.style.display = 'none';
     vShareBtn.style.display = 'none';
@@ -227,6 +240,7 @@ export function createExportView(getRecordMap) {
         vectorOnly: vectorCb.checked,
         basemapId: getRecordMap?.()?.basemapId || '',
         seconds: videoSeconds,
+        music: musicSel.value,
         signal: videoAbort.signal,
         onProgress: (p) => { vGenBtn.textContent = t('export.videoRendering', { p: Math.round(p * 100) }); }
       });
@@ -239,8 +253,10 @@ export function createExportView(getRecordMap) {
       vPreview.style.display = '';
       vDlBtn.style.display = '';
       vShareBtn.style.display = '';
+      const usedTrack = MUSIC_TRACKS.find((track) => track.id === r.musicTrack);
+      const musicLabel = usedTrack ? ` · ${t('export.videoMusicUsed', { name: t(usedTrack.labelKey) })}` : '';
       vNote.textContent = (r.usedVectorFallback && !vectorCb.checked ? '⚠ ' + t('export.posterVectorFallback') + ' · ' : '') +
-        t('export.videoReady', { size: (r.blob.size / 1048576).toFixed(1) + 'MB' });
+        t('export.videoReady', { size: (r.blob.size / 1048576).toFixed(1) + 'MB' }) + musicLabel;
     } catch (e) {
       if (e.name === 'AbortError') vNote.textContent = '';
       else if (e.message === 'no-track') toast(t('export.videoNoTrack'), 'warn');
@@ -250,6 +266,7 @@ export function createExportView(getRecordMap) {
     videoAbort = null;
     vGenBtn.disabled = !videoOk;
     tripSel.disabled = false;
+    musicSel.disabled = false;
     vGenBtn.innerHTML = '';
     vGenBtn.append(icon('play', 15), t('export.generateShort'));
     vCancelBtn.style.display = 'none';
@@ -266,6 +283,7 @@ export function createExportView(getRecordMap) {
     el('div', { class: 'small faint', style: { marginBottom: '8px' } }, t('export.videoHint')),
     videoOk ? null : el('div', { class: 'debug-banner' }, '⚠ ' + t('export.videoUnsupported')),
     isWeChat() ? el('div', { class: 'small', style: { color: 'var(--warn)', marginBottom: '8px' } }, t('export.videoWechatHint')) : null,
+    musicRow,
     el('div', { class: 'card-line' }, durToggle, vGenBtn, vCancelBtn, vDlBtn, vShareBtn),
     vNote,
     vPreview

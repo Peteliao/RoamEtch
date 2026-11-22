@@ -13,6 +13,7 @@ import { WP_ICONS } from './waypointMeta';
 import { estimateCalories } from './calories';
 import { get } from './settings';
 import { t } from './i18n';
+import { createMusicSession } from './music';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
 const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
@@ -24,8 +25,14 @@ const NODE_LEAD_MS = 500, NODE_SHOW_MS = 2600;
 export const videoSupported = () =>
   typeof MediaRecorder !== 'undefined' && typeof HTMLCanvasElement !== 'undefined' && !!HTMLCanvasElement.prototype.captureStream;
 
-function pickMime() {
-  const candidates = [
+function pickMime(hasAudio = false) {
+  const candidates = hasAudio ? [
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+    'video/mp4',
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm'
+  ] : [
     'video/mp4;codecs=avc1.42E01E',
     'video/mp4',
     'video/webm;codecs=vp9',
@@ -33,6 +40,18 @@ function pickMime() {
     'video/webm'
   ];
   return candidates.find((m) => MediaRecorder.isTypeSupported(m)) || '';
+}
+
+function makeRecorder(stream, hasAudio) {
+  const mime = pickMime(hasAudio);
+  const options: MediaRecorderOptions = { videoBitsPerSecond: 6_000_000, audioBitsPerSecond: 128_000 };
+  if (mime) options.mimeType = mime;
+  try {
+    return new MediaRecorder(stream, options);
+  } catch {
+    try { return new MediaRecorder(stream, { videoBitsPerSecond: 6_000_000 }); }
+    catch { return new MediaRecorder(stream); }
+  }
 }
 
 // Heavy tracks drop capture frames below 30fps, which truncates the recorded
@@ -198,17 +217,20 @@ function clockOf(ts) {
 }
 
 /**
- * @returns {Promise<{blob, mime, width, height, seconds, usedVectorFallback:boolean}>}
+ * @returns {Promise<{blob, mime, width, height, seconds, usedVectorFallback:boolean, musicTrack:string|null}>}
  */
 export async function generateTrackVideo(full, {
   privacy = { radius: 300, hideSensitive: true },
   vectorOnly = false,
   basemapId = '',
   seconds = 15,
+  music = 'random',
   onProgress,
   signal
 }: any = {}): Promise<any> {
   if (!videoSupported()) throw new Error('video-unsupported');
+  const musicSession = createMusicSession(music);
+  try {
   const cropped = applyPrivacy(full, privacy);
   const stats = computeStats(cropped.segments, {
     ascentThreshold: get('ascentThreshold'),
@@ -689,16 +711,24 @@ export async function generateTrackVideo(full, {
     ctx.restore();
   }
 
-  const mime = pickMime();
-  const stream = canvas.captureStream(30);
-  const rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 6_000_000 } : { videoBitsPerSecond: 6_000_000 });
+  const playMs = seconds * 1000;
+  const totalMs = INTRO_MS + playMs + OUTRO_MS; // recap intro, replay, brand outro
+  let audioTrack = null;
+  if (musicSession) {
+    try { audioTrack = await musicSession.attach(totalMs); }
+    catch (e) { console.warn('video music unavailable', e); }
+  }
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  const canvasStream = canvas.captureStream(30);
+  const stream = audioTrack
+    ? new MediaStream([...canvasStream.getVideoTracks(), audioTrack])
+    : canvasStream;
+  const rec = makeRecorder(stream, !!audioTrack);
   const chunks = [];
   rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
   const stopped = new Promise<void>((res) => { rec.onstop = () => res(); });
   rec.start(250);
 
-  const playMs = seconds * 1000;
-  const totalMs = INTRO_MS + playMs + OUTRO_MS; // recap intro, replay, brand outro
   let idx = 0, aborted = false;
   drawFrame(0, 0);
   drawIntro(1);
@@ -738,7 +768,10 @@ export async function generateTrackVideo(full, {
   }
   if (aborted) throw new DOMException('Aborted', 'AbortError');
 
-  const type = (mime || 'video/webm').split(';')[0];
+  const type = (rec.mimeType || 'video/webm').split(';')[0];
   const blob = new Blob(chunks, { type });
-  return { blob, mime: type, width: W, height: H, seconds, usedVectorFallback: m.vector, cover };
+  return { blob, mime: type, width: W, height: H, seconds, usedVectorFallback: m.vector, cover, musicTrack: audioTrack ? musicSession.track.id : null };
+  } finally {
+    musicSession?.stop();
+  }
 }
