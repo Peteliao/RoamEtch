@@ -5,6 +5,7 @@ import { listTrips, deleteTrip, updateTrip, storageEstimate } from '../core/stor
 import { importGPX } from '../core/gpx';
 import { exportTripsZip, importTripFiles } from '../core/batch';
 import { startRewalk } from '../core/rewalk';
+import { importDemoTrip } from '../core/demo';
 import { exportBackup, restoreBackup, inspectBackup } from '../core/backup';
 import { triggerDownload } from '../core/gpx';
 import { fmtDistance, fmtDuration, simplify } from '../core/geo';
@@ -89,7 +90,9 @@ export function createTripsView(navigate) {
         el('div', { class: 'empty-ic' }, icon('mountain', 28)),
         el('div', { class: 'empty-title' }, t('trips.empty')),
         el('div', { class: 'small' }, t('trips.emptyHint')),
-        el('button', { class: 'btn sm primary', style: { marginTop: '14px' }, onclick: () => navigate('record') }, icon('record', 14), t('trips.goRecord'))));
+        el('button', { class: 'btn sm primary', style: { marginTop: '14px' }, onclick: () => navigate('record') }, icon('record', 14), t('trips.goRecord')),
+        el('button', { class: 'btn sm', style: { marginTop: '8px' }, onclick: onLoadDemo }, icon('analysis', 14), t('demo.load')),
+        el('div', { class: 'small faint', style: { marginTop: '8px' } }, t('demo.hint'))));
       return;
     }
     const trips = allTrips.filter((tr) => {
@@ -207,6 +210,23 @@ export function createTripsView(navigate) {
     if (appState.activeTripId === trip.id) await setActiveTrip(null);
     toast(t('trips.deleted'), 'ok');
     render();
+  }
+
+  let loadingDemo = false;
+  async function onLoadDemo() {
+    if (loadingDemo) return;
+    loadingDemo = true;
+    try {
+      const trip = await importDemoTrip();
+      await setActiveTrip(trip.id);
+      navigate('analysis');
+      toast(t('demo.loaded'), 'ok');
+    } catch (e) {
+      console.error(e);
+      toast(t('trips.importErr'), 'err');
+    } finally {
+      loadingDemo = false;
+    }
   }
 
   async function onImport() {

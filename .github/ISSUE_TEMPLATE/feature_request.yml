@@ -1,0 +1,58 @@
+name: Feature request
+description: Suggest a focused improvement that fits the local-first, no-backend design
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        TrackMint deliberately stays a static, offline-first PWA with no account
+        service, cloud trip library, telemetry, or framework. Proposals that keep
+        that shape are easiest to accept.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem does this solve? Who runs into it?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior, not only the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature area
+      options:
+        - Recording / GPS
+        - Analysis / statistics
+        - Trips / import / backup
+        - Share / poster / video / HTML export
+        - Live meetup / chat
+        - Maps / coordinates
+        - Settings / install / PWA
+        - Documentation / developer experience
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: fit
+    attributes:
+      label: Design fit
+      options:
+        - label: This can work without a TrackMint backend or account system.
+          required: true
+        - label: This does not add telemetry, remote fonts, or an opaque SDK.
+          required: true
+        - label: I am willing to help test or implement this.
+          required: false

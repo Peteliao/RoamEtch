@@ -15,6 +15,7 @@ import * as coordsCore from './core/coords';
 import * as keepaliveCore from './core/keepalive';
 import { parseShareFragment } from './core/shareLink';
 import { parseMeetFragment } from './core/meetLink';
+import { importDemoTrip } from './core/demo';
 import * as meetCore from './core/meet';
 import * as meetLinkCore from './core/meetLink';
 import { setActiveTrip } from './ui/state';
@@ -74,6 +75,25 @@ async function boot() {
       shell.navigate('analysis');
       toast(t('trips.importOk', { name: shared.name }), 'ok');
     } catch (e) { console.warn('share import failed', e); }
+  }
+
+  // Desktop entry points: ?demo=1 opens the built-in trip, ?sim=1 replays it as live GPS.
+  if (!hasMeetFragment && !shared) {
+    const entry = new URLSearchParams(location.search);
+    if (entry.get('demo') === '1') {
+      try {
+        const trip = await importDemoTrip();
+        await setActiveTrip(trip.id);
+        shell.navigate('analysis');
+        toast(t('demo.loaded'), 'ok');
+      } catch (e) { console.warn('demo load failed', e); }
+    } else if (entry.get('sim') === '1') {
+      try {
+        const { startPlayback } = await import('./core/simulator');
+        shell.navigate('record');
+        await startPlayback({});
+      } catch (e) { console.warn('sim playback failed', e); }
+    }
   }
 
   // network state toasts

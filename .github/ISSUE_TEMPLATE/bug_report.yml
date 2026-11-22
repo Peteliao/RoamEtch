@@ -1,0 +1,97 @@
+name: Bug report
+description: Something is broken or behaves differently from the documentation
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please remove meetup codes, share links, personal
+        tracks, photos, and other sensitive data before submitting.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One sentence describing the problem.
+      placeholder: The elevation chart is empty after importing a GPX file.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Tap ...
+        3. Import ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. actual
+      placeholder: I expected ..., but instead ...
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Browser, OS and device
+      placeholder: Safari 18 on iPhone 15 / Chrome 132 on Windows 11
+    validations:
+      required: true
+  - type: dropdown
+    id: pwa
+    attributes:
+      label: Installed as a PWA?
+      options:
+        - No, browser tab
+        - Yes, installed / home-screen app
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: region
+    attributes:
+      label: Map / service region
+      options:
+        - Auto
+        - Mainland China (AMap / Tianditu)
+        - Global (OSM / OpenTopoMap / Esri)
+        - Custom tiles
+        - Offline / CORS fallback
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature area
+      options:
+        - Recording / GPS
+        - Analysis / statistics
+        - Trips / import / backup
+        - Share / poster / video / HTML export
+        - Live meetup / chat
+        - Maps / coordinates
+        - Settings / install / PWA
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console errors or diagnostics
+      description: Paste relevant console output. Remove tokens, meetup codes and coordinates if sensitive.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I removed meetup codes, share links, personal tracks and photos from this report.
+          required: true

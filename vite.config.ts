@@ -49,7 +49,7 @@ export default defineConfig({
             handler: 'CacheFirst',
             options: {
               cacheName: 'tiles-osm',
-              expiration: { maxEntries: 600, maxAgeSeconds: 30 * 24 * 3600 }
+              expiration: { maxEntries: 500, maxAgeSeconds: 30 * 24 * 3600, purgeOnQuotaError: true }
             }
           },
           {
@@ -57,7 +57,7 @@ export default defineConfig({
             handler: 'CacheFirst',
             options: {
               cacheName: 'tiles-amap',
-              expiration: { maxEntries: 600, maxAgeSeconds: 30 * 24 * 3600 }
+              expiration: { maxEntries: 500, maxAgeSeconds: 30 * 24 * 3600, purgeOnQuotaError: true }
             }
           },
           {
@@ -65,7 +65,7 @@ export default defineConfig({
             handler: 'CacheFirst',
             options: {
               cacheName: 'tiles-tianditu',
-              expiration: { maxEntries: 600, maxAgeSeconds: 30 * 24 * 3600 }
+              expiration: { maxEntries: 500, maxAgeSeconds: 30 * 24 * 3600, purgeOnQuotaError: true }
             }
           },
           {
@@ -73,7 +73,7 @@ export default defineConfig({
             handler: 'CacheFirst',
             options: {
               cacheName: 'tiles-global-extra',
-              expiration: { maxEntries: 400, maxAgeSeconds: 30 * 24 * 3600 }
+              expiration: { maxEntries: 300, maxAgeSeconds: 30 * 24 * 3600, purgeOnQuotaError: true }
             }
           },
           {
@@ -82,7 +82,7 @@ export default defineConfig({
             options: {
               cacheName: 'api-elevation',
               networkTimeoutSeconds: 5,
-              expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 3600 }
+              expiration: { maxEntries: 200, maxAgeSeconds: 7 * 24 * 3600, purgeOnQuotaError: true }
             }
           }
         ]

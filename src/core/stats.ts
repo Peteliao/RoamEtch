@@ -27,12 +27,12 @@ export function computeStats(segments, opts: any = {}) {
     let prev = null;
     pts.forEach((p, i) => {
       all.push(p);
-      if (firstT == null && p.t) firstT = p.t;
-      if (p.t) lastT = p.t;
+      if (firstT == null && p.t != null) firstT = p.t;
+      if (p.t != null) lastT = p.t;
       let stepD = 0, speed = null;
       if (prev) {
         stepD = haversine(prev.lat, prev.lon, p.lat, p.lon);
-        const dt = p.t && prev.t ? p.t - prev.t : 0;
+        const dt = p.t != null && prev.t != null ? p.t - prev.t : 0;
         if (dt > 0 && dt <= MAX_DT) {
           speed = stepD / (dt / 1000);
           if (speed > MOVING_SPEED) movingMs += Math.min(dt, MAX_DT);
@@ -62,7 +62,7 @@ export function computeStats(segments, opts: any = {}) {
     segAsc = ascent;
     segStats.push({
       index: si, id: seg.id, distance: segDist, ascent, descent,
-      duration: pts.length > 1 && pts[0].t && pts[pts.length - 1].t ? pts[pts.length - 1].t - pts[0].t : 0,
+      duration: pts.length > 1 && pts[0].t != null && pts[pts.length - 1].t != null ? pts[pts.length - 1].t - pts[0].t : 0,
       pointCount: pts.length
     });
     // slope series (per segment window)

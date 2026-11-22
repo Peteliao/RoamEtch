@@ -12,6 +12,8 @@
 **在线体验：[https://peteliao.github.io/TrackMint/](https://peteliao.github.io/TrackMint/)**<br>
 手机浏览器可直接打开；iPhone / iPad 请使用 Safari，并从分享菜单添加到主屏幕。
 
+> **没有 GPS 也能体验**：进入「行程」页点击「加载示例行程」，或直接打开 `?demo=1`，即可查看分析、海报、视频与离线网页导出；贡献者可用 `?sim=1` 在桌面端模拟一段实时记录。
+
 > **快速了解**：如果你在寻找一款隐私优先的 GPX 轨迹记录器、可离线使用的徒步/骑行/自驾轨迹 App，或支持实时队友位置共享的户外 PWA，TrackMint 不需要账号、不上传行程库，打开网页即可开始记录。
 
 ## 界面预览
@@ -89,6 +91,7 @@
 - 安装为 PWA 后可从桌面图标直接打开，应用外壳与浏览过的地图瓦片会进入离线缓存。
 - 已加载的界面可离线打开，记录、统计、海报、视频和文件导出均可在本机完成；首次访问、未缓存地图区域、组队与部分地名/路网服务仍需联网。
 - 定位能力需要 HTTPS（或 localhost）与浏览器定位权限。
+- 地图渲染使用 MapLibre GL JS 6，需要浏览器支持 WebGL2（近年 Chrome、Edge、Safari、Firefox 均支持）。
 
 ### 地图与坐标
 
@@ -119,13 +122,39 @@
 
 ```bash
 npm install
-npm run dev       # 开发服务器
-npm run typecheck # TypeScript 类型检查
-npm run build     # 类型检查 + 生产构建（dist/）
-npm run preview   # 预览生产构建
+npm run dev        # 开发服务器
+npm run typecheck  # TypeScript 类型检查
+npm test           # 核心算法单元测试
+npm run build      # 类型检查 + 生产构建（dist/）
+npm run preview    # 预览生产构建
 ```
 
-`dist/` 是完全静态的，可部署到 GitHub Pages、Cloudflare Pages、Netlify、Vercel 或任意静态服务器。项目没有业务后端，不需要数据库。
+`dist/` 是完全静态的，可部署到 GitHub Pages、Cloudflare Pages、Netlify、Vercel 或任意静态服务器。项目没有业务后端，不需要数据库。CI 会在每次 Push / PR 时运行类型检查、单元测试和生产构建。
+
+### Docker 自托管
+
+仓库自带多阶段 `Dockerfile` 与 `nginx.conf`（已为 `sw.js`、`index.html` 设置正确的 PWA 缓存头）：
+
+```bash
+docker build -t trackmint .
+docker run --rm -p 8080:80 trackmint
+# 打开 http://localhost:8080
+```
+
+手机访问定位与安装 PWA 需要 HTTPS（`localhost` 除外），请在前面加一层 Caddy / Nginx / Cloudflare Tunnel 等 TLS 反向代理。国内 NAS、云服务器或内网机器可直接用这条命令运行，不依赖 GitHub Pages。
+
+### 私有组队中继（可选）
+
+默认公共 EMQX MQTT 适合测试。需要更稳定或更私密的组队中继时，可使用 [`relay/`](relay/README.md) 中的极简 WebSocket 盲中继：
+
+```bash
+cd relay && npm install && npm start
+# 或
+docker build -t trackmint-relay ./relay
+docker run --rm -p 8080:8080 trackmint-relay
+```
+
+随后在「设置 → 组队中继」选择自建 WS，并填入 `wss://你的域名/room/{room}`。中继只转发密文，不落盘、不记录消息内容。
 
 ## 技术架构
 
@@ -137,6 +166,8 @@ npm run preview   # 预览生产构建
 - 文件与图片：fflate（ZIP）、exifr（EXIF 解析与剥离）
 - 离线：[vite-plugin-pwa](https://vite-pwa-org.netlify.app/)（Workbox）
 - 组队：12 位组队码 + HKDF-SHA-256 派生密钥 + AES-GCM 端到端加密；位置与临时聊天均经 MQTT WSS 或自定义 WS 盲转发
+- 测试：Vitest 覆盖坐标转换、轨迹统计、GPX/KML/GeoJSON、分享链接与组队加密；CI 运行类型检查、单测与生产构建
+- 自托管：多阶段 Dockerfile + nginx.conf；组队可选 [`relay/`](relay/README.md) 极简盲中继模板
 
 ```text
 GPS / GPX / 照片
@@ -171,7 +202,7 @@ TrackMint 的设计原则是“数据默认留在设备上”，但这不等于�
 
 - **本机保存**：行程、轨迹点、节点、照片缩略图与设置保存在 IndexedDB / localStorage；没有账号体系、业务后端或应用内统计上报。
 - **分享链接**：行程数据、组队码只放在 URL `#` 片段。浏览器不会把 `#` 后的内容发送给服务器；但收到链接的人可以读取其中的数据，请只分享给信任对象。
-- **实时组队**：位置与聊天消息在设备端加密，默认公共 MQTT 中继与自建中继只能看到密文和随机主题标识，不保存房间或消息；组队码同时是解密密钥，泄露组队码等同于泄露位置与聊天。
+- **实时组队**：位置与聊天消息在设备端加密，默认公共 MQTT 中继与自建中继只能看到密文和主题标识，不保存房间或消息。主题标识是组队码经 SHA-256 派生的房间 ID，与 AES 密钥分离派生；看到主题也无法直接得到密钥。组队码仍是唯一共享秘密，泄露组队码等同于泄露位置与聊天。
 - **照片**：写入存储前剥离 EXIF 位置信息；导出的海报、视频与网页只使用本地处理后的图片。
 - **外部服务请求**：底图瓦片、海拔、地名与路网服务需要联网，并会收到渲染或计算所需的坐标/视口请求及常规网络信息（如 IP）。生成海报/视频时，抽样坐标可能用于 OpenStreetMap 系逆地理编码以生成路线地名，结果缓存在本机；断点补全和汇合路线规划只在你主动操作时发送必要的端点坐标。这些请求不会上传照片或整库数据。
 - **设备风险**：清除浏览器数据、卸载 PWA 或更换设备会丢失本地行程；请定期使用整库备份。设备本身被他人解锁时，浏览器中的数据也可能被读取。
@@ -220,12 +251,15 @@ Track（轨迹）+ Mint（铸造/焕新），中文名“迹刻”谐音“即�
 
 ## 参与贡献
 
-欢迎提交 Issue 或 Pull Request：报告 bug 时请说明浏览器/系统、复现步骤与预期行为；提交代码前请运行：
+欢迎提交 Issue 或 Pull Request。报告 bug 时请说明浏览器/系统、是否安装为 PWA、地图区域、复现步骤与预期行为，并移除组队码、分享链接和个人轨迹。提交代码前请运行：
 
 ```bash
 npm run typecheck
+npm test
 npm run build
 ```
+
+修改组队中继时请同时运行 `cd relay && npm test`。项目约定、双区测试方法和调试入口见 [CONTRIBUTING.md](CONTRIBUTING.md)；安全模型与私密漏洞反馈见 [SECURITY.md](SECURITY.md)；版本变更见 [CHANGELOG.md](CHANGELOG.md)。
 
 项目坚持本地优先、无账号、无云端行程库和 WGS-84 数据标准；新增依赖或外部服务时，请同时说明隐私影响。
 

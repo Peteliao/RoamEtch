@@ -117,7 +117,7 @@ export function buildGeoJSON(full, { simplified = null } = {}) {
 export function buildKML(full) {
   const { trip, segments, waypoints } = full;
   let out = `<?xml version="1.0" encoding="UTF-8"?>\n<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${esc(trip.name)}</name>\n`;
-  out += `<Style id="track"><LineStyle><color>ff a7d42d</color><width>4</width></LineStyle></Style>\n`;
+  out += `<Style id="track"><LineStyle><color>ffa7cd2b</color><width>4</width></LineStyle></Style>\n`;
   segments.forEach((seg, i) => {
     if (seg.points.length < 2) return;
     out += `<Placemark><name>${esc(trip.name)} #${i + 1}</name><styleUrl>#track</styleUrl><LineString><tessellate>1</tessellate><coordinates>\n`;

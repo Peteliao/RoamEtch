@@ -1,7 +1,8 @@
 // MapLibre wrapper: profile-driven basemaps, WGS-84 storage with render-time
 // GCJ-02 adaptation, incremental live track, waypoint/vertex editing, vector fallback.
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import { toDisplay, fromDisplay } from '../core/coords';
 import { getBasemap, buildRasterStyle, buildVectorStyle, availableBasemaps, defaultBasemapId, vectorBgColor } from '../core/providers';
 import { isOfflineSim, regionState } from '../core/region';
@@ -11,6 +12,8 @@ import { diag } from '../core/diag';
 import { WP_ICONS } from '../core/waypointMeta';
 
 const LIVE_FILL = 'rgba(90,167,240,0.14)';
+
+maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
 function cssVar(name: string, fallback: string) {
   if (typeof document === 'undefined') return fallback;

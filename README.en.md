@@ -12,6 +12,8 @@
 **Try it online: [https://peteliao.github.io/TrackMint/](https://peteliao.github.io/TrackMint/)**<br>
 Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose “Add to Home Screen”.
 
+> **No GPS?** Open the Trips tab and press **Load demo trip**, or visit `?demo=1`, to explore analysis, posters, replay video, and self-contained HTML export immediately. Contributors can use `?sim=1` to replay the demo as live GPS on a desktop.
+
 > **TL;DR**: TrackMint is a privacy-first, local-first GPX recorder PWA for hiking, cycling, running, road trips, and outdoor teams. It combines trip recording, elevation and speed analysis, shareable posters and videos, WGS-84 file export, and encrypted real-time teammate locations in one page — without sign-up.
 
 ## Screenshots
@@ -89,6 +91,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 - Installed PWAs launch from the home screen and cache the app shell plus map tiles you have already viewed.
 - Loaded screens, recording, statistics, posters, videos, and file exports work locally. First visits, uncached map areas, live meetup, and some place/routing services still need network access.
 - Geolocation requires HTTPS (or localhost) and browser location permission.
+- Map rendering uses MapLibre GL JS 6 and requires WebGL2 (supported by current Chrome, Edge, Safari, and Firefox).
 
 ### Maps and coordinates
 
@@ -119,13 +122,39 @@ Local development or self-hosting:
 
 ```bash
 npm install
-npm run dev       # development server
-npm run typecheck # TypeScript type check
-npm run build     # type check + production build (dist/)
-npm run preview   # preview the production build
+npm run dev        # development server
+npm run typecheck  # TypeScript type check
+npm test           # core algorithm unit tests
+npm run build      # type check + production build (dist/)
+npm run preview    # preview the production build
 ```
 
-`dist/` is fully static. Deploy it to GitHub Pages, Cloudflare Pages, Netlify, Vercel, or any static web server. There is no business backend and no database to provision.
+`dist/` is fully static. Deploy it to GitHub Pages, Cloudflare Pages, Netlify, Vercel, or any static web server. There is no business backend and no database to provision. CI runs typecheck, unit tests, and the production build on every push and pull request.
+
+### Docker self-hosting
+
+The repository includes a multi-stage `Dockerfile` and an `nginx.conf` with correct PWA cache headers for `sw.js` and `index.html`:
+
+```bash
+docker build -t trackmint .
+docker run --rm -p 8080:80 trackmint
+# open http://localhost:8080
+```
+
+Geolocation and PWA installation on phones require HTTPS (except `localhost`), so put a TLS reverse proxy such as Caddy, Nginx, or Cloudflare Tunnel in front. This also works on a home NAS or a private server and does not depend on GitHub Pages.
+
+### Private meetup relay (optional)
+
+The default public EMQX broker is suitable for testing. For a more stable or private relay, use the minimal blind WebSocket relay in [`relay/`](relay/README.md):
+
+```bash
+cd relay && npm install && npm start
+# or
+docker build -t trackmint-relay ./relay
+docker run --rm -p 8080:8080 trackmint-relay
+```
+
+Then choose **Settings → Team relay → Custom WS relay** and enter `wss://your-host/room/{room}`. The relay forwards ciphertext only and stores no messages.
 
 ## Architecture
 
@@ -137,6 +166,8 @@ npm run preview   # preview the production build
 - Files and photos: fflate (ZIP), exifr (EXIF parsing and stripping)
 - Offline: [vite-plugin-pwa](https://vite-pwa-org.netlify.app/) (Workbox)
 - Meetup: 12-character code + HKDF-SHA-256 key derivation + AES-GCM end-to-end encryption; positions and ephemeral chat both use MQTT WSS or a custom WebSocket blind relay
+- Tests: Vitest covers coordinate conversion, track statistics, GPX/KML/GeoJSON, share links, and meetup crypto; CI runs typecheck, tests, and the production build
+- Self-hosting: multi-stage Dockerfile + nginx.conf; an optional minimal blind relay template lives in [`relay/`](relay/README.md)
 
 ```text
 GPS / GPX / photos
@@ -171,7 +202,7 @@ TrackMint is designed to keep data on your device, but “local-first” does no
 
 - **Stored locally**: trips, track points, waypoints, photo thumbnails, and settings live in IndexedDB/localStorage. There is no account system, business backend, or in-app analytics reporting.
 - **Share links**: trip data and meetup codes are placed only in the URL `#` fragment. Browsers do not send the fragment to servers; anyone who receives the link can read the data inside, so share only with people you trust.
-- **Live meetup**: positions and chat messages are encrypted on-device. The default public MQTT relay and any custom relay see only ciphertext and a random topic identifier; rooms and messages are not stored. The meetup code is also the decryption key — leaking the code leaks positions and chat.
+- **Live meetup**: positions and chat messages are encrypted on-device. The default public MQTT relay or a custom relay sees only ciphertext and a topic identifier. That identifier is a SHA-256-derived room id, derived separately from the AES key, so observing it does not reveal the key. The meetup code is still the only shared secret — leaking it leaks positions and chat.
 - **Photos**: EXIF location data is stripped before storage; exported posters, videos, and HTML use the locally processed images only.
 - **External service requests**: basemap tiles, elevation, place-name, and routing services require network access and receive the coordinates/viewport needed to render or compute a result, plus normal network information such as your IP. When generating a poster or video, sampled coordinates may be sent to OpenStreetMap-based reverse geocoding to label the route, and the result is cached locally. Gap repair and meetup routing send endpoints only when you explicitly trigger them. These requests never upload photos or the full trip library.
 - **Device risk**: clearing browser data, uninstalling the PWA, or changing devices removes local trips — keep a full backup. Anyone who can unlock your device may be able to read browser storage.
@@ -220,12 +251,15 @@ Track + Mint: recording a track and minting it into something worth sharing. The
 
 ## Contributing
 
-Issues and pull requests are welcome. When reporting a bug, include the browser/OS, reproduction steps, and expected behavior. Before submitting code, run:
+Issues and pull requests are welcome. When reporting a bug, include the browser/OS, whether the app is installed as a PWA, the map region, reproduction steps, and expected behavior. Remove meetup codes, share links, and personal tracks first. Before submitting code, run:
 
 ```bash
 npm run typecheck
+npm test
 npm run build
 ```
+
+Run `cd relay && npm test` as well when changing the relay. Project conventions, dual-region test methods, and debug entry points are in [CONTRIBUTING.md](CONTRIBUTING.md); the security model and private vulnerability reporting are in [SECURITY.md](SECURITY.md); release notes are in [CHANGELOG.md](CHANGELOG.md).
 
 The project is committed to local-first storage, no accounts, no cloud trip library, and WGS-84 data. When adding a dependency or external service, document its privacy impact as well.
 

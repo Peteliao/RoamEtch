@@ -1,7 +1,7 @@
 {
   "name": "trackmint",
   "private": true,
-  "version": "1.4.0",
+  "version": "1.5.0",
   "type": "module",
   "license": "GPL-3.0-only",
   "description": "Pure-frontend trip recorder & analyzer with dual-region (CN/Global) adaptive service routing",
@@ -13,6 +13,8 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },
@@ -22,13 +24,15 @@
     "exifr": "^7.1.3",
     "fflate": "^0.8.2",
     "i18next": "^24.2.3",
-    "maplibre-gl": "^5.6.0",
+    "maplibre-gl": "^6.19.0",
     "qrcode-generator": "^2.0.4",
     "uplot": "^1.6.32"
   },
   "devDependencies": {
+    "jsdom": "^27.4.0",
     "typescript": "^5.9.3",
     "vite": "^6.3.5",
-    "vite-plugin-pwa": "^1.0.0"
+    "vite-plugin-pwa": "^1.0.0",
+    "vitest": "^5.1.1"
   }
 }

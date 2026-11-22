@@ -213,6 +213,13 @@ const zh = {
     layerNote: '底图仅影响显示；轨迹始终按 WGS-84 存储，切换图源不会改变数据。',
     vectorShort: '矢量'
   },
+  demo: {
+    name: '香山环线 · 示例行程',
+    load: '加载示例行程',
+    hint: '无需 GPS，立即体验分析、海报与轨迹视频',
+    loaded: '示例行程已加载',
+    wpStart: '香山入口', wpView: '观景台', wpPhoto: '拍照点', wpFood: '补给点', wpEnd: '环线终点'
+  },
   trips: {
     title: '我的行程', empty: '还没有行程', emptyHint: '去「记录」页开始你的第一段行程',
     open: '打开', rename: '重命名', deleteConfirm: '删除该行程及其所有数据？此操作不可撤销。',
@@ -722,6 +729,13 @@ const en = {
     layers: 'Map layers',
     layerNote: 'Basemaps affect display only; tracks always stay WGS-84 and switching sources never rewrites data.',
     vectorShort: 'vector'
+  },
+  demo: {
+    name: 'Xiangshan Loop · Demo',
+    load: 'Load demo trip',
+    hint: 'No GPS needed — try analysis, posters and replay video',
+    loaded: 'Demo trip loaded',
+    wpStart: 'Xiangshan trailhead', wpView: 'Viewpoint', wpPhoto: 'Photo spot', wpFood: 'Snack stop', wpEnd: 'Loop finish'
   },
   trips: {
     title: 'My trips', empty: 'No trips yet', emptyHint: 'Start your first trip in the Record tab',
