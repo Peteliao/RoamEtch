@@ -5,9 +5,9 @@ import { get, set, patch, resetSettings } from '../core/settings';
 import { on } from '../core/events';
 import { regionState, setRegionMode, runProbe } from '../core/region';
 import { storageEstimate, eraseAll, isolateDamaged } from '../core/store';
-import { exportBackup, restoreBackup } from '../core/backup';
 import { triggerDownload } from '../core/gpx';
 import { exportDiagLog } from '../core/diag';
+import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
 import { startPlayback, stopPlayback, isPlaying } from '../core/simulator';
 import { setLanguage, currentLang } from '../core/i18n';
 import { generatePromo, promoCaption } from '../core/promo';
@@ -263,19 +263,18 @@ export function createSettingsView(navigate) {
 
   // ---- data & storage ----
   const storageLine = el('div', { class: 'small muted' });
+  const backupHealthLine = el('div', { class: 'small muted', style: { marginTop: '3px' } });
   const backupBtn = el('button', { class: 'btn sm' }, icon('download', 14), t('trips.backup'));
   backupBtn.onclick = async () => {
-    const { blob, filename, tripCount } = await exportBackup();
-    triggerDownload(blob, filename);
-    toast(t('trips.backupOk', { n: tripCount }), 'ok');
+    try { await exportBackupFlow(); refreshStorage(); }
+    catch { toast(t('backup.exportErr'), 'err'); }
   };
   const restoreBtn = el('button', { class: 'btn sm' }, icon('export', 14), t('trips.restore'));
   restoreBtn.onclick = async () => {
     const f = await filePicker('.trip,.zip');
     if (!f) return;
     try {
-      const n = await restoreBackup(f, 'skip');
-      toast(t('trips.restoreOk', { n }), 'ok');
+      await restoreBackupFlow(f, { onRestored: () => refreshStorage() });
     } catch { toast(t('trips.restoreErr'), 'err'); }
   };
   const eraseBtn = el('button', { class: 'btn danger block' }, icon('trash', 14), t('settings.clearAll'));
@@ -305,13 +304,16 @@ export function createSettingsView(navigate) {
     storageLine.textContent = est.quota
       ? `${t('settings.storageUsage')}: ${(est.usage / 1048576).toFixed(1)} MB / ${(est.quota / 1048576).toFixed(0)} MB`
       : t('settings.storageUsage') + ': --';
+    backupHealthLine.textContent = t('backup.lastBackup', { when: lastBackupLabel() }) + (backupDue() ? ' · ' + t('backup.dueShort') : '');
+    backupHealthLine.style.color = backupDue() ? 'var(--warn)' : '';
   }
   refreshStorage();
+  on('backup:exported', refreshStorage);
   const dangerZone = el('div', { class: 'danger-zone' },
     el('div', { class: 'dz-title' }, icon('warn', 14), t('settings.dangerTitle')),
     el('div', { class: 'small faint', style: { marginBottom: '10px' } }, t('settings.dangerHint')),
     eraseBtn);
-  const dataCard = card('database', t('settings.dataBackup'), storageLine,
+  const dataCard = card('database', t('settings.dataBackup'), storageLine, backupHealthLine,
     el('div', { class: 'row wrap', style: { marginTop: '8px' } }, backupBtn, restoreBtn),
     el('div', { class: 'settings-subhead' }, icon('refresh', 15), t('settings.resetTitle')),
     el('div', { class: 'small muted', style: { margin: '-2px 0 10px' } }, t('settings.resetDesc')),

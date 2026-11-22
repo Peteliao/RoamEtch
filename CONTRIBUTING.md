@@ -2,7 +2,8 @@
 
 Thanks for helping improve TrackMint. The project is deliberately small: a static,
 offline-first TypeScript PWA with no backend, no framework, and no telemetry.
-Please keep contributions aligned with that shape.
+Please keep contributions aligned with that shape. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the module map and data flow.
 
 感谢参与 TrackMint。项目刻意保持轻量：纯静态、离线优先、TypeScript + 原生 DOM，
 没有后端、没有前端框架、没有统计上报。提交前请先读完下面的约定。
@@ -33,8 +34,9 @@ npm test
 1. Keep the change focused. One problem per PR, with a short explanation of the
    user-visible effect.
 2. Add or update tests for pure logic you touch. `tests/` covers coordinate
-   conversion, track math, statistics, privacy cropping, GPX/KML/GeoJSON,
-   compact links, meetup crypto, and the demo track.
+   conversion, track math, statistics, privacy cropping, backups and integrity
+   checks, yearly footprints, GPS quality, GPX/KML/GeoJSON, compact links, meetup
+   crypto, and the demo track.
 3. Run `npm run typecheck && npm test && npm run build`. If you changed the relay,
    also run `cd relay && npm test`.
 4. For UI changes, test in a real browser at desktop and mobile widths. Include a

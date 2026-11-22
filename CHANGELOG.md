@@ -4,6 +4,46 @@ All notable changes to TrackMint are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-11-22
+
+### Added
+
+- Backup format v2 with a SHA-256 payload digest and per-file media checksums, plus
+  integrity status on export, inspect, and restore. Version 1 backups are still
+  accepted and restore without a checksum.
+- Restore preview listing export time, trips, waypoints, photos, duplicate IDs, and
+  checksum status, with an optional snapshot of the current database before
+  restoring. Corrupted or modified archives are blocked.
+- Favorites and up to 8 tags per trip, search across names and tags, activity and
+  favorite filters, and sorting by recently updated, newest, distance, or name.
+- Yearly footprint card: trips, distance, ascent, active days, and a 12-month
+  distribution for the selected year.
+- GPS quality report in analysis: average accuracy, poor-fix ratio, time gaps,
+  altitude jumps, and a 0–100 score derived from recorded samples.
+- Backup reminder when no full backup exists or the last one is over 30 days old,
+  and storage/backup status in Settings.
+- `CODE_OF_CONDUCT.md`, `docs/ARCHITECTURE.md`, and a pull-request template.
+- Unit tests for backup integrity and tamper detection, footprints, and GPS quality.
+
+### Changed
+
+- Backup counts now include segments and track chunks, and the Settings data card
+  shows the last full backup and storage usage.
+- Backup exports record `lastBackupAt`, shared by the Trips and Settings views.
+
+### Fixed
+
+- Backup verification no longer reports a false failure when a photo legitimately
+  has no thumbnail or when JSON fields are `undefined`.
+- The footprint card renders its KPI and monthly bars correctly.
+
+### Security
+
+- Backup checksums detect modified manifests and media, and restore is blocked when
+  verification fails. Checksums are corruption/tamper detection, not signatures.
+- Backup screens, READMEs, and SECURITY now state that backup ZIPs are **not
+  encrypted** and contain full tracks, waypoints, and photos.
+
 ## [1.5.0] - 2026-11-22
 
 ### Added

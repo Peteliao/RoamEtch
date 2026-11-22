@@ -39,6 +39,11 @@ hosted demo is served from GitHub Pages and is rebuilt on every push to `main`.
   same browser profile can read it.
 - Clearing browser data or uninstalling the PWA deletes local trips. Users should
   export a full backup before doing so.
+- Full-library backup ZIPs are **not encrypted**. They contain complete tracks,
+  waypoints, and photos, and can be read by anyone who obtains the file. They do
+  carry SHA-256 checksums so the app can detect corruption or modification before
+  restoring, but checksums are neither confidentiality nor authenticity: an
+  attacker who rewrites the archive can also recompute the checksums.
 
 ### Share links
 
@@ -125,4 +130,4 @@ README for the full data-boundary description.
 - 组队码只存在于 URL `#` 片段与本机内存；中继只看到 SHA-256 房间标识与 AES-GCM 密文。
 - 房间标识与加密密钥使用不同域字符串分别派生，看到 Topic/路径无法直接得到密钥。
 - 组队端到端加密没有发送者身份认证，也没有前向保密；组队码泄露等同于房间内容泄露。
-- 本机数据不加密，依赖设备解锁；请定期导出整库备份。漏洞请走私密报告入口。
+- 本机数据不加密，依赖设备解锁；整库备份 ZIP 同样未加密，请妥善保管。请定期导出整库备份。漏洞请走私密报告入口。

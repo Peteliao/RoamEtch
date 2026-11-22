@@ -8,6 +8,7 @@ import { on } from '../core/events';
 import { listTrips } from '../core/store';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude } from '../core/geo';
 import { findTrackGaps, repairTrackGaps } from '../core/gapRepair';
+import { assessGpsQuality } from '../core/gpsQuality';
 import { TrackMap } from './map';
 import { WP_ICONS } from '../core/waypointMeta';
 import { canvasPalette } from '../core/palette';
@@ -27,6 +28,7 @@ export function createAnalysisView() {
 
   const statsBox = el('div', { class: 'stat-grid' });
   const diffBox = el('div', {});
+  const qualityBox = el('div', {});
   const advisory = el('div', {});
   const gapBody = el('div', {});
   const gapCard = el('div', { class: 'card', style: { display: 'none' } },
@@ -45,7 +47,7 @@ export function createAnalysisView() {
   const tlCard = el('div', { class: 'card' }, el('h3', {}, t('analysis.timeline')), el('div', { id: 'timeline' }));
   const disclaimer = el('div', { class: 'small faint', style: { padding: '4px 2px 20px' } }, '⚠ ' + t('analysis.disclaimer'));
 
-  scroll.append(head, advisory, statsBox, diffBox, gapCard, miniMapBox, chartCard, slopeCard, segCard, tlCard, disclaimer);
+  scroll.append(head, advisory, statsBox, diffBox, qualityBox, gapCard, miniMapBox, chartCard, slopeCard, segCard, tlCard, disclaimer);
 
   let miniMap = null;
   let chart = null;
@@ -76,6 +78,34 @@ export function createAnalysisView() {
 
   function statBox(label, valueHtml, primary = false) {
     return el('div', { class: 'stat-box' + (primary ? ' primary' : '') }, el('div', { class: 'v', html: valueHtml }), el('div', { class: 'k' }, label));
+  }
+
+  function renderQuality() {
+    qualityBox.innerHTML = '';
+    const points = appState.activeTripFull?.segments.flatMap((s) => s.points) || [];
+    const q = assessGpsQuality(points);
+    if (q.score == null) return;
+    const tone = q.rating === 'excellent' || q.rating === 'good'
+      ? 'var(--accent)' : q.rating === 'fair' ? 'var(--warn)' : 'var(--danger)';
+    const rating = t(`analysis.quality${q.rating[0].toUpperCase()}${q.rating.slice(1)}`);
+    const metric = (label, value) => el('div', { class: 'quality-metric' },
+      el('div', { class: 'v' }, value), el('div', { class: 'k' }, label));
+    qualityBox.append(el('div', { class: 'card quality-card' },
+      el('div', { class: 'quality-head' },
+        el('h3', {}, icon('shield', 18), t('analysis.qualityTitle')),
+        el('span', { class: `quality-rating ${q.rating}` }, rating)),
+      el('div', { class: 'quality-top' },
+        el('div', { class: 'quality-score' }, el('b', { style: { color: tone } }, String(q.score)), el('small', {}, '/100')),
+        el('div', { class: 'quality-meter' },
+          el('div', { class: 'quality-fill', style: { width: `${q.score}%`, background: tone } }))),
+      el('div', { class: 'quality-metrics' },
+        metric(t('analysis.qualityAvgAcc'), q.avgAcc == null ? '—' : `±${q.avgAcc.toFixed(1)} m`),
+        metric(t('analysis.qualityPoorFixes'), q.poorRatio == null ? '—' : `${q.poorFixes} (${Math.round(q.poorRatio * 100)}%)`),
+        metric(t('analysis.qualityGaps'), q.gaps ? `${q.gaps} · ${fmtDuration(q.gapMs, { compact: true })}` : '0'),
+        metric(t('analysis.qualityAltJumps'), String(q.altJumps))),
+      q.avgAcc == null ? el('div', { class: 'small faint', style: { marginTop: '8px' } }, t('analysis.qualityNoAcc')) : null,
+      el('div', { class: 'small faint quality-note' },
+        `${q.fixes} ${t('analysis.qualityFixes')} · ${t('analysis.qualityNote')}`)));
   }
 
   function renderStats(stats) {
@@ -333,6 +363,7 @@ export function createAnalysisView() {
     if (!full) {
       statsBox.innerHTML = '';
       diffBox.innerHTML = '';
+      qualityBox.innerHTML = '';
       advisory.innerHTML = '';
       gapCard.style.display = 'none';
       chartCard.style.display = 'none';
@@ -350,6 +381,7 @@ export function createAnalysisView() {
     setTimeout(() => miniMap.fitTrack(30), 120);
     renderGaps();
     renderStats(stats);
+    renderQuality();
     renderCharts(stats);
     renderSegments(stats);
     renderTimeline();
@@ -359,6 +391,7 @@ export function createAnalysisView() {
   on('trip:stats', (stats) => {
     if (appState.view !== 'analysis') return;
     renderStats(stats);
+    renderQuality();
     renderCharts(stats);
     renderSegments(stats);
   });

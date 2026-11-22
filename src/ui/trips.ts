@@ -6,13 +6,14 @@ import { importGPX } from '../core/gpx';
 import { exportTripsZip, importTripFiles } from '../core/batch';
 import { startRewalk } from '../core/rewalk';
 import { importDemoTrip } from '../core/demo';
-import { exportBackup, restoreBackup, inspectBackup } from '../core/backup';
+import { buildFootprints } from '../core/footprint';
+import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
 import { triggerDownload } from '../core/gpx';
 import { fmtDistance, fmtDuration, simplify } from '../core/geo';
 import { get } from '../core/settings';
 import { isWeChat, wechatFileGuidance } from '../core/shareEnv';
 import { appState, setActiveTrip } from './state';
-import { el, icon, toast, confirmModal, promptModal, filePicker, filePickerMulti, modal } from './helpers';
+import { el, icon, toast, confirmModal, filePicker, filePickerMulti, modal } from './helpers';
 
 export function createTripsView(navigate) {
   const view = el('div', { class: 'view', id: 'view-trips' });
@@ -46,8 +47,11 @@ export function createTripsView(navigate) {
 
   const ACTIVITIES = ['all', 'hike', 'drive', 'bike', 'run', 'travel'];
   let activityFilter = 'all';
+  let favoriteOnly = false;
   let searchTerm = '';
+  let sortMode = 'recent';
   let allTrips = [];
+  let footprintYear = new Date().getFullYear();
   const chipBar = el('div', { class: 'chip-bar' });
   const chipButtons = new Map();
   for (const a of ACTIVITIES) {
@@ -60,10 +64,30 @@ export function createTripsView(navigate) {
     chipButtons.set(a, b);
     chipBar.append(b);
   }
+  const favoriteChip = el('button', {
+    class: 'chip chip-fav', title: t('trips.favoriteHint'),
+    onclick: () => {
+      favoriteOnly = !favoriteOnly;
+      favoriteChip.classList.toggle('active', favoriteOnly);
+      renderList();
+    }
+  }, icon('star', 13), t('trips.favorite'));
+  chipBar.append(favoriteChip);
+  const sortSel = el('select', { class: 'trip-sort', 'aria-label': t('trips.sort') },
+    el('option', { value: 'recent' }, t('trips.sortRecent')),
+    el('option', { value: 'created' }, t('trips.sortCreated')),
+    el('option', { value: 'distance' }, t('trips.sortDistance')),
+    el('option', { value: 'name' }, t('trips.sortName')));
+  sortSel.value = sortMode;
+  sortSel.onchange = () => { sortMode = sortSel.value; renderList(); };
+  const toolbar = el('div', { class: 'trips-toolbar' }, chipBar, sortSel);
 
+  const footprintBody = el('div', {});
+  const footprintCard = el('div', { class: 'card footprint-card' }, footprintBody);
+  const nudge = el('div', { class: 'backup-nudge', style: { display: 'none' } });
   const storageBar = el('div', { class: 'small faint', style: { marginTop: '14px', textAlign: 'center' } });
   const listBox = el('div', {});
-  scroll.append(header, summary, searchBar, chipBar, listBox, storageBar);
+  scroll.append(header, summary, nudge, footprintCard, searchBar, toolbar, listBox, storageBar);
 
   function thumbSVG(points) {
     if (!points || points.length < 2) return '<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="4" fill="var(--text-faint)"/></svg>';
@@ -97,8 +121,18 @@ export function createTripsView(navigate) {
     }
     const trips = allTrips.filter((tr) => {
       if (activityFilter !== 'all' && tr.activity !== activityFilter) return false;
+      if (favoriteOnly && !tr.favorite) return false;
       if (!searchTerm) return true;
-      return String(tr.name || t('record.newTripName')).toLowerCase().includes(searchTerm);
+      const haystack = [tr.name || t('record.newTripName'), ...(tr.tags || [])].join(' ').toLowerCase();
+      return haystack.includes(searchTerm);
+    });
+    trips.sort((a, b) => {
+      if (sortMode === 'recent') {
+        return (Number(b.favorite) - Number(a.favorite)) || (b.updatedAt - a.updatedAt);
+      }
+      if (sortMode === 'created') return b.createdAt - a.createdAt;
+      if (sortMode === 'distance') return (b.statsCache?.distance || 0) - (a.statsCache?.distance || 0);
+      return String(a.name || '').localeCompare(String(b.name || ''));
     });
     if (!trips.length) {
       listBox.append(el('div', { class: 'empty-state' },
@@ -114,11 +148,19 @@ export function createTripsView(navigate) {
         el('div', { class: 'ti-row' },
           el('div', { class: 'thumb', html: thumbSVG(trip.thumbPoints) }),
           el('div', { class: 'info' },
-            el('div', { class: 'name' }, trip.name || t('record.newTripName')),
+            el('div', { class: 'name' },
+              el('button', {
+                class: 'fav-toggle' + (trip.favorite ? ' active' : ''),
+                title: trip.favorite ? t('trips.unfavorite') : t('trips.favoriteHint'),
+                'aria-label': t('trips.favorite'),
+                onclick: (e) => { e.stopPropagation(); toggleFavorite(trip); }
+              }, icon('star', 15)),
+              el('span', { class: 'name-text' }, trip.name || t('record.newTripName'))),
             el('div', { class: 'meta' },
               new Date(trip.createdAt).toLocaleDateString(),
               el('span', {}, t(`record.activities.${trip.activity}`)),
-              el('span', { class: 'tag' }, t(`trips.${statusKey}`)))),
+              el('span', { class: 'tag' }, t(`trips.${statusKey}`))),
+            trip.tags?.length ? el('div', { class: 'trip-tags' }, trip.tags.map((tag) => el('span', { class: 'trip-tag' }, `#${tag}`))) : null),
           el('span', { class: 'ti-chev' }, icon('chevronRight', 16))),
         el('div', { class: 'ti-stats' },
           el('div', { class: 'ti-stat' }, el('div', { class: 'v' }, d ? `${d.v}${d.u}` : '--'), el('div', { class: 'k' }, t('analysis.distance'))),
@@ -127,7 +169,7 @@ export function createTripsView(navigate) {
         el('div', { class: 'ti-actions' },
           el('button', { class: 'btn sm icon-only', title: t('trips.rewalk'), onclick: (e) => { e.stopPropagation(); onRewalk(trip); } }, icon('follow', 16)),
           el('button', { class: 'btn sm icon-only', title: t('trips.viewAnalysis'), onclick: (e) => { e.stopPropagation(); openAnalysis(trip); } }, icon('analysis', 16)),
-          el('button', { class: 'btn sm icon-only', title: t('common.edit'), onclick: (e) => { e.stopPropagation(); renameTrip(trip); } }, icon('edit', 16)),
+          el('button', { class: 'btn sm icon-only', title: t('common.edit'), onclick: (e) => { e.stopPropagation(); editTrip(trip); } }, icon('edit', 16)),
           el('button', { class: 'btn sm icon-only', title: t('common.delete'), onclick: (e) => { e.stopPropagation(); removeTrip(trip); } }, icon('trash', 16)))
       );
       listBox.append(item);
@@ -147,9 +189,61 @@ export function createTripsView(navigate) {
     sDays.k.textContent = t('trips.sumDays');
   }
 
+  function renderNudge() {
+    nudge.innerHTML = '';
+    if (!allTrips.length || !backupDue()) { nudge.style.display = 'none'; return; }
+    nudge.style.display = '';
+    const btn = el('button', { class: 'btn sm' }, icon('download', 14), t('backup.now'));
+    btn.onclick = async () => {
+      try { await exportBackupFlow(); renderNudge(); }
+      catch { toast(t('backup.exportErr'), 'err'); }
+    };
+    nudge.append(icon('shield', 18),
+      el('div', { class: 'nudge-txt' },
+        el('div', { class: 'nudge-t' }, t('backup.nudge', { n: allTrips.length })),
+        el('div', { class: 'nudge-d' }, t('backup.lastBackup', { when: lastBackupLabel() }))),
+      btn);
+  }
+
+  function renderFootprint() {
+    if (!allTrips.length) { footprintCard.style.display = 'none'; return; }
+    const { years } = buildFootprints(allTrips);
+    if (!years.length) { footprintCard.style.display = 'none'; return; }
+    if (!years.some((y) => y.year === footprintYear)) footprintYear = years[0].year;
+    const fp = years.find((y) => y.year === footprintYear) || years[0];
+    const units = get('units');
+    const d = fmtDistance(fp.distance, units);
+    const yearSel = el('select', { class: 'footprint-year', 'aria-label': t('trips.footprintTitle') },
+      ...years.map((y) => el('option', { value: String(y.year) }, String(y.year))));
+    yearSel.value = String(fp.year);
+    yearSel.onchange = () => { footprintYear = Number(yearSel.value); renderFootprint(); };
+    const max = Math.max(1, ...fp.months.map((m) => m.distance));
+    footprintBody.innerHTML = '';
+    footprintBody.append(
+      el('div', { class: 'footprint-head' },
+        el('div', { class: 'footprint-title' }, icon('calendar', 17), t('trips.footprintTitle')),
+        yearSel),
+      el('div', { class: 'footprint-kpis' },
+        el('div', { class: 'fp-kpi' }, el('div', { class: 'v' }, String(fp.trips)), el('div', { class: 'k' }, t('trips.sumTrips'))),
+        el('div', { class: 'fp-kpi' }, el('div', { class: 'v', html: `${d.v}<small>${d.u}</small>` }), el('div', { class: 'k' }, t('analysis.distance'))),
+        el('div', { class: 'fp-kpi' }, el('div', { class: 'v', html: `${Math.round(fp.ascent)}<small>m</small>` }), el('div', { class: 'k' }, t('analysis.ascent'))),
+        el('div', { class: 'fp-kpi' }, el('div', { class: 'v' }, String(fp.days)), el('div', { class: 'k' }, t('trips.sumDays')))),
+      el('div', { class: 'footprint-bars' },
+        ...fp.months.map((m) => {
+          const md = fmtDistance(m.distance, units);
+          return el('div', { class: 'fp-col', title: `${m.month} · ${m.trips} ${t('trips.sumTrips')} · ${md.v}${md.u}` },
+            el('div', { class: 'bar-wrap' },
+              el('div', { class: 'bar' + (m.month === new Date().getMonth() + 1 && fp.year === new Date().getFullYear() ? ' current' : ''), style: { height: `${Math.round((m.distance / max) * 100)}%` } })),
+            el('span', { class: 'm' }, String(m.month)));
+        })));
+    footprintCard.style.display = '';
+  }
+
   async function render() {
     allTrips = await listTrips();
     renderSummary();
+    renderNudge();
+    renderFootprint();
     renderList();
     if (!allTrips.length) { storageBar.textContent = ''; return; }
     storageBar.style.color = '';
@@ -196,12 +290,43 @@ export function createTripsView(navigate) {
     await setActiveTrip(trip.id);
     navigate('analysis');
   }
-  async function renameTrip(trip) {
-    const name = await promptModal({ title: t('trips.rename'), label: t('wp.name'), value: trip.name });
-    if (name == null) return;
-    await updateTrip(trip.id, { name });
-    toast(t('trips.renamed'), 'ok');
+  async function toggleFavorite(trip) {
+    await updateTrip(trip.id, { favorite: !trip.favorite });
     render();
+  }
+  function parseTags(value) {
+    return [...new Set(String(value || '').split(/[,，;；]+/)
+      .map((tag) => tag.trim().replace(/^#+/, '').slice(0, 16))
+      .filter(Boolean))].slice(0, 8);
+  }
+  function editTrip(trip) {
+    const nameInput = el('input', { type: 'text', value: trip.name || '', maxlength: '60' });
+    const tagsInput = el('input', {
+      type: 'text', value: (trip.tags || []).join('，'),
+      placeholder: t('trips.tagsPlaceholder')
+    });
+    const save = async () => {
+      await updateTrip(trip.id, { name: nameInput.value.trim(), tags: parseTags(tagsInput.value) });
+      m.close();
+      toast(t('trips.renamed'), 'ok');
+      render();
+    };
+    const m = modal({
+      title: t('trips.editTitle'),
+      body: el('div', {},
+        el('div', { class: 'field' }, el('label', {}, t('wp.name')), nameInput),
+        el('div', { class: 'field', style: { marginTop: '12px' } },
+          el('label', {}, t('trips.tagsLabel')), tagsInput,
+          el('div', { class: 'hint' }, t('trips.tagsHint')))),
+      footer: [
+        el('button', { class: 'btn ghost', onclick: () => m.close() }, t('common.cancel')),
+        el('button', { class: 'btn primary', onclick: save }, t('common.save'))
+      ]
+    });
+    for (const input of [nameInput, tagsInput]) {
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+    }
+    setTimeout(() => { nameInput.focus(); nameInput.select(); }, 60);
   }
   async function removeTrip(trip) {
     const ok = await confirmModal({ title: t('common.delete'), message: t('trips.deleteConfirm'), danger: true, confirmText: t('common.delete') });
@@ -326,13 +451,11 @@ export function createTripsView(navigate) {
 
   async function onBackup() {
     try {
-      const { blob, filename, tripCount } = await exportBackup();
-      if (isWeChat()) { wechatFileGuidance(); return; }
-      triggerDownload(blob, filename);
-      toast(t('trips.backupOk', { n: tripCount }), 'ok');
+      await exportBackupFlow();
+      renderNudge();
     } catch (e) {
       console.error(e);
-      toast(String(e.message || e), 'err');
+      toast(t('backup.exportErr'), 'err');
     }
   }
 
@@ -340,28 +463,7 @@ export function createTripsView(navigate) {
     const file = await filePicker('.trip,.zip,application/zip');
     if (!file) return;
     try {
-      const { conflicts } = await inspectBackup(file);
-      let strategy = 'skip';
-      if (conflicts.length) {
-        strategy = await new Promise((resolve) => {
-          let settled = false;
-          const done = (v) => { if (!settled) { settled = true; resolve(v); } };
-          const m = modal({
-            title: t('trips.restoreConflict', { n: conflicts.length }),
-            body: el('p', { class: 'muted small' }, t('trips.restoreConflict', { n: conflicts.length })),
-            footer: [
-              el('button', { class: 'btn', onclick: () => { done('skip'); m.close(); } }, t('trips.conflictSkip')),
-              el('button', { class: 'btn warn', onclick: () => { done('overwrite'); m.close(); } }, t('trips.conflictOverwrite')),
-              el('button', { class: 'btn ghost', onclick: () => { done(null); m.close(); } }, t('common.cancel'))
-            ],
-            onClose: () => done(null)
-          });
-        });
-        if (!strategy) return;
-      }
-      const n = await restoreBackup(file, strategy);
-      toast(t('trips.restoreOk', { n }), 'ok');
-      render();
+      await restoreBackupFlow(file, { onRestored: () => render() });
     } catch (e) {
       console.error(e);
       toast(t('trips.restoreErr'), 'err');
@@ -377,6 +479,7 @@ export function createTripsView(navigate) {
     }
   });
   on('backup:restored', render);
+  on('backup:exported', renderNudge);
   on('recorder:stopped', render);
 
   return { view, refresh: render, resize: () => {} };

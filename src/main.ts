@@ -11,6 +11,7 @@ import * as storeCore from './core/store';
 import * as recorderCore from './core/recorder';
 import * as rewalkCore from './core/rewalk';
 import * as batchCore from './core/batch';
+import * as backupCore from './core/backup';
 import * as coordsCore from './core/coords';
 import * as keepaliveCore from './core/keepalive';
 import { parseShareFragment } from './core/shareLink';
@@ -43,7 +44,7 @@ async function boot() {
   document.getElementById('boot-splash')?.remove();
   diag('boot', 'app ready', { lang: navigator.language });
   // debug handle for diagnostics & acceptance testing (spec: debuggability)
-  window.__lt = { recorder: recorderCore, store: storeCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore };
+  window.__lt = { recorder: recorderCore, store: storeCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, backup: backupCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore };
 
   // live meetup invite (#meet=…) — code and key stay in the fragment
   const hasMeetFragment = /[#&]meet=/.test(location.hash);

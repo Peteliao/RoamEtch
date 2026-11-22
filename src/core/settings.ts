@@ -37,7 +37,8 @@ const DEFAULTS = {
     playbackSpeed: 20
   },
   panelCollapsed: false,
-  lastTripId: null
+  lastTripId: null,
+  lastBackupAt: 0
 };
 
 let cache = null;

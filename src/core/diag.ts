@@ -14,7 +14,7 @@ export function diag(category, message, data: any = {}) {
 
 export function exportDiagLog() {
   const payload = {
-    app: 'TrackMint', version: '1.5.0', exportedAt: new Date().toISOString(),
+    app: 'TrackMint', version: '1.6.0', exportedAt: new Date().toISOString(),
     ua: navigator.userAgent, lang: navigator.language,
     tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
     online: navigator.onLine, entries

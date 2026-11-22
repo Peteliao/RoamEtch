@@ -63,14 +63,22 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 - Thirteen metric cards covering distance, duration, average/max speed, pace, moving/stopped time, ascent/descent, max/min altitude, calories, and track points.
 - Elevation profile and speed chart linked to the map; hover the chart to locate the same point on the map.
 - Slope distribution, difficulty estimate, gap detection, timeline, and waypoints; calorie and trip-score estimates based on the selected activity.
+- **GPS quality report** built from real samples: average fix accuracy, poor-fix ratio, time gaps, and altitude jumps, summarized as a 0–100 score with practical hints.
 - One-click gap repair that sends only the endpoints of a detected gap to a public routing service (BRouter / OSRM) to rebuild the missing road track.
+
+### Organize: keep a growing library manageable
+
+- Favorite and pin trips, add up to 8 tags, search names and tags, and filter by activity or favorites; sort by recently updated, newest, longest distance, or name.
+- **Yearly footprint**: trips, distance, ascent, active days, and a 12-month distribution for each year, computed entirely from local trips.
+- Favorites, tags, and footprint stats stay on this device — nothing is uploaded.
 
 ### Share and export: turn a track into something people open
 
 - **Posters**: portrait 1080×1920 and square 1080×1080, with route map, start/end time, trip score, GPS signal, elevation profile, sampled place names, and a branded QR code — theme-aware for dark and light canvases.
 - **Replay videos**: 10 / 15 / 30-second map replays with synchronized metrics, exported as MP4 or WebM depending on browser support, then downloaded or opened in the system share sheet.
 - **Self-contained HTML**: a single offline-capable page with full stats, elevation profile, zoomable map, waypoints, and photos — ideal for people who do not have the app.
-- **Standard files**: WGS-84 GPX (works with Garmin, Strava, TwoNav, and similar tools), GeoJSON, and KML. Import GPX, XML, and ZIP batches; batch-export ZIP; back up and restore the whole library.
+- **Standard files**: WGS-84 GPX (works with Garmin, Strava, TwoNav, and similar tools), GeoJSON, and KML. Import GPX, XML, and ZIP batches; batch-export ZIP.
+- **Verifiable backup**: the full-library ZIP carries SHA-256 content checksums. Restore shows the export time, contents, duplicate trips, and verification result, can download a snapshot of the current database first, and refuses corrupted archives. The backup is not encrypted — store it safely.
 - **Compact import link**: pack a simplified track and waypoints into a URL `#` fragment under 1.5 KB. Opening it imports the trip; it is not a public page and contains no photos.
 - **Privacy review**: start/end privacy circles, sensitive-waypoint hiding, EXIF stripping, and WGS-84 export are shown together before you share or download.
 
@@ -166,7 +174,7 @@ Then choose **Settings → Team relay → Custom WS relay** and enter `wss://you
 - Files and photos: fflate (ZIP), exifr (EXIF parsing and stripping)
 - Offline: [vite-plugin-pwa](https://vite-pwa-org.netlify.app/) (Workbox)
 - Meetup: 12-character code + HKDF-SHA-256 key derivation + AES-GCM end-to-end encryption; positions and ephemeral chat both use MQTT WSS or a custom WebSocket blind relay
-- Tests: Vitest covers coordinate conversion, track statistics, GPX/KML/GeoJSON, share links, and meetup crypto; CI runs typecheck, tests, and the production build
+- Tests: Vitest covers coordinate conversion, track statistics, backup integrity, yearly footprints, GPS quality, GPX/KML/GeoJSON, share links, and meetup crypto; CI runs typecheck, tests, and the production build
 - Self-hosting: multi-stage Dockerfile + nginx.conf; an optional minimal blind relay template lives in [`relay/`](relay/README.md)
 
 ```text
@@ -206,6 +214,7 @@ TrackMint is designed to keep data on your device, but “local-first” does no
 - **Photos**: EXIF location data is stripped before storage; exported posters, videos, and HTML use the locally processed images only.
 - **External service requests**: basemap tiles, elevation, place-name, and routing services require network access and receive the coordinates/viewport needed to render or compute a result, plus normal network information such as your IP. When generating a poster or video, sampled coordinates may be sent to OpenStreetMap-based reverse geocoding to label the route, and the result is cached locally. Gap repair and meetup routing send endpoints only when you explicitly trigger them. These requests never upload photos or the full trip library.
 - **Device risk**: clearing browser data, uninstalling the PWA, or changing devices removes local trips — keep a full backup. Anyone who can unlock your device may be able to read browser storage.
+- **Full backups**: the backup ZIP contains complete tracks, waypoints, and photos and is **not encrypted**. Anyone with the file can read it, so store it somewhere you trust.
 
 ## FAQ
 
@@ -259,7 +268,7 @@ npm test
 npm run build
 ```
 
-Run `cd relay && npm test` as well when changing the relay. Project conventions, dual-region test methods, and debug entry points are in [CONTRIBUTING.md](CONTRIBUTING.md); the security model and private vulnerability reporting are in [SECURITY.md](SECURITY.md); release notes are in [CHANGELOG.md](CHANGELOG.md).
+Run `cd relay && npm test` as well when changing the relay. Project conventions, dual-region test methods, and debug entry points are in [CONTRIBUTING.md](CONTRIBUTING.md); modules and data flow are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); the security model and private vulnerability reporting are in [SECURITY.md](SECURITY.md); community standards are in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md); release notes are in [CHANGELOG.md](CHANGELOG.md).
 
 The project is committed to local-first storage, no accounts, no cloud trip library, and WGS-84 data. When adding a dependency or external service, document its privacy impact as well.
 
