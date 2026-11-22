@@ -275,6 +275,8 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
 
   const detailRows: [string, string][] = [];
   if (stats.hasTime) {
+    detailRows.push([t('analysis.activeTime'), fmtDuration(stats.activeMs)]);
+    if (stats.breakMs > 0) detailRows.push([t('analysis.gapTime'), fmtDuration(stats.breakMs)]);
     detailRows.push([t('analysis.movingTime'), fmtDuration(stats.movingMs)]);
     detailRows.push([t('analysis.stillTime'), fmtDuration(stats.stillMs)]);
     detailRows.push([t('analysis.avgSpeed'), `${avgSpeed.v} ${avgSpeed.u}`]);

@@ -79,7 +79,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 - **Replay videos**: 10 / 15 / 30-second map replays with synchronized metrics and one of four original looping soundtracks, synthesized on-device, randomly chosen by default or selected manually, and muxed into the MP4 or WebM export.
 - **Self-contained HTML**: a single offline-capable page with full stats, elevation profile, zoomable map, waypoints, and photos — ideal for people who do not have the app.
 - **Standard files**: WGS-84 GPX (works with Garmin, Strava, TwoNav, and similar tools), GeoJSON, and KML. Import GPX, XML, and ZIP batches; batch-export ZIP.
-- **Verifiable backup**: the full-library ZIP carries SHA-256 content checksums. Restore shows the export time, contents, duplicate trips, and verification result, can download a snapshot of the current database first, and refuses corrupted archives. The backup is not encrypted — store it safely.
+- **Verifiable backup**: the full-library ZIP carries SHA-256 content checksums. Restore shows the export time, contents, duplicate trips, and verification result, can download a snapshot of the current database first, and refuses corrupted archives. Before writing, restore validates archive size, paths, entries, and record relationships, then applies everything in one transaction that rolls back on failure. The backup is not encrypted — store it safely.
 - **Compact import link**: pack a simplified track and waypoints into a URL `#` fragment under 1.5 KB. Opening it imports the trip; it is not a public page and contains no photos.
 - **Privacy review**: start/end privacy circles, sensitive-waypoint hiding, EXIF stripping, and WGS-84 export are shown together before you share or download.
 - **Promo artwork**: generate a 1080×1350 card from Settings. Each theme ships three designs — local-first, yearly footprint, and encrypted meetup — with matching captions, picked at random without immediate repeats. Product info and a QR code only; no personal data.
@@ -100,6 +100,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 - A one-time install prompt appears on mobile; the same guide is always available in Settings, with platform-specific steps for iOS, Android, and desktop.
 - Installed PWAs launch from the home screen and cache the app shell plus map tiles you have already viewed.
 - Loaded screens, recording, statistics, posters, videos, and file exports work locally. First visits, uncached map areas, live meetup, and some place/routing services still need network access.
+- App updates reload only after you confirm; the update action is disabled while recording or paused so it cannot interrupt a trip. Fixes that fail to reach IndexedDB stay buffered and retry automatically.
 - Geolocation requires HTTPS (or localhost) and browser location permission.
 - Map rendering uses MapLibre GL JS 6 and requires WebGL2 (supported by current Chrome, Edge, Safari, and Firefox).
 

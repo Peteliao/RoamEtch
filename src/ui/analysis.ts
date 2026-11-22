@@ -149,6 +149,10 @@ export function createAnalysisView() {
         el('span', { class: 'stat-diff' }, t('analysis.difficulty'),
           el('span', { class: 'stat-stars' }, '★'.repeat(score) + '☆'.repeat(5 - score))),
         el('span', { class: 'stat-note' }, t('analysis.difficultyNote')),
+        stats.hasTime ? el('span', { class: 'stat-time' }, t('analysis.timeBreakdown', {
+          active: fmtDuration(stats.activeMs, { compact: true }),
+          gap: fmtDuration(stats.breakMs, { compact: true })
+        })) : null,
         el('span', { class: 'stat-seg' }, `${stats.segCount} ${t('analysis.segShort')}`))
     );
     // fatigue advisory for driving

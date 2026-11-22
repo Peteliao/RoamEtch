@@ -5,6 +5,15 @@ function track(points) {
   return [{ id: 'seg-1', points }];
 }
 
+function movingSegment(startT, endT, baseLat = 30) {
+  const points = [];
+  for (let t = startT; t <= endT; t += 60_000) {
+    const step = (t - startT) / 60_000;
+    points.push({ lat: baseLat + step * 0.0008, lon: 120, alt: 100, t });
+  }
+  return { id: `seg-${startT}`, points };
+}
+
 describe('trip statistics', () => {
   it('computes distance, duration and smoothed ascent for a timed track', () => {
     const points = [
@@ -43,11 +52,81 @@ describe('trip statistics', () => {
     ]), {});
     expect(untimed.hasTime).toBe(false);
     expect(untimed.duration).toBe(0);
+    expect(untimed.activeMs).toBe(0);
     expect(untimed.movingMs).toBe(0);
+    expect(untimed.stillMs).toBe(0);
+    expect(untimed.breakMs).toBe(0);
 
     const empty = computeStats([], {});
     expect(empty.distance).toBe(0);
     expect(empty.pointCount).toBe(0);
     expect(empty.calories).toBeNull();
+  });
+
+  it('keeps a pause between segments out of moving and still time', () => {
+    const stats = computeStats([
+      movingSegment(0, 2 * 3600_000),
+      movingSegment(3 * 3600_000, 5 * 3600_000, 30.5)
+    ], { activity: 'hike', weightKg: 65 });
+    expect(stats.duration).toBe(5 * 3600_000);
+    expect(stats.activeMs).toBe(4 * 3600_000);
+    expect(stats.movingMs).toBe(4 * 3600_000);
+    expect(stats.stillMs).toBe(0);
+    expect(stats.breakMs).toBe(3600_000);
+    expect(stats.segments[0].activeMs).toBe(2 * 3600_000);
+  });
+
+  it('counts a stationary track as still, not as a gap', () => {
+    const stats = computeStats(track([
+      { lat: 30, lon: 120, t: 0 },
+      { lat: 30, lon: 120, t: 60_000 },
+      { lat: 30, lon: 120, t: 120_000 }
+    ]), {});
+    expect(stats.duration).toBe(120_000);
+    expect(stats.activeMs).toBe(120_000);
+    expect(stats.movingMs).toBe(0);
+    expect(stats.stillMs).toBe(120_000);
+    expect(stats.breakMs).toBe(0);
+  });
+
+  it('treats intervals beyond the sample cap as gaps', () => {
+    const stats = computeStats(track([
+      { lat: 30, lon: 120, t: 0 },
+      { lat: 30.001, lon: 120, t: 200_000 }
+    ]), {});
+    expect(stats.duration).toBe(200_000);
+    expect(stats.activeMs).toBe(0);
+    expect(stats.movingMs).toBe(0);
+    expect(stats.stillMs).toBe(0);
+    expect(stats.breakMs).toBe(200_000);
+  });
+
+  it('accepts exactly 60 s between fixes and rejects longer ones', () => {
+    const boundary = computeStats(track([
+      { lat: 30, lon: 120, t: 0 },
+      { lat: 30.001, lon: 120, t: 60_000 }
+    ]), {});
+    expect(boundary.activeMs).toBe(60_000);
+
+    const over = computeStats(track([
+      { lat: 30, lon: 120, t: 0 },
+      { lat: 30.001, lon: 120, t: 60_001 }
+    ]), {});
+    expect(over.activeMs).toBe(0);
+    expect(over.breakMs).toBe(60_001);
+  });
+
+  it('ignores duplicate and backwards timestamps without corrupting duration', () => {
+    const stats = computeStats(track([
+      { lat: 30, lon: 120, t: 0 },
+      { lat: 30.001, lon: 120, t: 60_000 },
+      { lat: 30.002, lon: 120, t: 60_000 },
+      { lat: 30.003, lon: 120, t: 30_000 }
+    ]), {});
+    expect(stats.duration).toBe(60_000);
+    expect(stats.activeMs).toBe(60_000);
+    expect(stats.movingMs).toBe(60_000);
+    expect(stats.stillMs).toBe(0);
+    expect(stats.breakMs).toBe(0);
   });
 });

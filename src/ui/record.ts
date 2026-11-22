@@ -2,7 +2,7 @@
 import { t, currentLang } from '../core/i18n';
 import { get, set } from '../core/settings';
 import { on, emit } from '../core/events';
-import { rec, startRecording, pauseRecording, resumeRecording, stopRecording, continueTrip, findRecoverableTrip, createManualTrip, retryGeolocation, setRecordingActivity } from '../core/recorder';
+import { rec, startRecording, pauseRecording, resumeRecording, stopRecording, continueTrip, findRecoverableTrip, createManualTrip, retryGeolocation, setRecordingActivity, flushBuffer } from '../core/recorder';
 import { armKeepAlive, disarmKeepAlive, isKeepAliveActive } from '../core/keepalive';
 import { requestWakeLock, releaseWakeLock } from '../core/wakelock';
 import { setThemeColorOverride, setThemeModeOverride } from '../core/theme';
@@ -181,8 +181,15 @@ export function createRecordView() {
   // ---------- live panel ----------
   const panel = el('div', { class: 'live-panel' + (get('panelCollapsed') ? ' collapsed' : '') });
   const pStatus = el('span', { class: 'st idle' }, t('record.statusIdle'));
+  const pSave = el('span', { class: 'lp-save' });
+  pSave.onclick = (e) => {
+    e.stopPropagation();
+    if (!rec.saveState.error) return;
+    if (rec.saveState.error === 'finalize') void onStop();
+    else void retrySave();
+  };
   const pHead = el('div', { class: 'lp-head', onclick: togglePanel },
-    pStatus, el('span', { class: 'rec-dot', id: 'panel-rec-dot' }), el('span', { class: 'chev' }, icon('chevron', 16)));
+    pStatus, pSave, el('span', { class: 'rec-dot', id: 'panel-rec-dot' }), el('span', { class: 'chev' }, icon('chevron', 16)));
   function togglePanel() {
     panel.classList.toggle('collapsed');
     set('panelCollapsed', panel.classList.contains('collapsed'));
@@ -286,6 +293,28 @@ export function createRecordView() {
     detail.append(...items);
   }
 
+  function renderSaveChip() {
+    const active = rec.status === 'recording' || rec.status === 'paused';
+    pSave.style.display = active ? '' : 'none';
+    const s = rec.saveState;
+    pSave.className = 'lp-save';
+    if (!active) return;
+    if (s.error) {
+      pSave.classList.add('bad');
+      pSave.textContent = t('record.saveFailedShort');
+      pSave.title = t('record.saveFailed', { n: s.pending });
+    } else if (s.pending > 0) {
+      pSave.classList.add('pending');
+      pSave.textContent = t('record.savePendingShort', { n: s.pending });
+      pSave.title = t('record.savePending', { n: s.pending });
+    } else {
+      pSave.textContent = t('record.saveOkShort');
+      pSave.title = s.lastSavedAt
+        ? `${t('record.saveOk')} · ${new Date(s.lastSavedAt).toLocaleTimeString()}`
+        : t('record.saveOk');
+    }
+  }
+
   function renderStatus() {
     const dot = panel.querySelector('#panel-rec-dot');
     const mapSt = { idle: 'statusIdle', recording: 'statusRecording', paused: 'statusPaused', finished: 'statusFinished' };
@@ -297,6 +326,7 @@ export function createRecordView() {
     pStatus.textContent = t(`record.${mapSt[rec.status] || 'statusIdle'}`) + extra;
     pStatus.className = `st ${rec.status}`;
     dot.className = `rec-dot ${rec.status}`;
+    renderSaveChip();
     emit('recstatus:changed', rec.status);
   }
 
@@ -499,6 +529,14 @@ export function createRecordView() {
     toast(t('record.exitViewOk'), 'ok', 2000);
   }
 
+  function runRecAction(p) {
+    p.catch((e) => {
+      console.error(e);
+      renderButtons();
+      renderBanners();
+    });
+  }
+
   function renderButtons() {
     btnRow.innerHTML = '';
     actRow.innerHTML = '';
@@ -517,7 +555,7 @@ export function createRecordView() {
       actRow.append(liveActWrap, autoTag);
       btnRow.append(
         el('button', { class: 'rec-btn node', onclick: openRecWaypoint }, icon('pin', 20), t('record.node')),
-        el('button', { class: 'rec-btn pause', onclick: () => pauseRecording() }, icon('pause', 22), t('record.pause')),
+        el('button', { class: 'rec-btn pause', onclick: () => runRecAction(pauseRecording()) }, icon('pause', 22), t('record.pause')),
         el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop'))
       );
     } else if (rec.status === 'paused') {
@@ -526,7 +564,7 @@ export function createRecordView() {
       actRow.append(liveActWrap, autoTag);
       btnRow.append(
         el('button', { class: 'rec-btn node', onclick: openRecWaypoint }, icon('pin', 20), t('record.node')),
-        el('button', { class: 'rec-btn resume', onclick: () => { armKeepAlive(); resumeRecording(); } }, icon('play', 22), t('record.resume')),
+        el('button', { class: 'rec-btn resume', onclick: () => { armKeepAlive(); runRecAction(resumeRecording()); } }, icon('play', 22), t('record.resume')),
         el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop'))
       );
     }
@@ -573,7 +611,11 @@ export function createRecordView() {
         }
       } catch { /* query unsupported — watchPosition error path still covers it */ }
     }
-    const ok = await startRecording({ activity: activitySel.value });
+    const ok = await startRecording({ activity: activitySel.value }).catch((e) => {
+      console.error(e);
+      toast(t('record.startFailed'), 'err', 4800);
+      return false;
+    });
     if (!ok) disarmKeepAlive();
   }
   async function onManual() {
@@ -598,18 +640,20 @@ export function createRecordView() {
     const ok = await confirmModal({ title: t('record.stop'), message: t('record.stopConfirm'), confirmText: t('record.stop') });
     if (!ok) return;
     const id = await stopRecording();
+    if (!id) {
+      toast(t('record.stopSaveFailed'), 'err', 5200);
+      renderButtons();
+      renderBanners();
+      return;
+    }
     map.endLive();
     map.setTrackData([], []);
-    let defaultName = '';
-    if (id) {
-      const full = await loadTripFull(id);
-      defaultName = suggestedTripName(full);
-      await updateTrip(id, { name: defaultName });
-      await setActiveTrip(id);
-    }
+    const full = await loadTripFull(id);
+    const defaultName = suggestedTripName(full);
+    await updateTrip(id, { name: defaultName });
+    await setActiveTrip(id);
     renderButtons();
     toast(t('record.stopped'), 'ok');
-    if (!id) return;
     const name = await promptModal({
       title: t('record.nameTrip'),
       label: t('record.tripName'),
@@ -641,10 +685,14 @@ export function createRecordView() {
   }
 
   // ---------- banners ----------
-  function geoBanner(msg, onRetry) {
+  function geoBanner(msg, onRetry, label = t('record.geoRetry')) {
     return el('div', { class: 'debug-banner', style: { display: 'flex', gap: '8px', alignItems: 'center' } },
       el('span', { class: 'grow' }, '⚠ ' + msg),
-      el('button', { class: 'btn sm', onclick: onRetry }, t('record.geoRetry')));
+      el('button', { class: 'btn sm', onclick: onRetry }, label));
+  }
+  async function retrySave() {
+    const ok = await flushBuffer();
+    if (ok) toast(t('record.saveOk'), 'ok', 2200);
   }
   function geoErrorMsg(code) {
     return code === 'unavailable' ? t('record.geoUnavailable')
@@ -657,10 +705,19 @@ export function createRecordView() {
     if (readOnly) {
       bannerBox.append(el('div', { class: 'debug-banner' }, t('record.tabLocked')));
     }
+    if (rec.saveState.error) {
+      bannerBox.append(geoBanner(
+        t('record.saveFailed', { n: rec.saveState.pending }),
+        rec.saveState.error === 'finalize' ? () => { void onStop(); } : () => { void retrySave(); },
+        rec.saveState.error === 'finalize' ? t('record.stopRetry') : t('record.saveRetry')
+      ));
+    }
     if (rec.permissionDenied && rec.status !== 'recording') {
       bannerBox.append(geoBanner(t('record.permissionDenied'), rec.status === 'paused' ? () => resumeRecording() : onStart));
-    } else if (rec.geoError && rec.status === 'recording') {
-      bannerBox.append(geoBanner(geoErrorMsg(rec.geoError), retryGeolocation));
+    } else if (rec.geoError && (rec.status === 'recording' || rec.status === 'idle')) {
+      bannerBox.append(geoBanner(geoErrorMsg(rec.geoError), rec.status === 'idle' ? onStart : retryGeolocation));
+    } else if (rec.geoError && rec.status === 'paused' && !rec.permissionDenied) {
+      bannerBox.append(geoBanner(geoErrorMsg(rec.geoError), () => resumeRecording()));
     }
     if (recoverable && rec.status === 'idle') {
       bannerBox.append(el('div', { class: 'card', style: { pointerEvents: 'auto', display: 'flex', gap: '8px', alignItems: 'center', padding: '10px 12px' } },
@@ -910,7 +967,10 @@ export function createRecordView() {
     if (live.pointCount === 1 && !rec.simulated) { renderStatus(); toast(t('record.firstFix'), 'ok', 2500); }
   });
   on('recorder:tick', ({ live }) => { renderPanel(live); renderOled(live); });
-  on('recorder:saved', () => { /* incremental persistence indicator could go here */ });
+  on('recorder:saved', () => { renderSaveChip(); renderBanners(); });
+  on('recorder:persistence', () => { renderSaveChip(); });
+  on('recorder:saveerror', () => { renderSaveChip(); renderBanners(); });
+  on('recorder:starterror', () => { renderButtons(); renderBanners(); });
   on('recorder:filtered', ({ count }) => {
     if (count === 1 || count % 10 === 0) toast(t('record.invalidPoint', { n: count }), 'warn', 2000);
   });
@@ -944,8 +1004,8 @@ export function createRecordView() {
     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && appState.editMode) { e.preventDefault(); e.shiftKey ? redoEdit() : undoEdit(); }
     if (e.key === ' ' && appState.view === 'record') {
       e.preventDefault();
-      if (rec.status === 'recording') pauseRecording();
-      else if (rec.status === 'paused') resumeRecording();
+      if (rec.status === 'recording') runRecAction(pauseRecording());
+      else if (rec.status === 'paused') runRecAction(resumeRecording());
     }
   }
   document.addEventListener('keydown', onKeydown);

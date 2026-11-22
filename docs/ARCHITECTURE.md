@@ -91,6 +91,13 @@ Backups serialize every table plus binary media into a `.trip` ZIP:
 - `integrity.files` records byte length and SHA-256 per media file.
 - Version 1 archives are still accepted and reported as “no checksum”; version 2
   archives block restore when payload or media verification fails.
+- Inspection enforces size, entry-count, compression-ratio, duplicate-path,
+  manifest-size, point-count, and path/ID whitelist limits before decompression.
+  Manifest counts and trip/segment/chunk/waypoint/media relationships are checked
+  before restore; missing media blocks the restore.
+- Restore reuses the inspected archive and writes all tables plus overwrite
+  deletions in one IndexedDB transaction, so a failed media write rolls back
+  previously deleted trips.
 - Backups are **not encrypted**. Integrity is tamper detection, not secrecy or
   authenticity: an attacker who rewrites the archive can recompute the checksums.
 
@@ -103,6 +110,10 @@ Backups serialize every table plus binary media into a `.trip` ZIP:
 3. A fix more than 5 minutes or 500 m from the previous accepted point starts a new
    segment. Background silence can also force a segment break on return.
 4. Accepted points are buffered and flushed to `trackChunks` in small batches.
+   Flushes are serialized; a failed write stays buffered, raises a visible error,
+   and retries every five seconds. `pagehide` writes a synchronous localStorage
+   spill that is replayed into the segment on the next boot. The chunk append,
+   segment end time, and trip update time share one IndexedDB transaction.
    Live distance, ascent, speed, and accuracy are updated incrementally.
 5. Wake lock, keep-alive audio, recorder locks, and visibility handling reduce the
    chance of the browser suspending a long recording. The OLED pocket lock is a
@@ -110,14 +121,19 @@ Backups serialize every table plus binary media into a `.trip` ZIP:
    mode, because a hidden page lets browsers suspend geolocation. Operating-system
    limits still apply; recording is not guaranteed with the screen off on every
    device.
-6. Finishing writes `statsCache` through the statistics worker so the trip list and
+6. Pause and finish refuse to complete while buffered points remain unwritten,
+   and a failed resume restores the paused state instead of silently recording
+   without geolocation.
+7. Finishing writes `statsCache` through the statistics worker so the trip list and
    footprint can render without recomputing every track.
 
 ## Statistics and charts
 
-`core/stats.ts` derives per-segment and total distance, duration, moving/stopped
-time, speed, pace, ascent/descent, altitude range, calories, and a difficulty /
-quality score. The compute worker runs statistics, simplification, and coordinate
+`core/stats.ts` derives per-segment and total distance, wall duration, recorded
+(active) time, moving/stopped time, gap time, speed, pace, ascent/descent, altitude
+range, calories, and a difficulty / quality score. Only intervals up to 60 seconds
+count as recorded time; pause and long-silence gaps are reported separately rather
+than counted as standing still. The compute worker runs statistics, simplification, and coordinate
 transforms; `workerBridge.ts` falls back to synchronous execution if the worker
 cannot start. `analysis.ts` renders uPlot elevation and speed charts and links
 hover position to the MapLibre marker. Touch uses pointer capture for continuous
@@ -169,9 +185,11 @@ static app.
 
 `vite-plugin-pwa` precaches the app shell, fonts, icons, and small media, while
 runtime caches cover map tiles and elevation lookups with entry and age limits.
-`registerType: autoUpdate` activates a new service worker immediately; a reload
-picks up the new bundle. During development, hard-refresh or clear the service
-worker if an old build appears.
+`registerType: prompt` keeps a new service worker waiting until the user confirms
+an in-app update notice. The button is disabled while recording or paused, so a
+reload cannot interrupt an active trip; recording state is never destroyed without
+a confirmed update. During development, hard-refresh or clear the service worker
+if an old build appears.
 
 ## Tests and CI
 

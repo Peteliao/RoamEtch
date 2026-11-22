@@ -19,7 +19,7 @@ export default defineConfig({
   worker: { format: 'es' },
   plugins: [
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       includeAssets: ['icons/*.svg', 'icons/*.png'],
       manifest: {
         name: 'TrackMint迹刻 · 行程记录',
@@ -38,8 +38,8 @@ export default defineConfig({
         ]
       },
       workbox: {
-        skipWaiting: true,
-        clientsClaim: true,
+        skipWaiting: false,
+        clientsClaim: false,
         globPatterns: ['**/*.{js,css,html,svg,png,woff2,mp4}'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         navigateFallback: 'index.html',

@@ -1,12 +1,21 @@
 // Full-database backup / restore as a .trip ZIP archive (JSON tables + media binaries).
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
-import { db, deleteTrip } from './store';
+import { db } from './store';
 import { emit } from './events';
 import { sha256Hex, stableStringify } from './integrity';
 
 const FORMAT = 'localtrace-backup';
 const VERSION = 2;
 const SUPPORTED_VERSIONS = new Set([1, 2]);
+
+const MAX_BACKUP_BYTES = 256 * 1024 * 1024;
+const MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024;
+const MAX_ENTRY_BYTES = 20 * 1024 * 1024;
+const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES = 20_000;
+const MAX_POINTS = 3_000_000;
+const SAFE_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const MEDIA_PATH = /^media\/[A-Za-z0-9_-]{1,80}(?:\.thumb)?\.jpg$/;
 
 async function blobToU8(blob) {
   return new Uint8Array(await blob.arrayBuffer());
@@ -72,18 +81,133 @@ export async function exportBackup() {
   return { blob, filename: `trackmint-backup-${stamp}.trip`, tripCount: trips.length, exportedAt, counts: manifest.counts };
 }
 
-export async function inspectBackup(file) {
-  const u8 = new Uint8Array(await file.arrayBuffer());
+function readZipLimited(u8) {
+  let total = 0;
+  let count = 0;
+  const names = new Set();
   let files;
-  try { files = unzipSync(u8); } catch { throw new Error('not a zip'); }
-  if (!files['manifest.json']) throw new Error('missing manifest');
-  let manifest;
-  try { manifest = JSON.parse(strFromU8(files['manifest.json'])); } catch { throw new Error('invalid manifest'); }
+  try {
+    files = unzipSync(u8, {
+      filter(info) {
+        count++;
+        if (count > MAX_ARCHIVE_ENTRIES) throw new Error('too many files');
+        if (names.has(info.name)) throw new Error('duplicate archive entry');
+        names.add(info.name);
+        if (info.name !== 'manifest.json' && !MEDIA_PATH.test(info.name)) throw new Error('unsafe archive path');
+        if (info.originalSize > MAX_ENTRY_BYTES) throw new Error('archive entry too large');
+        if (info.originalSize > 8 * 1024 * 1024 && info.size > 0 && info.originalSize / info.size > 200) {
+          throw new Error('suspicious compression ratio');
+        }
+        total += info.originalSize;
+        if (total > MAX_UNCOMPRESSED_BYTES) throw new Error('archive expands too large');
+        return true;
+      }
+    });
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (/(too many|duplicate|unsafe|too large|suspicious|expands)/.test(msg)) throw e;
+    throw new Error('not a zip');
+  }
+  const manifestBytes = files['manifest.json'];
+  if (!manifestBytes) throw new Error('missing manifest');
+  if (manifestBytes.byteLength > MAX_MANIFEST_BYTES) throw new Error('manifest too large');
+  return files;
+}
+
+function invalidManifest() {
+  throw new Error('invalid manifest');
+}
+
+function checkId(value) {
+  if (typeof value !== 'string' || !SAFE_ID.test(value)) invalidManifest();
+  return value;
+}
+
+function validateManifest(manifest, files) {
   if (manifest.format !== FORMAT) throw new Error('wrong format');
   if (!SUPPORTED_VERSIONS.has(manifest.version)) throw new Error('unsupported version');
   for (const key of ['trips', 'segments', 'trackChunks', 'waypoints', 'mediaMeta', 'elevCache']) {
-    if (!Array.isArray(manifest[key])) throw new Error('invalid manifest');
+    if (!Array.isArray(manifest[key])) invalidManifest();
   }
+
+  const countPairs = [
+    ['trips', manifest.trips],
+    ['segments', manifest.segments],
+    ['trackChunks', manifest.trackChunks],
+    ['waypoints', manifest.waypoints],
+    ['media', manifest.mediaMeta]
+  ];
+  if (manifest.counts != null) {
+    if (typeof manifest.counts !== 'object') invalidManifest();
+    for (const [key, list] of countPairs) {
+      if (key in manifest.counts && manifest.counts[key] !== list.length) invalidManifest();
+    }
+  }
+
+  const tripIds = new Set();
+  for (const t of manifest.trips) {
+    if (!t || typeof t !== 'object') invalidManifest();
+    const id = checkId(t.id);
+    if (tripIds.has(id)) invalidManifest();
+    tripIds.add(id);
+  }
+
+  const segTrip = new Map();
+  for (const s of manifest.segments) {
+    if (!s || typeof s !== 'object') invalidManifest();
+    const id = checkId(s.id);
+    if (segTrip.has(id) || !tripIds.has(s.tripId)) invalidManifest();
+    segTrip.set(id, s.tripId);
+  }
+
+  let pointCount = 0;
+  const chunkIds = new Set();
+  for (const c of manifest.trackChunks) {
+    if (!c || typeof c !== 'object') invalidManifest();
+    const id = checkId(c.id);
+    if (chunkIds.has(id) || segTrip.get(c.segmentId) !== c.tripId || !Array.isArray(c.points)) invalidManifest();
+    chunkIds.add(id);
+    pointCount += c.points.length;
+    if (pointCount > MAX_POINTS) invalidManifest();
+    for (const p of c.points) {
+      if (!p || !Number.isFinite(p.lat) || !Number.isFinite(p.lon)
+        || Math.abs(p.lat) > 90 || Math.abs(p.lon) > 180) invalidManifest();
+      if (p.t != null && !Number.isFinite(p.t)) invalidManifest();
+    }
+  }
+
+  const waypointIds = new Set();
+  for (const w of manifest.waypoints) {
+    if (!w || typeof w !== 'object') invalidManifest();
+    const id = checkId(w.id);
+    if (waypointIds.has(id) || !tripIds.has(w.tripId)) invalidManifest();
+    waypointIds.add(id);
+    if (!Number.isFinite(w.lat) || !Number.isFinite(w.lon)
+      || Math.abs(w.lat) > 90 || Math.abs(w.lon) > 180) invalidManifest();
+  }
+
+  const mediaIds = new Set();
+  for (const m of manifest.mediaMeta) {
+    if (!m || typeof m !== 'object') invalidManifest();
+    const id = checkId(m.id);
+    if (mediaIds.has(id) || !tripIds.has(m.tripId)) invalidManifest();
+    mediaIds.add(id);
+    if (!files[`media/${id}.jpg`]) throw new Error('missing media');
+  }
+
+  for (const e of manifest.elevCache) {
+    if (!e || typeof e !== 'object' || typeof e.key !== 'string') invalidManifest();
+  }
+}
+
+export async function inspectBackup(file) {
+  if (Number(file?.size) > MAX_BACKUP_BYTES) throw new Error('backup file too large');
+  const u8 = new Uint8Array(await file.arrayBuffer());
+  if (u8.byteLength > MAX_BACKUP_BYTES) throw new Error('backup file too large');
+  const files = readZipLimited(u8);
+  let manifest;
+  try { manifest = JSON.parse(strFromU8(files['manifest.json'])); } catch { throw new Error('invalid manifest'); }
+  validateManifest(manifest, files);
   const existing = new Set((await db.trips.toArray()).map((t) => t.id));
   const conflicts = manifest.trips.filter((t) => existing.has(t.id)).map((t) => t.id);
   const integrity = await verifyIntegrity(manifest, files);
@@ -111,15 +235,34 @@ async function verifyIntegrity(manifest, files) {
 }
 
 /** strategy: 'skip' | 'overwrite' */
-export async function restoreBackup(file, strategy = 'skip') {
-  const { manifest, files, conflicts, integrity } = await inspectBackup(file);
+export async function restoreBackup(file, strategy = 'skip', inspected = null) {
+  if (strategy !== 'skip' && strategy !== 'overwrite') throw new Error('invalid strategy');
+  const data = inspected || await inspectBackup(file);
+  const { manifest, files, conflicts, integrity } = data;
   if (integrity.ok === false) throw new Error('backup integrity check failed');
-  if (strategy === 'overwrite') {
-    for (const id of conflicts) await deleteTrip(id);
-  }
   const skipIds = new Set(strategy === 'skip' ? conflicts : []);
   let restored = 0;
+  const noExisting = async (table, ids) => {
+    if (!ids.length) return;
+    const rows = await table.bulkGet(ids);
+    if (rows.some(Boolean)) throw new Error('archive id collision');
+  };
   await db.transaction('rw', [db.trips, db.segments, db.trackChunks, db.waypoints, db.media, db.elevCache], async () => {
+    restored = 0;
+    if (strategy === 'overwrite') {
+      for (const id of conflicts) {
+        await db.trackChunks.where('tripId').equals(id).delete();
+        await db.segments.where('tripId').equals(id).delete();
+        await db.waypoints.where('tripId').equals(id).delete();
+        await db.media.where('tripId').equals(id).delete();
+        await db.trips.delete(id);
+      }
+    }
+    await noExisting(db.trips, manifest.trips.filter((t) => !skipIds.has(t.id)).map((t) => t.id));
+    await noExisting(db.segments, manifest.segments.filter((s) => !skipIds.has(s.tripId)).map((s) => s.id));
+    await noExisting(db.trackChunks, manifest.trackChunks.filter((c) => !skipIds.has(c.tripId)).map((c) => c.id));
+    await noExisting(db.waypoints, manifest.waypoints.filter((w) => !skipIds.has(w.tripId)).map((w) => w.id));
+    await noExisting(db.media, manifest.mediaMeta.filter((m) => !skipIds.has(m.tripId)).map((m) => m.id));
     for (const t of manifest.trips) {
       if (skipIds.has(t.id)) continue;
       await db.trips.put(t);
@@ -132,8 +275,8 @@ export async function restoreBackup(file, strategy = 'skip') {
     for (const m of manifest.mediaMeta || []) {
       if (skipIds.has(m.tripId)) continue;
       const blobData = files[`media/${m.id}.jpg`];
+      if (!blobData) throw new Error('missing media');
       const thumbData = files[`media/${m.id}.thumb.jpg`];
-      if (!blobData) continue;
       await db.media.put({
         ...m,
         blob: new Blob([blobData], { type: 'image/jpeg' }),

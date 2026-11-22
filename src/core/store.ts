@@ -53,22 +53,24 @@ export const listSegments = (tripId) => db.segments.where('tripId').equals(tripI
 
 export async function appendPoints(segmentId, tripId, points) {
   if (!points.length) return;
-  const last = await db.trackChunks.where('segmentId').equals(segmentId).last();
-  if (last && last.points.length + points.length <= CHUNK_SIZE) {
-    last.points.push(...points);
-    await db.trackChunks.put(last);
-  } else {
-    const seq = last ? last.seq + 1 : 0;
-    // split oversized batches across chunks
-    for (let i = 0; i < points.length; i += CHUNK_SIZE) {
-      await db.trackChunks.add({
-        id: uuid(), tripId, segmentId, seq: seq + Math.floor(i / CHUNK_SIZE),
-        points: points.slice(i, i + CHUNK_SIZE)
-      });
+  await db.transaction('rw', [db.trackChunks, db.segments, db.trips], async () => {
+    const last = await db.trackChunks.where('segmentId').equals(segmentId).last();
+    if (last && last.points.length + points.length <= CHUNK_SIZE) {
+      last.points.push(...points);
+      await db.trackChunks.put(last);
+    } else {
+      const seq = last ? last.seq + 1 : 0;
+      // split oversized batches across chunks
+      for (let i = 0; i < points.length; i += CHUNK_SIZE) {
+        await db.trackChunks.add({
+          id: uuid(), tripId, segmentId, seq: seq + Math.floor(i / CHUNK_SIZE),
+          points: points.slice(i, i + CHUNK_SIZE)
+        });
+      }
     }
-  }
-  await db.segments.update(segmentId, { endTime: points[points.length - 1].t });
-  await db.trips.update(tripId, { updatedAt: Date.now() });
+    await db.segments.update(segmentId, { endTime: points[points.length - 1].t });
+    await db.trips.update(tripId, { updatedAt: Date.now() });
+  });
 }
 
 export async function loadTripFull(tripId) {

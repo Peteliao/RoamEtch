@@ -4,6 +4,53 @@ All notable changes to TrackMint are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [1.9.0] - 2026-11-22
+
+### Added
+
+- Failure-safe recording persistence: incremental saves are serialized, failed
+  writes stay buffered and retry every five seconds, and `pagehide` spills pending
+  fixes to local storage so they can be recovered on the next boot.
+- Explicit save status in the live panel and a retry banner when fixes cannot be
+  written or a trip cannot be finalized.
+- PWA update prompt: a new service worker waits for confirmation, and the update
+  action is disabled while recording or paused so a reload cannot interrupt a trip.
+- Recorded-time and gap-time rows in the analysis sheet and self-contained HTML
+  export; the gap row appears only when a trip actually has inactive intervals.
+- Unit tests for archive path traversal, oversized entries, zip-bomb ratios,
+  manifest count/relationship errors, missing media, and transactional rollback.
+
+### Changed
+
+- Backup restore now validates every archive entry and manifest relationship
+  before writing, then restores trips, segments, chunks, waypoints, media, and
+  overwrite deletions in a single IndexedDB transaction. Restore reuses the
+  inspected archive instead of unzipping it twice.
+- Statistics now separate wall duration, recorded/active time, moving time,
+  still time, and gap time. Pauses and intervals longer than 60 seconds no longer
+  inflate still time.
+- Version strings come from `package.json`; the app, diagnostics, About panel,
+  and promo artwork report 1.9.0 from one source.
+
+### Fixed
+
+- Pause and finish no longer report success when pending track points failed to
+  reach IndexedDB; they keep the recording state and show a retry action.
+- Starting a recording cleans up its lock, wake lock, timers, and a newly created
+  trip if setup fails.
+- Unsupported geolocation and temporary OS location loss now pause the recording
+  instead of continuing without fixes. Synchronous `watchPosition` failures are
+  handled, and a failed resume rolls back to the paused state.
+- Appending points updates chunks, segment end time, and trip update time
+  atomically.
+
+### Security
+
+- Backup archives are capped at 256 MB compressed and 512 MB uncompressed, with
+  per-entry, entry-count, manifest-size, point-count, duplicate-path, compression
+  ratio, and path-whitelist checks. Missing media and inconsistent record
+  references block restore.
+
 ## [1.8.0] - 2026-11-22
 
 ### Added

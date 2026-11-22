@@ -21,6 +21,8 @@ const BG_NOTICE_MS = 15_000;   // background absence worth notifying about
 const RESUME_BREAK_MS = 45_000;// long silence → start a fresh segment on return
 const STALE_FIX_MS = 20_000;   // ignore cached fixes older than this
 const JUMP_CONFIRM_MS = 60_000;// how long to wait for a relocated fix to confirm
+const SAVE_RETRY_MS = 5000;
+const SPILL_KEY = 'trackmint.pendingPoints.v1';
 
 const MAX_SPEED = { hike: 7, run: 12.5, bike: 22, drive: 70, travel: 70 }; // m/s
 
@@ -39,12 +41,16 @@ export const rec = {
   lastFixT: 0,
   lastFixWall: 0,
   firstFixT: 0,
-  startedAt: 0
+  startedAt: 0,
+  saveState: { pending: 0, lastSavedAt: 0, error: null }
 };
 
 let watchId = null;
 let buffer = [];
+let inflight = null;
 let flushTimer = null;
+let saveRetryTimer = null;
+let flushChain = Promise.resolve(true);
 let tickTimer = null;
 let altSmooth = null;
 let altRef = null;
@@ -58,14 +64,31 @@ let breakOnNextFix = false;    // background silence → split before accepting 
 let forceAccLimit = 0;         // stricter gate for the first fix after a break
 let lastWatchRestart = 0;
 let fixChain = Promise.resolve();
+let suspendFixIngest = false;
+let stopPromise = null;
 
 
 function freshLive() {
   return {
-    distance: 0, ascent: 0, descent: 0, movingMs: 0, stillMs: 0, duration: 0,
+    distance: 0, ascent: 0, descent: 0, activeMs: 0, movingMs: 0, stillMs: 0, duration: 0,
     speed: null, alt: null, altSrc: null, slope: null, acc: null,
     lat: null, lon: null, heading: null, pointCount: 0, segCount: 0, maxSpeed: 0
   };
+}
+
+function emitPersistence() {
+  rec.saveState.pending = buffer.length + (inflight?.length || 0);
+  emit('recorder:persistence', { ...rec.saveState });
+}
+
+function clearTimer(timer) {
+  if (timer) clearTimeout(timer);
+  return null;
+}
+
+function resetSaveState() {
+  rec.saveState = { pending: 0, lastSavedAt: 0, error: null };
+  emitPersistence();
 }
 
 function watchOptions() {
@@ -77,51 +100,96 @@ function watchOptions() {
 
 export async function startRecording({ tripId = null, name = '', activity = null, simulated = false } = {}) {
   if (rec.status === 'recording') return true;
-  if (!simulated && !(await acquireRecorderLock())) {
-    emit('recorder:busy');
-    return false;
-  }
-  rec.simulated = simulated;
-  rec.filteredCount = 0;
-  rec.permissionDenied = false;
-  rec.geoError = null;
-  rec.lastFixWall = Date.now();
-  rec.activityGuess = null;
-  speedSamples = [];
-  let trip;
-  if (tripId) {
-    trip = await store.getTrip(tripId);
-    if (!trip) return false;
-  } else {
-    trip = await store.createTrip({
-      name: name || `${t('record.newTripName')} ${new Date().toLocaleString()}`,
-      activity: activity || get('activity'),
-      status: 'recording'
-    });
-  }
-  rec.tripId = trip.id;
-  rec.tripActivity = trip.activity || 'auto';
-  rec.status = 'recording';
-  rec.startedAt = Date.now();
-  rec.live = freshLive();
-  rec.lastPoint = null;
-  rec.firstFixT = 0; rec.lastFixT = 0;
-  altSmooth = null; altRef = null;
-  buffer = [];
-  anchorT = 0; pendingJump = null; breakOnNextFix = false; forceAccLimit = 0;
+  if (rec.status === 'paused') return false;
+  let lockHeld = false;
+  let createdTripId = null;
+  let started = false;
+  try {
+    if (!simulated) {
+      if (!navigator.geolocation) {
+        rec.permissionDenied = true;
+        rec.geoError = 'denied';
+        emit('recorder:geoerror', { code: 'denied' });
+        emit('recorder:denied');
+        return false;
+      }
+      if (!(await acquireRecorderLock())) {
+        emit('recorder:busy');
+        return false;
+      }
+      lockHeld = true;
+    }
+    rec.simulated = simulated;
+    rec.filteredCount = 0;
+    rec.permissionDenied = false;
+    rec.geoError = null;
+    rec.lastFixWall = Date.now();
+    rec.activityGuess = null;
+    speedSamples = [];
+    let trip;
+    if (tripId) {
+      trip = await store.getTrip(tripId);
+      if (!trip) return false;
+    } else {
+      trip = await store.createTrip({
+        name: name || `${t('record.newTripName')} ${new Date().toLocaleString()}`,
+        activity: activity || get('activity'),
+        status: 'recording'
+      });
+      createdTripId = trip.id;
+    }
+    rec.tripId = trip.id;
+    rec.tripActivity = trip.activity || 'auto';
+    rec.startedAt = Date.now();
+    rec.live = freshLive();
+    rec.lastPoint = null;
+    rec.firstFixT = 0; rec.lastFixT = 0;
+    altSmooth = null; altRef = null;
+    buffer = [];
+    inflight = null;
+    anchorT = 0; pendingJump = null; breakOnNextFix = false; forceAccLimit = 0;
+    suspendFixIngest = false;
+    resetSaveState();
 
-  const seg = await store.addSegment(trip.id);
-  rec.segmentId = seg.id;
-  rec.live.segCount = await store.db.segments.where('tripId').equals(trip.id).count();
-  await store.updateTrip(trip.id, { status: 'recording' });
+    const seg = await store.addSegment(trip.id);
+    rec.segmentId = seg.id;
+    rec.live.segCount = await store.db.segments.where('tripId').equals(trip.id).count();
+    await store.updateTrip(trip.id, { status: 'recording' });
 
-  if (!simulated) startWatch();
-  requestWakeLock();
-  armKeepAlive();
-  startTick();
-  broadcast({ type: 'rec-state', state: 'recording', tripId: trip.id });
-  emit('recorder:started', { tripId: trip.id, simulated });
-  return true;
+    if (!simulated && !startWatch()) throw new Error('geolocation unavailable');
+    requestWakeLock();
+    armKeepAlive();
+    startTick();
+    rec.status = 'recording';
+    broadcast({ type: 'rec-state', state: 'recording', tripId: trip.id });
+    emit('recorder:started', { tripId: trip.id, simulated });
+    started = true;
+    return true;
+  } catch (e) {
+    console.error('start recording failed', e);
+    emit('recorder:starterror', { error: String(e) });
+    throw e;
+  } finally {
+    if (!started) {
+      stopWatch();
+      stopTick();
+      releaseWakeLock();
+      disarmKeepAlive();
+      buffer = [];
+      inflight = null;
+      suspendFixIngest = false;
+      rec.status = 'idle';
+      rec.tripId = null;
+      rec.segmentId = null;
+      rec.live = null;
+      rec.lastPoint = null;
+      rec.tripActivity = 'auto';
+      rec.simulated = false;
+      rec.saveState = { pending: 0, lastSavedAt: 0, error: null };
+      if (lockHeld) releaseRecorderLock();
+      if (createdTripId) await store.deleteTrip(createdTripId).catch(() => {});
+    }
+  }
 }
 
 function onGeoError(err) {
@@ -131,11 +199,12 @@ function onGeoError(err) {
     rec.geoError = 'denied';
     emit('recorder:geoerror', { code: 'denied' });
     emit('recorder:denied');
-    pauseRecording();
+    void pauseRecording();
   } else {
     // code 2 = OS location off / no source; code 3 = timeout (weak signal)
     rec.geoError = err.code === 2 ? 'unavailable' : 'timeout';
     emit('recorder:geoerror', { code: rec.geoError });
+    if (err.code === 2) void pauseRecording();
   }
 }
 
@@ -158,15 +227,23 @@ function startWatch() {
     rec.geoError = 'denied';
     emit('recorder:geoerror', { code: 'denied' });
     emit('recorder:denied');
-    return;
+    return false;
   }
   stopWatch();
   const epoch = watchEpoch;
-  watchId = navigator.geolocation.watchPosition(
-    (pos) => { if (epoch === watchEpoch) onGeoPosition(pos); },
-    (err) => { if (epoch === watchEpoch) onGeoError(err); },
-    watchOptions()
-  );
+  try {
+    watchId = navigator.geolocation.watchPosition(
+      (pos) => { if (epoch === watchEpoch) onGeoPosition(pos); },
+      (err) => { if (epoch === watchEpoch) onGeoError(err); },
+      watchOptions()
+    );
+    return true;
+  } catch (e) {
+    console.error('watchPosition failed', e);
+    rec.geoError = 'unavailable';
+    emit('recorder:geoerror', { code: 'unavailable' });
+    return false;
+  }
 }
 
 /** One immediate high-accuracy fix, mainly to wake iOS after a lock/suspension. */
@@ -182,17 +259,31 @@ function locateNow() {
 /** Re-arm after a signal error or a suspended PWA. */
 export function retryGeolocation() {
   if (rec.simulated || rec.status !== 'recording') return;
+  if (!navigator.geolocation) {
+    rec.permissionDenied = true;
+    rec.geoError = 'denied';
+    emit('recorder:geoerror', { code: 'denied' });
+    emit('recorder:denied');
+    void pauseRecording();
+    return;
+  }
   rec.geoError = null;
   rec.lastFixWall = Date.now();
   armResumeBreak();
-  startWatch();
+  if (!startWatch()) {
+    void pauseRecording();
+    return;
+  }
   locateNow();
   emit('recorder:geoerror', { code: null });
 }
 
 function stopWatch() {
   watchEpoch++;
-  if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  if (watchId != null) {
+    try { navigator.geolocation?.clearWatch(watchId); } catch { /* already gone */ }
+    watchId = null;
+  }
 }
 
 function armResumeBreak() {
@@ -216,7 +307,7 @@ export function handleFix(fix) {
 }
 
 async function beginNewSegment(now, info, reasonKey) {
-  await flushBuffer();
+  if (!(await flushBuffer())) return false;
   const seg = await store.addSegment(rec.tripId, now);
   rec.segmentId = seg.id;
   rec.live.segCount++;
@@ -225,10 +316,11 @@ async function beginNewSegment(now, info, reasonKey) {
   pendingJump = null;
   emit('recorder:gap', { ...info, reasonKey });
   emit('toast', { type: 'warn', msg: t(reasonKey) });
+  return true;
 }
 
 async function processFix(fix) {
-  if (rec.status !== 'recording') return;
+  if (rec.status !== 'recording' || suspendFixIngest) return;
   const arrival = Date.now();
   const rawT = Number(fix?.t);
   const now = Number.isFinite(rawT) && rawT > 0 ? rawT : arrival;
@@ -291,7 +383,7 @@ async function processFix(fix) {
   let relocated = false;
   // A long suspension starts a fresh segment instead of bridging the gap.
   if (breakOnNextFix && rec.lastPoint) {
-    await beginNewSegment(now, { dist: Math.round(dist), dt: Math.round(dt), auto: true }, 'record.bgResumed');
+    if (!(await beginNewSegment(now, { dist: Math.round(dist), dt: Math.round(dt), auto: true }, 'record.bgResumed'))) return;
     breakOnNextFix = false;
     forceAccLimit = 0;
     relocated = true;
@@ -311,7 +403,7 @@ async function processFix(fix) {
     if (consistent) {
       // Two mutually consistent fixes far from the old anchor: relocate honestly
       // in a new segment instead of dropping every subsequent point forever.
-      await beginNewSegment(now, { dist: Math.round(candDist), dt: Math.round(candDt * 1000), auto: true }, 'record.geoRelocated');
+      if (!(await beginNewSegment(now, { dist: Math.round(candDist), dt: Math.round(candDt * 1000), auto: true }, 'record.geoRelocated'))) return;
       relocated = true;
       forceAccLimit = 0;
       dist = 0; dt = 0; implied = null;
@@ -339,6 +431,7 @@ async function processFix(fix) {
     const deadband = Math.max(4, Math.min(20, avgAcc * 1.2));
     if (dist < deadband) {
       if (dt > 0 && dt <= 60000) {
+        rec.live.activeMs += dt;
         if (fixSpeed != null && fixSpeed > MOVING_SPEED) rec.live.movingMs += dt;
         else rec.live.stillMs += dt;
       }
@@ -353,7 +446,7 @@ async function processFix(fix) {
     }
     // ---- gap → new segment ----
     if (dt > GAP_TIME || dist > GAP_DIST) {
-      await beginNewSegment(now, { dist: Math.round(dist), dt: Math.round(dt) }, 'record.gapNewSegment');
+      if (!(await beginNewSegment(now, { dist: Math.round(dist), dt: Math.round(dt) }, 'record.gapNewSegment'))) return;
       dist = 0; dt = 0; implied = null;
     }
   }
@@ -379,6 +472,7 @@ async function processFix(fix) {
   const L = rec.live;
   L.distance += dist;
   if (dt > 0 && dt <= 60000) {
+    L.activeMs += dt;
     if (speed != null && speed > MOVING_SPEED) L.movingMs += dt;
     else L.stillMs += dt;
   }
@@ -412,6 +506,7 @@ async function processFix(fix) {
   forceAccLimit = 0;
   breakOnNextFix = false;
   buffer.push(point);
+  emitPersistence();
   if (altPromise) {
     altPromise.then((res) => {
       if (res.alt == null) return;
@@ -441,19 +536,131 @@ async function patchFlushedAlt(point) {
   } catch { /* non-critical */ }
 }
 
-export async function flushBuffer() {
-  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-  if (!buffer.length || !rec.segmentId) return;
+export function flushBuffer() {
+  flushTimer = clearTimer(flushTimer);
+  const run = flushChain.then(doFlush, doFlush).catch((e) => {
+    console.error('flush crashed', e);
+    return false;
+  });
+  flushChain = run;
+  return run;
+}
+
+async function doFlush() {
+  if (!buffer.length || !rec.segmentId || !rec.tripId) return true;
+  if (saveRetryTimer) { saveRetryTimer = clearTimer(saveRetryTimer); }
   const pts = buffer;
   buffer = [];
+  inflight = pts;
   const segId = rec.segmentId;
   pts.forEach((p) => { p._flushed = true; p._segmentId = segId; });
+  emitPersistence();
   try {
     await store.appendPoints(segId, rec.tripId, pts.map(stripInternal));
+    inflight = null;
+    rec.saveState.error = null;
+    rec.saveState.lastSavedAt = Date.now();
+    clearSpill(segId);
     emit('recorder:saved', { count: pts.length });
+    emitPersistence();
+    return true;
   } catch (e) {
     console.error('flush failed', e);
-    buffer.unshift(...pts); // retry next cycle
+    inflight = null;
+    buffer.unshift(...pts);
+    rec.saveState.error = 'write';
+    emit('recorder:saveerror', { error: 'write', pending: buffer.length });
+    emitPersistence();
+    scheduleSaveRetry();
+    return false;
+  }
+}
+
+function scheduleSaveRetry() {
+  if (saveRetryTimer || !buffer.length) return;
+  saveRetryTimer = setTimeout(() => {
+    saveRetryTimer = null;
+    if (buffer.length && rec.segmentId) void flushBuffer();
+  }, SAVE_RETRY_MS);
+}
+
+function spillPending() {
+  const pending = inflight ? [...inflight, ...buffer] : buffer;
+  if (!pending.length || !rec.tripId || !rec.segmentId) return;
+  try {
+    localStorage.setItem(SPILL_KEY, JSON.stringify({
+      tripId: rec.tripId,
+      segmentId: rec.segmentId,
+      savedAt: Date.now(),
+      points: pending.map(stripInternal)
+    }));
+  } catch { /* quota or privacy mode — nothing more we can do synchronously */ }
+}
+
+function clearSpill(segmentId) {
+  try {
+    const raw = localStorage.getItem(SPILL_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (!data?.segmentId || data.segmentId === segmentId) localStorage.removeItem(SPILL_KEY);
+  } catch {
+    try { localStorage.removeItem(SPILL_KEY); } catch { /* ignore */ }
+  }
+}
+
+/** Recover fixes spilled synchronously when the page was closed mid-flush. */
+export async function recoverPendingSpill() {
+  let raw = null;
+  try { raw = localStorage.getItem(SPILL_KEY); } catch { return 0; }
+  if (!raw) return 0;
+  let data;
+  try { data = JSON.parse(raw); } catch {
+    try { localStorage.removeItem(SPILL_KEY); } catch { /* ignore */ }
+    return 0;
+  }
+  if (!data?.tripId || !data?.segmentId || !Array.isArray(data.points)) {
+    try { localStorage.removeItem(SPILL_KEY); } catch { /* ignore */ }
+    return 0;
+  }
+  try {
+    const trip = await store.getTrip(data.tripId);
+    if (!trip || (trip.status !== 'recording' && trip.status !== 'paused')) {
+      localStorage.removeItem(SPILL_KEY);
+      return 0;
+    }
+    const seg = await store.db.segments.get(data.segmentId);
+    if (!seg || seg.tripId !== data.tripId) {
+      localStorage.removeItem(SPILL_KEY);
+      return 0;
+    }
+    const chunks = await store.db.trackChunks.where('segmentId').equals(data.segmentId).toArray();
+    let lastT = -Infinity;
+    for (const c of chunks) {
+      for (const p of c.points || []) {
+        if (Number.isFinite(p.t) && p.t > lastT) lastT = p.t;
+      }
+    }
+    const seen = new Set();
+    const fresh = [];
+    for (const p of data.points) {
+      if (!p || !Number.isFinite(p.t) || p.t <= lastT || seen.has(p.t)) continue;
+      if (!Number.isFinite(p.lat) || !Number.isFinite(p.lon)
+        || Math.abs(p.lat) > 90 || Math.abs(p.lon) > 180) continue;
+      seen.add(p.t);
+      fresh.push(stripInternal(p));
+    }
+    fresh.sort((a, b) => a.t - b.t);
+    if (!fresh.length) {
+      localStorage.removeItem(SPILL_KEY);
+      return 0;
+    }
+    await store.appendPoints(data.segmentId, data.tripId, fresh);
+    localStorage.removeItem(SPILL_KEY);
+    emit('recorder:spillrecovered', { count: fresh.length });
+    return fresh.length;
+  } catch (e) {
+    console.warn('pending spill recovery failed', e);
+    return 0;
   }
 }
 function stripInternal(p) {
@@ -488,74 +695,156 @@ function startTick() {
 function stopTick() { if (tickTimer) { clearInterval(tickTimer); tickTimer = null; } }
 
 export async function pauseRecording() {
-  if (rec.status !== 'recording') return;
-  await flushBuffer();
-  stopWatch();
+  if (rec.status !== 'recording') return false;
+  suspendFixIngest = true;
+  if (!rec.simulated) stopWatch();
+  await fixChain.catch(() => {});
+  if (!(await flushBuffer())) {
+    suspendFixIngest = false;
+    rec.lastFixWall = Date.now();
+    if (!rec.simulated) {
+      armResumeBreak();
+      startWatch();
+      locateNow();
+    }
+    return false;
+  }
   rec.status = 'paused';
+  suspendFixIngest = false;
   pausedAt = Date.now();
   pendingJump = null; breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
-  await store.updateTrip(rec.tripId, { status: 'paused' });
+  await store.updateTrip(rec.tripId, { status: 'paused' }).catch((e) => console.error('trip status update failed', e));
+  rec.saveState.pending = 0;
+  emitPersistence();
   releaseWakeLock();
   disarmKeepAlive();
   broadcast({ type: 'rec-state', state: 'paused', tripId: rec.tripId });
   emit('recorder:paused', { tripId: rec.tripId });
+  return true;
 }
 
 export async function resumeRecording() {
   if (rec.status !== 'paused' || !rec.tripId) return false;
-  armKeepAlive();
-  if (!rec.simulated && !isHolding() && !(await acquireRecorderLock())) {
-    disarmKeepAlive();
-    emit('recorder:busy');
+  if (!rec.simulated && !navigator.geolocation) {
+    rec.permissionDenied = true;
+    rec.geoError = 'denied';
+    emit('recorder:geoerror', { code: 'denied' });
+    emit('recorder:denied');
     return false;
   }
-  // pause/resume always starts a fresh segment (no straight-line bridging)
-  await flushBuffer();
-  const seg = await store.addSegment(rec.tripId);
-  rec.segmentId = seg.id;
-  rec.lastPoint = null;
-  rec.live.segCount++;
-  rec.status = 'recording';
-  rec.startedAt = Date.now() - (rec.live?.duration || 0);
-  rec.permissionDenied = false;
-  rec.geoError = null;
-  rec.lastFixWall = Date.now();
-  pendingJump = null; breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
-  await store.updateTrip(rec.tripId, { status: 'recording' });
-  if (!rec.simulated) startWatch();
-  requestWakeLock();
   armKeepAlive();
-  startTick();
-  broadcast({ type: 'rec-state', state: 'recording', tripId: rec.tripId });
-  emit('recorder:resumed', { tripId: rec.tripId });
-  return true;
+  let acquired = false;
+  if (!rec.simulated && !isHolding()) {
+    if (!(await acquireRecorderLock())) {
+      disarmKeepAlive();
+      emit('recorder:busy');
+      return false;
+    }
+    acquired = true;
+  }
+  // pause/resume always starts a fresh segment (no straight-line bridging)
+  if (!(await flushBuffer())) {
+    if (acquired) releaseRecorderLock();
+    disarmKeepAlive();
+    return false;
+  }
+  const prevSegmentId = rec.segmentId;
+  const prevSegCount = rec.live?.segCount || 0;
+  const prevLastPoint = rec.lastPoint;
+  try {
+    const seg = await store.addSegment(rec.tripId);
+    rec.segmentId = seg.id;
+    rec.lastPoint = null;
+    rec.live.segCount++;
+    rec.status = 'recording';
+    rec.startedAt = Date.now() - (rec.live?.duration || 0);
+    rec.permissionDenied = false;
+    rec.geoError = null;
+    rec.lastFixWall = Date.now();
+    pendingJump = null; breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
+    suspendFixIngest = false;
+    await store.updateTrip(rec.tripId, { status: 'recording' }).catch((e) => console.error('trip status update failed', e));
+    if (!rec.simulated && !startWatch()) {
+      rec.status = 'paused';
+      suspendFixIngest = false;
+      rec.segmentId = prevSegmentId;
+      rec.lastPoint = prevLastPoint;
+      if (rec.live) rec.live.segCount = prevSegCount;
+      await store.deleteSegment(seg.id).catch(() => {});
+      await store.updateTrip(rec.tripId, { status: 'paused' }).catch(() => {});
+      if (acquired) releaseRecorderLock();
+      disarmKeepAlive();
+      emit('recorder:paused', { tripId: rec.tripId });
+      return false;
+    }
+    requestWakeLock();
+    armKeepAlive();
+    startTick();
+    broadcast({ type: 'rec-state', state: 'recording', tripId: rec.tripId });
+    emit('recorder:resumed', { tripId: rec.tripId });
+    return true;
+  } catch (e) {
+    if (acquired) releaseRecorderLock();
+    disarmKeepAlive();
+    throw e;
+  }
 }
 
-export async function stopRecording() {
-  if (rec.status === 'idle' || rec.status === 'finished') return;
-  await flushBuffer();
+export function stopRecording() {
+  if (!stopPromise) stopPromise = doStopRecording().finally(() => { stopPromise = null; });
+  return stopPromise;
+}
+
+async function doStopRecording() {
+  if (rec.status === 'idle' || rec.status === 'finished') return null;
+  suspendFixIngest = true;
   stopWatch();
   stopTick();
-  pendingJump = null; breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
-  // pause/resume without fixes leaves empty segments — prune them at stop
-  const full = await store.loadTripFull(rec.tripId);
-  for (const s of full.segments) if (!s.points.length) await store.deleteSegment(s.id);
-  rec.status = 'finished';
-  if (rec.tripId) {
-    const tr = await store.getTrip(rec.tripId);
-    const finalActivity = tr?.activity === 'auto'
-      ? (rec.activityGuess || classifyActivity(speedSamples) || 'hike')
-      : null;
-    await store.updateTrip(rec.tripId, finalActivity ? { status: 'finished', activity: finalActivity } : { status: 'finished' });
+  await fixChain.catch(() => {});
+  if (!(await flushBuffer())) {
+    suspendFixIngest = false;
+    rec.lastFixWall = Date.now();
+    startTick();
+    if (!rec.simulated) {
+      armResumeBreak();
+      startWatch();
+      locateNow();
+    }
+    return null;
   }
-  releaseWakeLock();
-  disarmKeepAlive();
-  releaseRecorderLock();
-  broadcast({ type: 'rec-state', state: 'finished', tripId: rec.tripId });
-  emit('recorder:stopped', { tripId: rec.tripId });
-  const id = rec.tripId;
-  rec.tripId = null; rec.segmentId = null; rec.live = null; rec.lastPoint = null; rec.tripActivity = 'auto';
-  return id;
+  try {
+    // pause/resume without fixes leaves empty segments — prune them at stop
+    const full = await store.loadTripFull(rec.tripId);
+    for (const s of full.segments) if (!s.points.length) await store.deleteSegment(s.id);
+    if (rec.tripId) {
+      const tr = await store.getTrip(rec.tripId);
+      const finalActivity = tr?.activity === 'auto'
+        ? (rec.activityGuess || classifyActivity(speedSamples) || 'hike')
+        : null;
+      await store.updateTrip(rec.tripId, finalActivity ? { status: 'finished', activity: finalActivity } : { status: 'finished' });
+    }
+    rec.status = 'finished';
+    releaseWakeLock();
+    disarmKeepAlive();
+    releaseRecorderLock();
+    broadcast({ type: 'rec-state', state: 'finished', tripId: rec.tripId });
+    emit('recorder:stopped', { tripId: rec.tripId });
+    rec.saveState.pending = 0;
+    rec.saveState.error = null;
+    emitPersistence();
+    const id = rec.tripId;
+    rec.tripId = null; rec.segmentId = null; rec.live = null; rec.lastPoint = null; rec.tripActivity = 'auto';
+    return id;
+  } catch (e) {
+    console.error('stop failed', e);
+    rec.status = 'paused';
+    rec.saveState.error = 'finalize';
+    emit('recorder:saveerror', { error: 'finalize', pending: 0 });
+    emitPersistence();
+    return null;
+  } finally {
+    suspendFixIngest = false;
+  }
 }
 
 /** Continue an interrupted trip found at boot (new segment, no data loss). */
@@ -563,26 +852,33 @@ export async function continueTrip(tripId) {
   const trip = await store.getTrip(tripId);
   if (!trip) return false;
   if (!(await acquireRecorderLock())) { emit('recorder:busy'); return false; }
-  rec.tripId = tripId;
-  rec.status = 'paused';
-  rec.simulated = false;
-  rec.activityGuess = null;
-  rec.tripActivity = trip.activity || 'auto';
-  speedSamples = [];
-  rec.live = freshLive();
-  // rebuild live counters from stored data
-  const full = await store.loadTripFull(tripId);
-  const { computeStats } = await import('./stats');
-  const st = computeStats(full.segments, { ascentThreshold: get('ascentThreshold') });
-  Object.assign(rec.live, {
-    distance: st.distance, ascent: st.ascent, descent: st.descent,
-    movingMs: st.movingMs, stillMs: st.stillMs, duration: st.duration,
-    pointCount: st.pointCount, segCount: st.segCount, maxSpeed: st.maxSpeed
-  });
-  const lastSeg = full.segments[full.segments.length - 1];
-  const lastPt = lastSeg?.points[lastSeg.points.length - 1];
-  if (lastPt) { rec.lastPoint = lastPt; rec.lastFixT = lastPt.t || 0; altSmooth = lastPt.alt; altRef = lastPt.alt; }
-  return resumeRecording();
+  try {
+    rec.tripId = tripId;
+    rec.status = 'paused';
+    rec.simulated = false;
+    rec.activityGuess = null;
+    rec.tripActivity = trip.activity || 'auto';
+    speedSamples = [];
+    rec.live = freshLive();
+    // rebuild live counters from stored data
+    const full = await store.loadTripFull(tripId);
+    const { computeStats } = await import('./stats');
+    const st = computeStats(full.segments, { ascentThreshold: get('ascentThreshold') });
+    Object.assign(rec.live, {
+      distance: st.distance, ascent: st.ascent, descent: st.descent,
+      activeMs: st.activeMs, movingMs: st.movingMs, stillMs: st.stillMs, duration: st.duration,
+      pointCount: st.pointCount, segCount: st.segCount, maxSpeed: st.maxSpeed
+    });
+    const lastSeg = full.segments[full.segments.length - 1];
+    const lastPt = lastSeg?.points[lastSeg.points.length - 1];
+    if (lastPt) { rec.lastPoint = lastPt; rec.lastFixT = lastPt.t || 0; altSmooth = lastPt.alt; altRef = lastPt.alt; }
+    const ok = await resumeRecording();
+    if (!ok) releaseRecorderLock();
+    return ok;
+  } catch (e) {
+    releaseRecorderLock();
+    throw e;
+  }
 }
 
 /** Find trips left in recording/paused state (crash / kill recovery). */
@@ -598,7 +894,7 @@ export async function createManualTrip(name = '') {
 }
 
 // release lock if tab closes mid-recording (data already incrementally persisted)
-window.addEventListener('pagehide', () => { flushBuffer(); });
+window.addEventListener('pagehide', () => { spillPending(); void flushBuffer(); });
 
 // Backgrounding: flush immediately; on return, tell the UI about the absence so it
 // can explain possible OS-level pauses (iOS suspends the page, Android throttles it).
@@ -606,7 +902,8 @@ document.addEventListener('visibilitychange', () => {
   if (rec.status !== 'recording' && rec.status !== 'paused') return;
   if (document.visibilityState === 'hidden') {
     hiddenAt = Date.now();
-    flushBuffer();
+    spillPending();
+    void flushBuffer();
   } else if (hiddenAt) {
     const now = Date.now();
     const gapMs = now - hiddenAt;

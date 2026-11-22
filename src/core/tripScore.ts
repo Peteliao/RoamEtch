@@ -22,7 +22,7 @@ export function computeTripScore(stats, activity) {
   const parts = {
     distance: Math.min(1, stats.distance / b.dist),
     ascent: Math.min(1, stats.ascent / b.climb),
-    moving: stats.duration > 0 ? Math.min(1, stats.movingMs / stats.duration) : 0.5,
+    moving: stats.activeMs > 0 ? Math.min(1, stats.movingMs / stats.activeMs) : 0.5,
     speed: Math.min(1, stats.avgSpeed / b.speed),
     quality: (stats.hasTime ? 0.4 : 0) + (stats.maxAlt != null ? 0.3 : 0) + Math.min(0.3, (stats.pointCount / 500) * 0.3)
   };

@@ -5,6 +5,7 @@ import { drawBrandMark, drawQr, loadBrandFonts, SITE_URL, SPORT_FONT } from './b
 import { fitText, roundRectPath } from './tripScore';
 import { t } from './i18n';
 import { effectiveTheme } from './theme';
+import { APP_VERSION } from './version';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
 const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
@@ -133,7 +134,7 @@ function drawHeader(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
   ctx.font = `500 20px ${FONT}`;
   ctx.fillText(t('app.tagline'), M + 85, 130);
 
-  const pill = t('promo.pill');
+  const pill = t('promo.pill', { version: APP_VERSION });
   ctx.font = `600 21px ${FONT}`;
   const pw = ctx.measureText(pill).width + 40;
   roundRectPath(ctx, W - M - pw, 78, pw, 42, 21);

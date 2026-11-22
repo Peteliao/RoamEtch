@@ -93,10 +93,16 @@ export async function restoreBackupFlow(file, { onRestored = null } = {}) {
   if (snapshot.checked) {
     try { await exportBackupFlow({ silentOnWeChat: true }); } catch (e) { console.error(e); }
   }
-  const n = await restoreBackup(file, choice.strategy);
-  toast(t('trips.restoreOk', { n }), 'ok');
-  onRestored?.(n);
-  return true;
+  try {
+    const n = await restoreBackup(file, choice.strategy, inspected);
+    toast(t('trips.restoreOk', { n }), 'ok');
+    onRestored?.(n);
+    return true;
+  } catch (e) {
+    console.error(e);
+    toast(t('trips.restoreErr'), 'err');
+    return false;
+  }
 }
 
 export function lastBackupLabel() {

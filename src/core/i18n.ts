@@ -55,6 +55,13 @@ const zh = {
     gapNewSegment: '间隔超限，已自动新建分段',
     invalidPoint: '已过滤 {{n}} 个漂移/异常点',
     saving: '增量保存中', saved: '已保存',
+    saveOk: '轨迹已写入本机数据库', saveOkShort: '已保存',
+    savePending: '{{n}} 个轨迹点待写入本机数据库', savePendingShort: '待写入 {{n}}',
+    saveFailed: '本地保存失败，{{n}} 个轨迹点仍在内存中，请保持页面打开并重试。',
+    saveFailedShort: '保存失败', saveRetry: '重试保存',
+    stopSaveFailed: '仍有轨迹点未写入本机，结束已取消；请检查存储空间后重试。',
+    stopRetry: '重试结束',
+    startFailed: '无法开始记录，请检查定位权限与存储状态后重试。',
     stopConfirm: '结束本次记录？',
     stopped: '行程已保存',
     follow: '跟随位置', fit: '全览轨迹',
@@ -341,7 +348,8 @@ const zh = {
   },
   analysis: {
     title: '行程分析', selectTrip: '选择行程', noTrip: '请先选择或记录一段行程',
-    distance: '总距离', duration: '总时长', movingTime: '移动时间', stillTime: '静止时间',
+    distance: '总距离', duration: '总时长', activeTime: '记录时间', gapTime: '中断时间', movingTime: '移动时间', stillTime: '静止时间',
+    timeBreakdown: '记录 {{active}} · 中断 {{gap}}',
     avgSpeed: '平均速度', maxSpeed: '最高速度', avgPace: '平均配速',
     ascent: '累计爬升', descent: '累计下降', maxAlt: '最高海拔', minAlt: '最低海拔',
     calories: '消耗热量',
@@ -464,7 +472,7 @@ const zh = {
     hlQuality: '轨迹完整、数据齐全'
   },
   promo: {
-    pill: '免费 · 开源 · v1.8',
+    pill: '免费 · 开源 · v{{version}}',
     eyebrow: '本地优先 · 可验证备份 · 没有云端账户',
     headline1: '轨迹留在本机',
     headline2: '旅程变成作品',
@@ -538,7 +546,7 @@ const zh = {
     simStart: '开始回放', simStop: '停止回放', simSpeed: '回放倍速',
     simBuiltin: '使用内置示例轨迹', simFile: '选择 GPX 文件…',
     diagLog: '导出诊断日志', diagLogOk: '诊断日志已导出（已脱敏）',
-    about: '关于', aboutText: 'TrackMint迹刻 v1.8 · 纯前端 · 数据仅存本机 IndexedDB · WGS-84 标准存储',
+    about: '关于', aboutText: 'TrackMint迹刻 v{{version}} · 纯前端 · 数据仅存本机 IndexedDB · WGS-84 标准存储',
     disclaimer: '免责声明：海拔、坡度、难度评分、热量估算与轨迹仅供参考。',
     storageUsage: '存储占用', clearAll: '清空所有数据',
     installTitle: '手机桌面图标', installDesc: '添加到主屏幕，下次一键打开；应用界面可离线启动。',
@@ -569,6 +577,16 @@ const zh = {
     resetAction: '恢复默认设置',
     resetConfirm: '将把语言、主题、单位、地图（含自定义 Key）与组队等设置恢复为初始值，并重新加载页面。已记录的行程、节点与照片会保留。确认恢复？',
     resetDone: '已恢复默认设置，正在重新加载…'
+  },
+  update: {
+    ready: '新版本已就绪',
+    hint: '由你决定何时更新；更新会重新加载页面',
+    now: '立即更新',
+    later: '稍后',
+    applying: '正在更新…',
+    blockedRec: '正在记录或暂停中，结束后再更新',
+    blockedBusy: '请先关闭当前对话框再更新',
+    failed: '更新失败，请检查网络后重试'
   },
   toast: {
     regionSwitched: '已切换服务环境', offlineMode: '当前离线：记录/编辑/导出可用，在线服务已降级',
@@ -633,6 +651,13 @@ const en = {
     gapNewSegment: 'Gap exceeded — new segment created',
     invalidPoint: 'Filtered {{n}} drift/outlier points',
     saving: 'Saving…', saved: 'Saved',
+    saveOk: 'All fixes are written to this device', saveOkShort: 'Saved',
+    savePending: '{{n}} fixes waiting to be written to this device', savePendingShort: '{{n}} pending',
+    saveFailed: 'Local save failed. {{n}} fixes are still in memory — keep this page open and retry.',
+    saveFailedShort: 'Save failed', saveRetry: 'Retry save',
+    stopSaveFailed: 'Some fixes were not written to this device, so finishing was cancelled. Check storage and retry.',
+    stopRetry: 'Retry finish',
+    startFailed: 'Could not start recording. Check location permission and storage, then retry.',
     stopConfirm: 'Finish this recording?',
     stopped: 'Trip saved',
     follow: 'Follow position', fit: 'Fit track',
@@ -919,7 +944,8 @@ const en = {
   },
   analysis: {
     title: 'Trip analysis', selectTrip: 'Select trip', noTrip: 'Select or record a trip first',
-    distance: 'Distance', duration: 'Duration', movingTime: 'Moving', stillTime: 'Stopped',
+    distance: 'Distance', duration: 'Duration', activeTime: 'Recorded', gapTime: 'Gaps', movingTime: 'Moving', stillTime: 'Stopped',
+    timeBreakdown: 'Recorded {{active}} · gaps {{gap}}',
     avgSpeed: 'Avg speed', maxSpeed: 'Max speed', avgPace: 'Avg pace',
     ascent: 'Ascent', descent: 'Descent', maxAlt: 'Max altitude', minAlt: 'Min altitude',
     calories: 'Calories burned',
@@ -1042,7 +1068,7 @@ const en = {
     hlQuality: 'Complete track, full data'
   },
   promo: {
-    pill: 'Free · Open source · v1.8',
+    pill: 'Free · Open source · v{{version}}',
     eyebrow: 'LOCAL-FIRST · VERIFIED BACKUP · NO CLOUD ACCOUNT',
     headline1: 'Your tracks stay local',
     headline2: 'Your journeys become stories',
@@ -1116,7 +1142,7 @@ const en = {
     simStart: 'Start playback', simStop: 'Stop playback', simSpeed: 'Playback speed',
     simBuiltin: 'Use built-in demo track', simFile: 'Choose GPX file…',
     diagLog: 'Export diagnostic log', diagLogOk: 'Diagnostic log exported (sanitized)',
-    about: 'About', aboutText: 'TrackMint v1.8 · pure frontend · data stays in IndexedDB · WGS-84 storage',
+    about: 'About', aboutText: 'TrackMint v{{version}} · pure frontend · data stays in IndexedDB · WGS-84 storage',
     disclaimer: 'Disclaimer: altitude, slope, difficulty, calorie estimates and track data are for reference only.',
     storageUsage: 'Storage used', clearAll: 'Erase all data',
     installTitle: 'Home-screen icon', installDesc: 'Add TrackMint to your home screen for one-tap access; cached app screens can open offline.',
@@ -1147,6 +1173,16 @@ const en = {
     resetAction: 'Restore defaults',
     resetConfirm: 'This restores language, theme, units, maps (including custom keys) and meetup settings to their defaults and reloads the page. Saved trips, waypoints and photos are kept. Continue?',
     resetDone: 'Defaults restored — reloading…'
+  },
+  update: {
+    ready: 'A new version is ready',
+    hint: 'You decide when to update; the page will reload',
+    now: 'Update now',
+    later: 'Later',
+    applying: 'Updating…',
+    blockedRec: 'Recording or paused — update after finishing',
+    blockedBusy: 'Close the current dialog before updating',
+    failed: 'Update failed — check your connection and retry'
   },
   toast: {
     regionSwitched: 'Service region switched', offlineMode: 'Offline: record/edit/export work; online services degraded',

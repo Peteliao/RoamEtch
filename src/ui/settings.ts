@@ -11,6 +11,7 @@ import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from 
 import { startPlayback, stopPlayback, isPlaying } from '../core/simulator';
 import { setLanguage, currentLang } from '../core/i18n';
 import { generatePromo } from '../core/promo';
+import { APP_VERSION } from '../core/version';
 import { exportImage } from '../core/shareEnv';
 import { openInstallGuide, installSettingsInfo } from './install';
 import { el, icon, toast, confirmModal, filePicker, modal } from './helpers';
@@ -440,7 +441,7 @@ export function createSettingsView(navigate) {
 
   // ---- about ----
   const aboutCard = card('info', t('settings.about'),
-    el('div', { class: 'small muted' }, t('settings.aboutText')),
+    el('div', { class: 'small muted' }, t('settings.aboutText', { version: APP_VERSION })),
     el('div', { class: 'small faint', style: { marginTop: '6px' } }, '⚠ ' + t('settings.disclaimer')));
 
   scroll.append(

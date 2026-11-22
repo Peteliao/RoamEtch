@@ -22,6 +22,7 @@ import * as meetLinkCore from './core/meetLink';
 import { setActiveTrip } from './ui/state';
 import { createShell } from './ui/shell';
 import { initInstall } from './ui/install';
+import { initUpdates, showUpdateNotice } from './ui/updates';
 import { toast } from './ui/helpers';
 import { diag } from './core/diag';
 
@@ -40,11 +41,17 @@ async function boot() {
     if (removed) { diag('store', 'damaged rows isolated', { removed }); }
   } catch (e) { console.warn('integrity check failed', e); }
 
+  // fixes spilled synchronously on pagehide that never reached IndexedDB
+  try {
+    const recovered = await recorderCore.recoverPendingSpill();
+    if (recovered) diag('recorder', 'pending points recovered', { count: recovered });
+  } catch (e) { console.warn('pending spill recovery failed', e); }
+
   const shell = createShell(document.getElementById('app'));
   document.getElementById('boot-splash')?.remove();
   diag('boot', 'app ready', { lang: navigator.language });
   // debug handle for diagnostics & acceptance testing (spec: debuggability)
-  window.__lt = { recorder: recorderCore, store: storeCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, backup: backupCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore };
+  window.__lt = { recorder: recorderCore, store: storeCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, backup: backupCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore, updates: { show: showUpdateNotice } };
 
   // live meetup invite (#meet=…) — code and key stay in the fragment
   const hasMeetFragment = /[#&]meet=/.test(location.hash);
@@ -103,11 +110,8 @@ async function boot() {
 
   initInstall({ nudge: !hasMeetFragment && !shared });
 
-  // PWA service worker (app shell precache; tiles cached per provider bucket)
-  try {
-    const { registerSW } = await import('virtual:pwa-register');
-    registerSW({ immediate: true });
-  } catch { /* dev mode without SW */ }
+  // Service worker: prompt before reloading so an active recording is never interrupted.
+  initUpdates();
 }
 
 boot().catch((e) => {
