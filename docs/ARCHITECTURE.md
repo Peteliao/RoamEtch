@@ -59,7 +59,7 @@ Key principles:
 | `src/core/integrity.ts` | Deterministic JSON serialization and SHA-256 helpers. |
 | `src/core/footprint.ts` | Year/month aggregation over `statsCache` for the footprint card. |
 | `src/core/gpsQuality.ts` | Accuracy, poor fixes, time gaps, altitude jumps, and 0–100 quality score. |
-| `src/core/meet*.ts` | Meetup codes, HKDF/AES-GCM envelopes, MQTT/WS transport, session state. |
+| `src/core/meet*.ts` | Meetup invitations, HKDF/AES-256-GCM envelopes, nonce and replay guards, MQTT/WS transport, session state. |
 | `src/core/privacy.ts` | Start/end privacy cropping, sensitive waypoint hiding, EXIF stripping. |
 | `src/core/gpx.ts`, `batch.ts`, `shareLink.ts`, `htmlExport.ts` | File, batch, compact-link, and standalone HTML formats. |
 | `src/core/region.ts`, `providers.ts`, `coords.ts` | Service routing and China/global map adaptation. |
@@ -173,13 +173,19 @@ caches are bounded per provider and evicted on quota errors.
 
 ## Live meetup and relay
 
-A 12-character code is used to derive a domain-separated room id and AES-GCM key
-via HKDF-SHA-256. Positions and ephemeral chat are encrypted on-device and sent
-through the default public MQTT WSS broker or a custom WebSocket relay. The relay
-sees only ciphertext, room identifiers, and transport metadata. Messages live in
-memory only: no history, no late-joiner backfill, no persistence after the session
-ends. `relay/` is a minimal blind-forwarding template; it is not required by the
-static app.
+Protocol v2 invitations carry a random 128-bit public room id and an independent
+256-bit secret in the URL `#` fragment or QR code. The secret derives a
+non-extractable AES-256-GCM key via HKDF-SHA-256 with v2 domain separation; the
+room id is used for routing and bound into the packet AAD. Positions and
+ephemeral chat are encrypted on-device and sent through the default public MQTT
+WSS broker (`trackmint/v2/meet/<roomId>`) or a custom WebSocket relay. Each
+device uses a random nonce prefix plus a monotonic counter, and every packet type
+passes a per-sender strictly increasing sequence guard before it is accepted;
+timestamps and chat ids are additional checks. Messages live in memory only: no
+history, no late-joiner backfill, no persistence after the session ends. Version
+1 invitations and packets are rejected explicitly, so an upgraded client cannot
+silently fall back to the old 60-bit protocol. `relay/` is a minimal
+blind-forwarding template; it is not required by the static app.
 
 ## Offline and updates
 

@@ -4,7 +4,7 @@ import { t } from '../core/i18n';
 import { get, set } from '../core/settings';
 import { on } from '../core/events';
 import { meet, getMeetSnapshot, MEET_CHAT_MAX_LEN } from '../core/meet';
-import { normalizeMeetCode, formatMeetCode } from '../core/meetLink';
+import { normalizeMeetInvite, isLegacyMeetCode } from '../core/meetLink';
 import { fmtDistance, fmtDuration } from '../core/geo';
 import { regionState } from '../core/region';
 import { drawQr } from '../core/brand';
@@ -406,7 +406,7 @@ export function createMeetView(navigate) {
     top.classList.add('show');
     tools.classList.add('show');
     shareBtn.disabled = false;
-    codeText.textContent = s.codeDisplay;
+    codeText.textContent = s.roomLabel ? `#${s.roomLabel}` : '';
     const n = s.peers.length;
     let cls = '';
     let text = t('meet.statusConnecting');
@@ -519,7 +519,7 @@ export function createMeetView(navigate) {
   }
 
   function drawShareQr(canvas, url) {
-    const size = 224;
+    const size = 256;
     const dpr = Math.min(3, window.devicePixelRatio || 1);
     canvas.width = Math.round(size * dpr);
     canvas.height = Math.round(size * dpr);
@@ -538,7 +538,7 @@ export function createMeetView(navigate) {
     let m;
     const canvas = el('canvas', { class: 'meet-qr-canvas', 'aria-label': t('meet.qrHint') });
     const copyCodeBtn = el('button', { class: 'btn sm' }, icon('download', 14), t('meet.copyCode'));
-    copyCodeBtn.onclick = () => copyText(s.codeDisplay);
+    copyCodeBtn.onclick = () => copyText(s.invite);
     const copyLinkBtn = el('button', { class: 'btn sm primary' }, icon('share', 14), t('meet.copyLink'));
     copyLinkBtn.onclick = () => copyText(s.link);
     const nativeBtn = el('button', { class: 'btn sm' }, icon('share', 14), t('meet.shareLink'));
@@ -556,7 +556,8 @@ export function createMeetView(navigate) {
       else toast(t('meet.copyFail'), 'err');
     };
     const body = el('div', { class: 'meet-share' },
-      el('div', { class: 'meet-code-big' }, s.codeDisplay),
+      el('div', { class: 'meet-room-label' }, t('meet.roomLabel', { room: s.roomLabel })),
+      el('div', { class: 'meet-code-big' }, s.invite),
       el('div', { class: 'meet-share-code-actions' }, copyCodeBtn),
       el('div', { class: 'meet-code-key-note' }, t('meet.codeAsKey')),
       el('div', { class: 'meet-qr-frame' }, canvas, el('div', { class: 'meet-qr-hint' }, t('meet.qrHint'))),
@@ -640,9 +641,10 @@ export function createMeetView(navigate) {
   function openJoin(prefill = '') {
     let m;
     const codeInp = el('input', {
-      type: 'text', value: prefill ? formatMeetCode(prefill) : '',
-      placeholder: t('meet.codePlaceholder'), maxlength: '16', autocomplete: 'off',
-      autocapitalize: 'characters', spellcheck: 'false', style: { fontFamily: 'var(--mono)', letterSpacing: '0.08em' }
+      type: 'text', value: prefill || '',
+      placeholder: t('meet.codePlaceholder'), maxlength: '512', autocomplete: 'off',
+      autocapitalize: 'off', autocorrect: 'off', spellcheck: 'false',
+      style: { fontFamily: 'var(--mono)', letterSpacing: '0.02em' }
     });
     const nameInp = el('input', { type: 'text', value: get('meetName') || '', placeholder: t('meet.namePlaceholder'), maxlength: '20' });
     const joinBtn = el('button', { class: 'btn primary' }, icon('meet', 16), t('meet.join'));
@@ -654,17 +656,23 @@ export function createMeetView(navigate) {
         el('div', {}, t('meet.expiryWarning') + ' · ' + t('meet.publicNote')))
     );
     joinBtn.onclick = async () => {
-      const code = normalizeMeetCode(codeInp.value);
-      if (!code) { toast(t('meet.invalidCode'), 'warn'); codeInp.focus(); return; }
+      const invite = normalizeMeetInvite(codeInp.value);
+      if (!invite) {
+        const legacy = isLegacyMeetCode(codeInp.value);
+        toast(legacy ? t('meet.legacyCode') : t('meet.invalidCode'), 'warn', legacy ? 5200 : 3000);
+        codeInp.focus();
+        return;
+      }
       joinBtn.disabled = true;
       joinBtn.innerHTML = '';
       joinBtn.append(icon('clock', 16), t('meet.starting'));
       try {
-        await meet.join(code, { name: nameInp.value });
+        await meet.join(invite, { name: nameInp.value });
         m.close();
-      } catch (e) {
+      } catch (e: any) {
         console.warn('meet join failed', e);
-        toast(t('meet.joinFailed'), 'err', 4000);
+        const legacy = e?.message === 'legacy-meet-invite';
+        toast(legacy ? t('meet.legacyCode') : t('meet.joinFailed'), legacy ? 'warn' : 'err', legacy ? 5200 : 4000);
         joinBtn.disabled = false;
         joinBtn.innerHTML = '';
         joinBtn.append(icon('meet', 16), t('meet.join'));

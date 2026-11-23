@@ -3,79 +3,152 @@ import {
   decryptMeetPacket,
   deriveMeetRoom,
   encryptMeetPacket,
-  formatMeetCode,
-  generateMeetCode,
+  generateMeetInvite,
+  isLegacyMeetCode,
   meetLinkFor,
-  normalizeMeetCode,
-  parseMeetFragment
+  normalizeMeetInvite,
+  parseMeetFragment,
+  parseMeetInvite,
+  roomLabelFor
 } from '../src/core/meetLink';
+
+function b64urlEncode(u8: Uint8Array) {
+  let bin = '';
+  for (const b of u8) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64urlDecode(text: string) {
+  const body = text.replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(body + '='.repeat((4 - (body.length % 4)) % 4));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function envelope(text: string) {
+  const bytes = b64urlDecode(text);
+  return { version: bytes[0], iv: bytes.slice(1, 13), cipher: bytes.slice(13), bytes };
+}
+
+function reencode(bytes: Uint8Array) {
+  return b64urlEncode(bytes);
+}
+
+const DEMO_ROOM = b64urlEncode(new Uint8Array(16).fill(0xab));
+const DEMO_SECRET = b64urlEncode(new Uint8Array(32).fill(0xcd));
+const DEMO_INVITE = `TM2.${DEMO_ROOM}.${DEMO_SECRET}`;
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe('meetup codes', () => {
-  it('normalises Crockford-style input', () => {
-    expect(normalizeMeetCode('abcd-efgh-jkmn')).toBe('ABCDEFGHJKMN');
-    expect(normalizeMeetCode('OILU-0000-0000')).toBe('011V00000000');
-    expect(normalizeMeetCode('too-short')).toBe('');
-    expect(formatMeetCode('ABCDEFGHJKMN')).toBe('ABCD-EFGH-JKMN');
+describe('meetup invites', () => {
+  it('generates a versioned 128-bit room id and 256-bit secret', () => {
+    const invites = new Set(Array.from({ length: 50 }, () => generateMeetInvite()));
+    expect(invites.size).toBe(50);
+    for (const invite of invites) {
+      expect(invite).toMatch(/^TM2\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/);
+      const parts = parseMeetInvite(invite);
+      expect(parts?.roomId).toHaveLength(22);
+      expect(parts?.secret).toHaveLength(32);
+    }
   });
 
-  it('generates high-entropy codes from the unambiguous alphabet', () => {
-    const codes = new Set(Array.from({ length: 50 }, () => generateMeetCode()));
-    expect(codes.size).toBe(50);
-    for (const code of codes) expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{12}$/);
-  });
-});
-
-describe('meetup key derivation', () => {
-  it('derives the relay room id from a domain-separated digest, not the code', async () => {
-    const code = 'ABCDEFGHJKMN';
-    const room = await deriveMeetRoom(code);
-    const expected = new Uint8Array(await crypto.subtle.digest(
-      'SHA-256',
-      new TextEncoder().encode(`trackmint-meet-code:${code}`)
-    ));
-    const expectedHex = [...expected.slice(0, 16)].map((b) => b.toString(16).padStart(2, '0')).join('');
-    expect(room.roomId).toBe(expectedHex);
-    expect(room.roomId).not.toContain(code);
-    expect(room.roomId).toHaveLength(32);
+  it('accepts canonical tokens, invite links and whitespace, but not v1 codes', () => {
+    expect(normalizeMeetInvite(DEMO_INVITE)).toBe(DEMO_INVITE);
+    expect(normalizeMeetInvite(`  ${DEMO_INVITE.slice(0, 20)}\n${DEMO_INVITE.slice(20)}  `)).toBe(DEMO_INVITE);
+    expect(normalizeMeetInvite(`https://example.com/TrackMint/#meet=${DEMO_INVITE}`)).toBe(DEMO_INVITE);
+    expect(normalizeMeetInvite(`#meet=${DEMO_INVITE}`)).toBe(DEMO_INVITE);
+    expect(normalizeMeetInvite(DEMO_INVITE.toLowerCase())).toBe('');
+    expect(normalizeMeetInvite('ABCD-EFGH-JKMN')).toBe('');
+    expect(normalizeMeetInvite('TM2.too-short.too-short')).toBe('');
   });
 
-  it('is deterministic per code and isolated across codes', async () => {
-    const a = await deriveMeetRoom('ABCDEFGHJKMN');
-    const b = await deriveMeetRoom('abcd efgh jkmn');
-    const c = await deriveMeetRoom('ABCDEFGHJKMP');
-    expect(b.roomId).toBe(a.roomId);
-    expect(c.roomId).not.toBe(a.roomId);
+  it('detects only the retired 12-character Crockford format', () => {
+    expect(isLegacyMeetCode('ABCD-EFGH-JKMN')).toBe(true);
+    expect(isLegacyMeetCode('#meet=abcd efgh jkmn')).toBe(true);
+    expect(isLegacyMeetCode(DEMO_INVITE)).toBe(false);
+    expect(isLegacyMeetCode('too-short')).toBe(false);
   });
-});
 
-describe('AES-GCM meetup packets', () => {
-  it('round-trips a packet and rejects tampering or a wrong room', async () => {
-    const room = await deriveMeetRoom('ABCDEFGHJKMN');
-    const other = await deriveMeetRoom('ABCDEFGHJKMP');
-    const packet = { v: 1, k: 'loc', id: 'peer-a', la: 39.9, lo: 116.4, ts: Date.now() };
-    const cipher = await encryptMeetPacket(packet, room);
-    expect(await decryptMeetPacket(cipher, room)).toEqual(packet);
-
-    const at = Math.floor(cipher.length / 2);
-    const tampered = cipher.slice(0, at) + (cipher[at] === 'A' ? 'B' : 'A') + cipher.slice(at + 1);
-    expect(await decryptMeetPacket(tampered, room)).toBeNull();
-    expect(await decryptMeetPacket(cipher, other)).toBeNull();
-    expect(await decryptMeetPacket('short', room)).toBeNull();
-  });
-});
-
-describe('meetup fragments', () => {
-  it('builds and parses URL-fragment invites', () => {
+  it('builds and parses fragment invites without lowering the secret', () => {
     vi.stubGlobal('location', {
       origin: 'https://example.com',
       pathname: '/TrackMint/',
       search: '?x=1'
     });
-    expect(meetLinkFor('ABCDEFGHJKMN')).toBe('https://example.com/TrackMint/?x=1#meet=ABCDEFGHJKMN');
-    expect(parseMeetFragment('#meet=abcd-efgh-jkmn')).toBe('ABCDEFGHJKMN');
+    const link = meetLinkFor(DEMO_INVITE);
+    expect(link).toBe(`https://example.com/TrackMint/?x=1#meet=${DEMO_INVITE}`);
+    expect(parseMeetFragment(`#meet=${DEMO_INVITE}`)).toBe(DEMO_INVITE);
+    expect(parseMeetFragment(`#meet=${encodeURIComponent(DEMO_INVITE)}`)).toBe(DEMO_INVITE);
+    expect(parseMeetFragment('#meet=ABCD-EFGH-JKMN')).toBe('');
     expect(parseMeetFragment('#meet=bad')).toBe('');
     expect(parseMeetFragment('#t=abc')).toBe('');
+  });
+
+  it('derives a public room label without exposing the secret', () => {
+    expect(roomLabelFor('abcdefghijklmnopqrstuv')).toBe('ABCD-EFGH');
+  });
+});
+
+describe('meetup key derivation', () => {
+  it('derives AES-256-GCM from the secret and binds the room id as AAD', async () => {
+    const room = await deriveMeetRoom(DEMO_INVITE);
+    expect(room.invite).toBe(DEMO_INVITE);
+    expect(room.roomId).toBe(DEMO_ROOM);
+    expect((room.key.algorithm as AesKeyAlgorithm).length).toBe(256);
+    expect(room.noncePrefix).toHaveLength(8);
+    expect(room.nonceCounter).toBe(0n);
+
+    const otherSecret = `TM2.${DEMO_ROOM}.${b64urlEncode(new Uint8Array(32).fill(0x11))}`;
+    const other = await deriveMeetRoom(otherSecret);
+    expect(other.roomId).toBe(room.roomId);
+    const cipher = await encryptMeetPacket({ v: 2, k: 'loc', id: 'peer-a' }, room);
+    expect(await decryptMeetPacket(cipher, room)).toEqual({ v: 2, k: 'loc', id: 'peer-a' });
+    expect(await decryptMeetPacket(cipher, other)).toBeNull();
+  });
+
+  it('rejects legacy and malformed invitations with distinct errors', async () => {
+    await expect(deriveMeetRoom('ABCD-EFGH-JKMN')).rejects.toThrow('legacy-meet-invite');
+    await expect(deriveMeetRoom('not-an-invite')).rejects.toThrow('invalid-meet-invite');
+  });
+});
+
+describe('AES-256-GCM meetup packets', () => {
+  it('rejects tampering, a wrong room, v1 envelopes, and malformed input', async () => {
+    const room = await deriveMeetRoom(DEMO_INVITE);
+    const other = await deriveMeetRoom(generateMeetInvite());
+    const packet = { v: 2, k: 'loc', id: 'peer-a', la: 39.9, lo: 116.4, sq: 1 };
+    const cipher = await encryptMeetPacket(packet, room);
+    expect(await decryptMeetPacket(cipher, room)).toEqual(packet);
+
+    const raw = envelope(cipher);
+    const tampered = new Uint8Array(raw.bytes);
+    tampered[20] ^= 0x01;
+    expect(await decryptMeetPacket(reencode(tampered), room)).toBeNull();
+
+    const v1 = new Uint8Array(raw.bytes);
+    v1[0] = 1;
+    expect(await decryptMeetPacket(reencode(v1), room)).toBeNull();
+    expect(await decryptMeetPacket(cipher, other)).toBeNull();
+    expect(await decryptMeetPacket('short', room)).toBeNull();
+  });
+
+  it('uses a unique per-device nonce prefix and monotonic counter', async () => {
+    const room = await deriveMeetRoom(DEMO_INVITE);
+    const seen = new Set<string>();
+    for (let i = 0; i < 257; i++) {
+      const cipher = await encryptMeetPacket({ v: 2, sq: i + 1 }, room);
+      const raw = envelope(cipher);
+      expect(raw.version).toBe(2);
+      expect(raw.iv.slice(0, 8)).toEqual(room.noncePrefix);
+      const counter = ((raw.iv[8] << 24) | (raw.iv[9] << 16) | (raw.iv[10] << 8) | raw.iv[11]) >>> 0;
+      expect(counter).toBe(i);
+      seen.add(b64urlEncode(raw.iv));
+    }
+    expect(seen.size).toBe(257);
+    expect(room.nonceCounter).toBe(257n);
+
+    const other = await deriveMeetRoom(DEMO_INVITE);
+    expect(other.noncePrefix).not.toEqual(room.noncePrefix);
   });
 });

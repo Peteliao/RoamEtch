@@ -1,5 +1,6 @@
 // Blind relay transports for live meetups. The relay only forwards opaque
-// AES-GCM envelopes; it never receives the room code or plaintext positions.
+// AES-256-GCM envelopes; it never receives the invite secret or plaintext
+// positions. The topic/path contains only the public random room id.
 import { get } from './settings';
 
 export type RelayState = 'connecting' | 'connected' | 'reconnecting' | 'closed' | 'error';
@@ -82,8 +83,8 @@ function baseMqttUrl() {
 }
 
 function topicFor(roomId: string) {
-  const prefix = String(get('meetMqttPrefix') || 'trackmint/v1/meet').trim().replace(/^\/+|\/+$/g, '');
-  return `${prefix || 'trackmint/v1/meet'}/${roomId}`;
+  const prefix = String(get('meetMqttPrefix') || 'trackmint/v2/meet').trim().replace(/^\/+|\/+$/g, '');
+  return `${prefix || 'trackmint/v2/meet'}/${roomId}`;
 }
 
 class MqttRelay implements MeetRelay {

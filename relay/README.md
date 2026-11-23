@@ -1,11 +1,11 @@
 # TrackMint blind relay / 极简盲中继
 
 A ~120-line Node.js WebSocket relay for TrackMint live meetups. It forwards opaque
-AES-GCM envelopes between clients in the same room, keeps no history, and never
-sees the 12-character meetup code or plaintext positions.
+AES-256-GCM envelopes between clients in the same room, keeps no history, and never
+sees the invite secret or plaintext positions.
 
 一个约 120 行的 Node.js WebSocket 中继，用于 TrackMint 实时组队。它只在同一
-房间内转发 AES-GCM 密文，不落盘、不记录消息内容，也拿不到 12 位组队码或明文位置。
+房间内转发 AES-256-GCM 密文，不落盘、不记录消息内容，也拿不到邀请密钥或明文位置。
 
 ## Run locally / 本地运行
 
@@ -30,10 +30,12 @@ and set:
 wss://your-relay.example.com/room/{room}
 ```
 
-The `{room}` placeholder is required; TrackMint replaces it with the room id derived
-from the meetup code. The relay must keep the URL path exactly as `/room/<id>`.
+The `{room}` placeholder is required; TrackMint replaces it with the random 128-bit
+public room id parsed from the invite, never with the invite secret. The relay must
+keep the URL path exactly as `/room/<id>`.
 
 在 TrackMint「设置 → 组队中继」中选择自建 WS 中继，并填入包含 `{room}` 的地址。
+`{room}` 会替换为邀请中随机生成的 128 位公共房间标识，不会包含邀请密钥。
 
 ## Production notes / 部署提示
 
@@ -46,9 +48,9 @@ from the meetup code. The relay must keep the URL path exactly as `/room/<id>`.
 - The relay is intentionally stateless: no database, no message queue, no replay. Late
   joiners see no history, matching the app's ephemeral chat contract.
 - Anyone who knows a room id can join that room and receive its ciphertext. The relay
-  cannot decrypt it, but a malicious participant who obtains the meetup code can. Share
-  codes only through trusted channels and use a private relay if you want to reduce
-  metadata exposure.
+  cannot decrypt it, but a malicious participant who obtains the full invite (room id
+  and secret) can. Share invites only through trusted channels and use a private relay
+  if you want to reduce metadata exposure.
 
 ## Test / 测试
 

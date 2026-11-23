@@ -51,10 +51,11 @@ These are the rules that are easy to break accidentally:
 - **Coordinates:** storage, analysis, share payloads, GPX/GeoJSON/KML, and backups
   are always WGS-84. GCJ-02 conversion happens only in the map render/pick
   adapter (`src/core/coords.ts`). Never persist display coordinates.
-- **Meetup secrets:** the 12-character code belongs only in the URL `#` fragment
-  and in memory. Never put it in a query string, HTTP path, MQTT topic, relay
-  log, analytics event, or error report. Room ids must stay domain-separated
-  from keys (`src/core/meetLink.ts`).
+- **Meetup secrets:** the invite secret belongs only in the URL `#` fragment and
+  in memory. Never put it in a query string, HTTP path, MQTT topic, relay log,
+  analytics event, or error report. The random room id may appear in the topic;
+  keep it independent from the key (`src/core/meetLink.ts`), and never silently
+  accept v1 invites or packets.
 - **Ephemeral chat:** messages and positions are memory-only. Do not add chat
   history, server persistence, replayed messages, or late-joiner backfill
   without an explicit product decision and a security review.

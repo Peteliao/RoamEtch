@@ -25,7 +25,7 @@ const DEFAULTS = {
   meetExpiryMin: 120,          // self-destruct timer; host advertises it to the room
   meetRelayMode: 'mqtt',       // mqtt | ws (webrtc reserved)
   meetMqttUrl: 'wss://broker.emqx.io:8084/mqtt',
-  meetMqttPrefix: 'trackmint/v1/meet',
+  meetMqttPrefix: 'trackmint/v2/meet',
   meetWsUrl: '',               // must contain {room}
   meetStun: 'stun:stun.cloudflare.com:3478',
   meetTurnUrl: '',             // reserved for future WebRTC transport
@@ -53,6 +53,12 @@ function load() {
     if (parsed && parsed.migrateActivity !== 1) {
       if (parsed.activity === 'hike') parsed.activity = 'auto';
       parsed.migrateActivity = 1;
+      localStorage.setItem(KEY, JSON.stringify(parsed));
+    }
+    // meetup v2 uses a new default topic namespace; keep custom prefixes intact
+    if (parsed && parsed.migrateMeetV2 !== 1) {
+      if (parsed.meetMqttPrefix === 'trackmint/v1/meet') parsed.meetMqttPrefix = 'trackmint/v2/meet';
+      parsed.migrateMeetV2 = 1;
       localStorage.setItem(KEY, JSON.stringify(parsed));
     }
     cache = parsed

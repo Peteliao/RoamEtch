@@ -15,7 +15,7 @@ import * as backupCore from './core/backup';
 import * as coordsCore from './core/coords';
 import * as keepaliveCore from './core/keepalive';
 import { parseShareFragment } from './core/shareLink';
-import { parseMeetFragment } from './core/meetLink';
+import { parseMeetFragment, isLegacyMeetCode } from './core/meetLink';
 import { importDemoTrip } from './core/demo';
 import * as meetCore from './core/meet';
 import * as meetLinkCore from './core/meetLink';
@@ -53,23 +53,25 @@ async function boot() {
   // debug handle for diagnostics & acceptance testing (spec: debuggability)
   window.__lt = { recorder: recorderCore, store: storeCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, backup: backupCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore, updates: { show: showUpdateNotice } };
 
-  // live meetup invite (#meet=…) — code and key stay in the fragment
+  // live meetup invite (#meet=…) — room id and key stay in the fragment
   const hasMeetFragment = /[#&]meet=/.test(location.hash);
-  const meetCode = parseMeetFragment(location.hash);
+  const meetInvite = parseMeetFragment(location.hash);
+  const legacyMeetLink = hasMeetFragment && isLegacyMeetCode(location.hash);
   const shared = hasMeetFragment ? null : parseShareFragment(location.hash);
-  if (hasMeetFragment && !meetCode) {
+  if (hasMeetFragment && !meetInvite) {
     history.replaceState(null, '', location.pathname + location.search);
     shell.navigate('meet');
-    toast(t('meet.autoJoinFail'), 'err', 4200);
-  } else if (meetCode) {
+    toast(legacyMeetLink ? t('meet.legacyCode') : t('meet.autoJoinFail'), 'err', legacyMeetLink ? 5200 : 4200);
+  } else if (meetInvite) {
     shell.navigate('meet');
     try {
-      await meetCore.joinMeetSession(meetCode);
+      await meetCore.joinMeetSession(meetInvite);
       toast(t('meet.autoJoined'), 'ok', 3500);
-    } catch (e) {
+    } catch (e: any) {
       console.warn('meet auto-join failed', e);
       history.replaceState(null, '', location.pathname + location.search);
-      toast(t('meet.autoJoinFail'), 'err', 4200);
+      const legacy = e?.message === 'legacy-meet-invite';
+      toast(legacy ? t('meet.legacyCode') : t('meet.autoJoinFail'), 'err', legacy ? 5200 : 4200);
     }
   } else if (shared) {
     // shared-link import (#t=…) — fragment never reaches a server

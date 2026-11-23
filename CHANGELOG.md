@@ -4,6 +4,46 @@ All notable changes to TrackMint are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-11-23
+
+### Added
+
+- Meetup protocol v2: invites are now `TM2.<roomId>.<secret>`, with a random
+  128-bit public room id and an independent 256-bit secret. The relay topic and
+  WS path contain only the room id.
+- HKDF-SHA-256 derives a non-extractable AES-256-GCM key bound to the room id,
+  with a per-session nonce prefix and monotonic 32-bit counter.
+- Strict per-sender replay protection for every packet type. Locations, status,
+  and hello packets cannot be replaced by older or repeated sequences, and chat
+  keeps its random message-id dedupe set.
+- Protocol tests for invite entropy and normalization, HKDF/AAD separation, v1
+  envelope rejection, tamper detection, nonce uniqueness, and replay handling.
+
+### Changed
+
+- The meetup UI shows a public room label, the full invite token, and separate
+  copy-invite / copy-link actions. QR codes and deep links carry the v2 invite.
+- Default MQTT prefix is `trackmint/v2/meet`; settings migrate only the exact old
+  default prefix, and relay docs describe the public random room id.
+- README, SECURITY, ARCHITECTURE, and relay documentation now describe the v2
+  encryption boundary, legacy retirement, and the remaining Phase 2/3 work
+  (sender identity authentication, host authority, key rotation, forward secrecy).
+
+### Fixed
+
+- Replay of an early-session packet is rejected instead of passing a sliding
+  window.
+- A reset or relay switch during in-flight encryption can no longer publish
+  old-room ciphertext to the new room.
+
+### Security
+
+- **Breaking:** the retired 12-character meetup code and v1 invites/packets are
+  rejected with an explicit message; there is no silent downgrade. Existing
+  teams must create and share a new v2 invite.
+- The invite secret never appears in the relay topic, URL query, HTTP path, or
+  relay log. Anyone holding the full invite remains a room member by design.
+
 ## [1.9.0] - 2026-11-22
 
 ### Added

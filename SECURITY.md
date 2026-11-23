@@ -13,12 +13,12 @@ Please use GitHub private vulnerability reporting:
 
 **https://github.com/Peteliao/TrackMint/security/advisories/new**
 
-Do **not** open a public issue containing an exploit, a meetup code, a shared
+Do **not** open a public issue containing an exploit, a meetup invite, a shared
 trip link, a personal track, or other sensitive data. If private reporting is
 unavailable, open a minimal public issue asking the maintainer to enable a
 private channel — without technical details.
 
-请优先使用 GitHub 的私密漏洞报告入口，不要在公开 Issue 中贴出利用代码、组队码、
+请优先使用 GitHub 的私密漏洞报告入口，不要在公开 Issue 中贴出利用代码、组队邀请、
 分享链接或个人轨迹。维护者会尽力在 7 天内确认收到报告，并在修复可用后协调披露。
 This is a volunteer project; there is no bug bounty.
 
@@ -51,55 +51,63 @@ hosted demo is served from GitHub Pages and is rebuilt on every push to `main`.
 
 ### Share links
 
-- Shared trip data and meetup codes live in the URL `#` fragment. Browsers do not
-  send fragments to the web server. A share link is a bearer capability: anyone
-  who receives it can read the embedded trip or join the meetup.
+- Shared trip data and meetup invites live in the URL `#` fragment. Browsers do
+  not send fragments to the web server. A share link is a bearer capability:
+  anyone who receives it can read the embedded trip or join the meetup.
 - Compact share links are simplified and privacy-cropped locally, and contain no
   photos. A received link is imported into the recipient's local database.
 
 ### Meetup end-to-end encryption
 
-The meetup code is a bearer secret and is never sent to a relay. The relay only
-receives a room identifier and ciphertext.
+Live meetups use protocol v2. The invite is a bearer capability that contains a
+public room id and a high-entropy secret; only the room id reaches the relay.
+Version 1 invites and packets are rejected rather than downgraded.
 
 | Item | Design |
 | --- | --- |
-| Code | 12 Crockford base32 characters (`0-9A-HJKMNP-TV-Z`), generated with `crypto.getRandomValues`; 60 bits of entropy |
-| Room id | First 16 bytes of `SHA-256("trackmint-meet-code:" + code)`, hex-encoded (32 chars) |
-| Encryption key | `HKDF-SHA-256(ikm = "trackmint-meet-code:" + code, salt = "trackmint-meet-v1", info = "aes-128-gcm meet payload")`, derived as a non-extractable AES-128-GCM key |
-| Cipher | AES-128-GCM with a fresh 96-bit IV per packet |
-| AAD | `"trackmint-meet-aad:" + roomId` |
-| Envelope | 1 version byte + 12-byte IV + ciphertext/tag, base64url-encoded |
-| Replay window | Packets carry a millisecond timestamp; packets older or newer than 5 minutes are dropped |
-| Dedupe | Random message ids and a bounded seen-set for chat packets |
+| Invite | `TM2.<roomId>.<secret>`; both components are base64url and live only in the URL `#` fragment / QR code |
+| Room id | 16 random bytes from `crypto.getRandomValues` (128 bits, 22 base64url chars); independent of the secret |
+| Invite secret | 32 random bytes from `crypto.getRandomValues` (256 bits, 43 base64url chars) |
+| Encryption key | `HKDF-SHA-256(ikm = 32-byte secret, salt = "trackmint-meet-v2", info = "aes-256-gcm meet payload v2\|room:<roomId>")`, derived as a non-extractable AES-256-GCM key |
+| Cipher | AES-256-GCM |
+| Nonce | 96 bits = 64-bit random per-device prefix + 32-bit monotonic counter; a new prefix is generated for every session, and exhaustion aborts sends |
+| AAD | `"trackmint-meet-v2-aad:" + roomId` |
+| Envelope | `0x02` version byte + 12-byte nonce + ciphertext/tag, base64url-encoded |
+| Replay protection | Every packet carries a per-sender, strictly increasing sequence number. All packet types pass the same per-sender guard; repeated or older sequences are dropped. Timestamps are a secondary ±5-minute sanity check, and locations also enforce newer sequence ordering. |
+| Chat dedupe | Random message ids plus a bounded seen-set, in addition to the sender sequence |
 | Transport limits | Client and relay cap packets at ~8 KB |
-| MQTT topic | `${prefix}/${roomId}` (default prefix `trackmint/v1/meet`) |
+| MQTT topic | `${prefix}/${roomId}` (default prefix `trackmint/v2/meet`) |
 | WS path | `/room/{room}` (the relay must preserve this path) |
 
-The room id is domain-separated from the key: a party that observes the MQTT
-topic or WS path learns the hashed room id, but **cannot derive the AES key from
-it without brute-forcing the 60-bit code**. The code itself never appears in a
-topic, URL query, HTTP path, or relay log.
+The room id is random and carries no key material. A party that observes the
+MQTT topic or WS path learns only that public id and cannot derive the AES key
+from it. The 256-bit invite secret never appears in a topic, URL query, HTTP
+path, or relay log. Anyone who obtains the full invite can decrypt the session
+and must be treated as a room member.
 
 ### What a relay can see / 中继可见信息
 
-A public MQTT broker or a self-hosted relay can observe the room id, connection
-timestamps, packet sizes and timing, and the client's IP address. It cannot see
-positions, names, chat text, or the meetup code. Neither transport stores
-messages or provides history replay.
+A public MQTT broker or a self-hosted relay can observe the random room id,
+connection timestamps, packet sizes and timing, and the client's IP address. It
+cannot see positions, names, chat text, or the invite secret. Neither transport
+stores messages or provides history replay.
 
 ### Known limitations / 已知局限
 
-- **No per-sender authentication.** Any participant who holds the code can send
-  packets with an arbitrary display name, colour, sender id, or host claim.
-  Host controls (expiry announcements, kick requests) are cooperative UI
-  features, not a cryptographic access-control boundary.
-- **No forward secrecy.** The code derives one session key. If the code leaks,
-  ciphertext captured during that session can be decrypted. Reset the code to
-  start a new room and key.
+- **No per-sender authentication.** The v2 protocol fixes invite entropy,
+  nonce uniqueness, and replay handling, but anyone who holds the invite can
+  still send packets with an arbitrary display name, colour, sender id, or host
+  claim. Host controls (expiry announcements, kick requests) are cooperative UI
+  features, not a cryptographic access-control boundary. Ephemeral device
+  identity keys, authenticated host authority, and key rotation after a member
+  leaves are the next protocol phase.
+- **No forward secrecy.** The invite secret derives one session key. If the
+  invite leaks, ciphertext captured during that session can be decrypted. Reset
+  the invite to create a new room and key. Periodic key ratcheting / MLS is not
+  implemented yet.
 - **Public relay availability.** The default `broker.emqx.io` is a shared public
   test broker. It can be rate-limited, disconnected, or observed. Use the custom
-  MQTT or WS relay option for private groups, and send codes through a trusted
+  MQTT or WS relay option for private groups, and send invites through a trusted
   channel.
 - **Client-side enforcement only.** A malicious client can keep or re-share data
   it has already decrypted. The app cannot force another device to delete
@@ -131,7 +139,8 @@ README for the full data-boundary description.
 
 ## 中文摘要
 
-- 组队码只存在于 URL `#` 片段与本机内存；中继只看到 SHA-256 房间标识与 AES-GCM 密文。
-- 房间标识与加密密钥使用不同域字符串分别派生，看到 Topic/路径无法直接得到密钥。
-- 组队端到端加密没有发送者身份认证，也没有前向保密；组队码泄露等同于房间内容泄露。
+- 组队邀请同时包含随机房间标识（128 位）与随机密钥（256 位），只存在于 URL `#` 片段与本机内存；中继只看到房间标识与 AES-256-GCM 密文。
+- 房间标识与密钥相互独立，主题/路径不包含邀请密钥；每个会话使用独立 nonce 前缀与单调计数器，并对所有包类型执行按发送者严格递增的防重放检查。
+- 旧版 12 位组队码与 v1 数据包会被明确拒绝，不会静默降级；升级后需重新生成邀请。
+- 组队端到端加密目前仍没有发送者身份认证，也没有前向保密；邀请泄露等同于房间内容泄露。设备身份签名、发起人认证、成员变动后的密钥轮换与 MLS/前向保密属于下一阶段。
 - 本机数据不加密，依赖设备解锁；整库备份 ZIP 同样未加密，请妥善保管。请定期导出整库备份。恢复时会把压缩包视为不可信输入：限制大小、条目数、压缩比与点数，拒绝异常路径，并在单个事务中写入。漏洞请走私密报告入口。

@@ -4,7 +4,17 @@ import { get, set } from './settings';
 import { emit } from './events';
 import { t } from './i18n';
 import { haversine, bearing } from './geo';
-import { deriveMeetRoom, encryptMeetPacket, decryptMeetPacket, generateMeetCode, meetLinkFor, randomMeetId } from './meetLink';
+import {
+  deriveMeetRoom,
+  encryptMeetPacket,
+  decryptMeetPacket,
+  generateMeetInvite,
+  meetLinkFor,
+  randomMeetId,
+  roomLabelFor,
+  MEET_PROTOCOL_VERSION
+} from './meetLink';
+import { acceptMeetSequence, pruneMeetReplay } from './meetReplay';
 import { createMeetRelay } from './meetRelay';
 import { routeOverRoads } from './gapRepair';
 
@@ -146,8 +156,11 @@ export function getMeetSnapshot() {
     return {
       active: false,
       status: 'idle',
+      protocol: MEET_PROTOCOL_VERSION,
       code: '',
+      invite: '',
       codeDisplay: '',
+      roomLabel: '',
       link: '',
       peers: [],
       self: null,
@@ -163,10 +176,13 @@ export function getMeetSnapshot() {
   return {
     active: true,
     status: relayStatus(s),
+    protocol: MEET_PROTOCOL_VERSION,
     relayState: s.relayState,
     relayError: s.relayError,
-    code: s.code,
-    codeDisplay: s.code ? s.code.replace(/(.{4})(?=.)/g, '$1-') : '',
+    code: s.invite,
+    invite: s.invite,
+    codeDisplay: s.roomLabel,
+    roomLabel: s.roomLabel,
     link: s.link,
     roomId: s.roomId,
     self: {
@@ -328,9 +344,14 @@ function publishPacket(body: any) {
   const epoch = s.epoch;
   const job = s.sendChain.then(async () => {
     if (session !== s || s.epoch !== epoch || !s.relay) return false;
+    const relay = s.relay;
     try {
-      const text = await encryptMeetPacket({ v: 1, ...body }, s.room);
-      return s.relay.send(text);
+      const seq = ++s.sendSeq;
+      if (!Number.isSafeInteger(seq)) return false;
+      const packet = { ...body, v: MEET_PROTOCOL_VERSION, sq: seq, ts: Date.now() };
+      const text = await encryptMeetPacket(packet, s.room);
+      if (session !== s || s.epoch !== epoch || s.relay !== relay) return false;
+      return relay.send(text);
     } catch {
       return false;
     }
@@ -342,8 +363,8 @@ function publishPacket(body: any) {
 function hiPacket() {
   const s = session;
   const body: any = {
-    v: 1, k: 'hi', id: s.self.id, name: s.self.name,
-    c: s.self.color, hostId: s.hostId || undefined, ts: Date.now()
+    k: 'hi', id: s.self.id, name: s.self.name,
+    c: s.self.color, hostId: s.hostId || undefined
   };
   if (s.hostId === s.self.id) body.exp = s.expiresAt;
   return body;
@@ -357,10 +378,9 @@ function publishLoc() {
   const s = session;
   if (!s || !s.self.hasFix) return Promise.resolve(false);
   return publishPacket({
-    v: 1, k: 'loc', id: s.self.id, name: s.self.name, c: s.self.color,
+    k: 'loc', id: s.self.id, name: s.self.name, c: s.self.color,
     la: s.self.lat, lo: s.self.lon, ac: s.self.acc,
-    hd: s.self.heading, sp: s.self.speed, sh: s.sharing,
-    ts: Date.now()
+    hd: s.self.heading, sp: s.self.speed, sh: s.sharing
   });
 }
 
@@ -368,8 +388,8 @@ function publishState() {
   const s = session;
   if (!s) return Promise.resolve(false);
   return publishPacket({
-    v: 1, k: 'st', id: s.self.id, name: s.self.name,
-    c: s.self.color, sh: s.sharing, ts: Date.now()
+    k: 'st', id: s.self.id, name: s.self.name,
+    c: s.self.color, sh: s.sharing
   });
 }
 
@@ -394,7 +414,8 @@ function touchPeer(msg: any, now: number) {
       name: cleanName(msg.name) || t('meet.unnamedPeer'),
       color: /^#[0-9a-f]{6}$/i.test(String(msg.c)) ? msg.c : colorFor(id),
       lat: null, lon: null, acc: null, heading: null, speed: null,
-      sharing: true, ts: 0, lastSeen: now, hostId: null
+      sharing: true, ts: 0, lastSeen: now, hostId: null,
+      locSeq: 0, hiSeq: 0, stateSeq: 0
     };
     s.peers.set(id, p);
   }
@@ -407,24 +428,26 @@ function touchPeer(msg: any, now: number) {
 async function handleIncoming(text: string) {
   const s = session;
   if (!s) return;
-  const msg = await decryptMeetPacket(text, s.room);
-  if (session !== s || !msg || msg.v !== 1 || typeof msg.k !== 'string') return;
+  const epoch = s.epoch;
+  const room = s.room;
+  const msg = await decryptMeetPacket(text, room);
+  if (session !== s || s.epoch !== epoch || s.room !== room || !msg || msg.v !== MEET_PROTOCOL_VERSION || typeof msg.k !== 'string') return;
   const now = Date.now();
   const ts = Number(msg.ts);
   if (!isFinite(ts) || Math.abs(now - ts) > 5 * 60_000) return;
-  if (String(msg.id || '') === s.self.id) return;
+  const senderId = String(msg.id || '').slice(0, 40);
+  if (!senderId || senderId === s.self.id) return;
+  if (!acceptMeetSequence(s.replay, senderId, Number(msg.sq), now)) return;
 
   if (msg.k === 'hi') {
+    const existing = s.peers.get(senderId);
+    if (existing?.hiSeq && Number(msg.sq) <= existing.hiSeq) return;
     const touched = touchPeer(msg, now);
     if (!touched) return;
-    if (msg.id === msg.hostId) {
-      if (!s.hostId || s.hostId === s.self.id) {
-        if (!s.hostId) s.hostId = msg.id;
-      } else if (s.hostId === msg.id) {
-        // already known
-      }
-      touched.peer.hostId = msg.id;
-      if (msg.id === s.hostId && isFinite(Number(msg.exp))) {
+    touched.peer.hiSeq = Number(msg.sq);
+    if (msg.id === msg.hostId && (!s.hostId || s.hostId === msg.id || s.hostId === s.self.id)) {
+      if (!s.hostId) s.hostId = msg.id;
+      if (s.hostId === msg.id && isFinite(Number(msg.exp))) {
         const exp = Number(msg.exp);
         if (exp > now && exp <= now + MAX_EXPIRY_MIN * 60_000) s.expiresAt = exp;
       }
@@ -441,9 +464,7 @@ async function handleIncoming(text: string) {
     if (!/^[A-Za-z0-9_-]{8,32}$/.test(mid) || s.chatSeen.has(mid)) return;
     const text = cleanChatText(msg.tx);
     if (!text) return;
-    const id = String(msg.id || '').slice(0, 40);
-    if (!id || id === s.self.id) return;
-    if (!chatRateOk(s, id, now)) return;
+    if (!chatRateOk(s, senderId, now)) return;
     const touched = touchPeer(msg, now);
     if (!touched) return;
     if (touched.isNew) {
@@ -457,7 +478,7 @@ async function handleIncoming(text: string) {
     rememberChatId(s, mid);
     pushChatMessage(s, {
       id: mid,
-      fromId: id,
+      fromId: senderId,
       name: touched.peer.name,
       color: touched.peer.color,
       text,
@@ -476,7 +497,10 @@ async function handleIncoming(text: string) {
     const touched = touchPeer(msg, now);
     if (!touched) return;
     const p = touched.peer;
+    const seq = Number(msg.sq);
+    if (p.locSeq && seq <= p.locSeq) return;
     if (p.ts && ts < p.ts - 1000) return;
+    p.locSeq = seq;
     p.lat = lat;
     p.lon = lon;
     p.acc = isFinite(Number(msg.ac)) ? Number(msg.ac) : null;
@@ -493,6 +517,9 @@ async function handleIncoming(text: string) {
   if (msg.k === 'st') {
     const touched = touchPeer(msg, now);
     if (!touched) return;
+    const seq = Number(msg.sq);
+    if (touched.peer.stateSeq && seq <= touched.peer.stateSeq) return;
+    touched.peer.stateSeq = seq;
     touched.peer.sharing = msg.sh !== false;
     if (s.hostId === s.self.id) touched.peer.hostId = s.self.id;
     emitState();
@@ -511,21 +538,19 @@ async function handleIncoming(text: string) {
   }
 
   if (msg.k === 'bye') {
-    const id = String(msg.id || '');
-    if (!id) return;
-    if (s.peers.delete(id)) {
-      if (s.hostId === id) s.hostId = null;
-      if (s.route?.peerId === id) { s.route = null; }
-      emit('meet:peerleft', { id });
+    if (s.peers.delete(senderId)) {
+      if (s.hostId === senderId) s.hostId = null;
+      if (s.route?.peerId === senderId) { s.route = null; }
+      emit('meet:peerleft', { id: senderId });
       emitState();
     }
     return;
   }
 
   if (msg.k === 'kick') {
-    const target = String(msg.target || msg.id || '');
+    const target = String(msg.target || '');
     const by = String(msg.by || '');
-    if (!target) return;
+    if (!target || msg.id !== by) return;
     if (s.hostId === s.self.id) return;
     if (!s.hostId || by !== s.hostId) return;
     if (target === s.self.id) {
@@ -565,6 +590,7 @@ function tick() {
       }
     }
     if (changed) emitState();
+    pruneMeetReplay(s.replay, new Set(s.peers.keys()), now, REMOVE_MS);
   }
   if (s.tickCount % Math.round(HEARTBEAT_MS / 1000) === 0) {
     if (s.sharing && s.self.hasFix) publishLoc();
@@ -573,19 +599,20 @@ function tick() {
   }
 }
 
-async function beginSession({ code, name, host, expiryMin }: { code: string; name?: string; host: boolean; expiryMin?: number }) {
+async function beginSession({ invite, name, host, expiryMin }: { invite: string; name?: string; host: boolean; expiryMin?: number }) {
   if (session) await leaveMeet('switch');
-  const room = await deriveMeetRoom(code);
+  const room = await deriveMeetRoom(invite);
   const selfName = resolveName(name);
   if (cleanName(name) && cleanName(name) !== get('meetName')) set('meetName', cleanName(name));
   const selfId = randomMeetId();
   const now = Date.now();
   const mins = clampExpiry(host ? (expiryMin ?? expiryMinutes()) : (expiryMin ?? 120));
   session = {
-    code: room.code,
+    invite: room.invite,
     room,
     roomId: room.roomId,
-    link: meetLinkFor(room.code),
+    roomLabel: roomLabelFor(room.roomId),
+    link: meetLinkFor(room.invite),
     self: {
       id: selfId,
       name: selfName,
@@ -599,12 +626,14 @@ async function beginSession({ code, name, host, expiryMin }: { code: string; nam
     chatUnread: 0,
     chatSeen: new Set(),
     chatRate: new Map(),
+    replay: new Map(),
     relay: null,
     relayState: 'connecting',
     relayError: null,
     relayGen: 0,
     epoch: 0,
     sendChain: Promise.resolve(),
+    sendSeq: 0,
     watchId: null,
     tickTimer: null,
     tickCount: 0,
@@ -620,7 +649,7 @@ async function beginSession({ code, name, host, expiryMin }: { code: string; nam
     onVisible: null
   };
   const s = session;
-  setMeetFragment(s.code);
+  setMeetFragment(s.invite);
   s.onVisible = () => {
     if (document.visibilityState !== 'visible' || session !== s) return;
     startWatch();
@@ -635,11 +664,11 @@ async function beginSession({ code, name, host, expiryMin }: { code: string; nam
 }
 
 export async function createMeetSession({ name, expiryMin }: { name?: string; expiryMin?: number } = {}) {
-  return beginSession({ code: generateMeetCode(), name, host: true, expiryMin });
+  return beginSession({ invite: generateMeetInvite(), name, host: true, expiryMin });
 }
 
-export async function joinMeetSession(code: string, { name }: { name?: string } = {}) {
-  return beginSession({ code, name, host: false, expiryMin: 120 });
+export async function joinMeetSession(invite: string, { name }: { name?: string } = {}) {
+  return beginSession({ invite, name, host: false, expiryMin: 120 });
 }
 
 export async function leaveMeet(reason = 'manual') {
@@ -647,7 +676,7 @@ export async function leaveMeet(reason = 'manual') {
   if (!s || s.leaving) return;
   s.leaving = true;
   if (reason !== 'switch') {
-    await Promise.race([publishPacket({ v: 1, k: 'bye', id: s.self.id, ts: Date.now() }), sleep(250)]);
+    await Promise.race([publishPacket({ k: 'bye', id: s.self.id }), sleep(250)]);
   }
   cleanupSession(s);
   session = null;
@@ -671,6 +700,7 @@ function cleanupSession(s: MeetSession) {
   s.chatUnread = 0;
   s.chatSeen.clear();
   s.chatRate.clear();
+  s.replay.clear();
 }
 
 export async function resetMeetCode() {
@@ -685,28 +715,31 @@ export async function resetMeetCode() {
   s.chatUnread = 0;
   s.chatSeen.clear();
   s.chatRate.clear();
+  s.replay.clear();
   s.routeAbort?.abort();
   s.route = null;
   s.routeLoading = '';
-  const code = generateMeetCode();
-  const room = await deriveMeetRoom(code);
+  const invite = generateMeetInvite();
+  const room = await deriveMeetRoom(invite);
   if (session !== s) return null;
-  s.code = room.code;
+  s.invite = room.invite;
   s.room = room;
   s.roomId = room.roomId;
-  s.link = meetLinkFor(room.code);
-  setMeetFragment(s.code);
+  s.roomLabel = roomLabelFor(room.roomId);
+  s.link = meetLinkFor(room.invite);
+  setMeetFragment(s.invite);
   s.hostId = s.self.id;
   s.startedAt = Date.now();
   s.expiresAt = Date.now() + expiryMinutes() * 60_000;
   s.sendChain = Promise.resolve();
+  s.sendSeq = 0;
   s.relayState = 'connecting';
   s.relayError = null;
   startRelay();
   publishHi();
   if (s.self.hasFix) publishLoc();
   emitState();
-  emit('meet:codeReset', { code: s.code });
+  emit('meet:codeReset', { invite: s.invite });
   return getMeetSnapshot();
 }
 
@@ -727,8 +760,8 @@ export async function sendMeetMessage(raw: string) {
   const mid = randomMeetId();
   const now = Date.now();
   const ok = await publishPacket({
-    v: 1, k: 'msg', id: s.self.id, name: s.self.name, c: s.self.color,
-    mid, tx: text, ts: now
+    k: 'msg', id: s.self.id, name: s.self.name, c: s.self.color,
+    mid, tx: text
   });
   if (session !== s || !ok) return false;
   rememberChatId(s, mid);
@@ -770,7 +803,7 @@ export function retryMeetGeolocation() {
 export async function kickMeetPeer(peerId: string) {
   const s = session;
   if (!s || s.hostId !== s.self.id || !peerId || peerId === s.self.id) return false;
-  await publishPacket({ v: 1, k: 'kick', target: peerId, by: s.self.id, ts: Date.now() });
+  await publishPacket({ k: 'kick', id: s.self.id, target: peerId, by: s.self.id });
   if (session !== s) return false;
   s.peers.delete(peerId);
   if (s.route?.peerId === peerId) s.route = null;
