@@ -14,12 +14,22 @@ function expectCode(promise: Promise<unknown>, code: string) {
   return expect(promise).rejects.toMatchObject({ code });
 }
 
+function containsBytes(haystack: Uint8Array, needle: Uint8Array) {
+  outer: for (let i = 0; i + needle.length <= haystack.length; i++) {
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
 describe('encrypted backup envelope', () => {
   it('round-trips the archive and never stores plaintext in the envelope', async () => {
     const wrapped = await encryptBackupBytes(data, password, { iterations: 100_000 });
     expect(isEncryptedBackupBytes(wrapped)).toBe(true);
     expect(new TextDecoder().decode(wrapped.subarray(0, 8))).toBe('TRKMBKP1');
-    expect(Buffer.from(wrapped).includes(Buffer.from(data))).toBe(false);
+    expect(containsBytes(wrapped, data)).toBe(false);
     const plain = await decryptBackupBytes(wrapped, password);
     expect([...plain]).toEqual([...data]);
     const fresh = await encryptBackupBytes(data, password, { iterations: 100_000 });
