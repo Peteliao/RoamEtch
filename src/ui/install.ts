@@ -18,7 +18,7 @@ export function isStandaloneMode() {
     || (navigator as any).standalone === true;
 }
 
-function isIOS() {
+export function isIOS() {
   return /iPad|iPhone|iPod/.test(navigator.userAgent)
     || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }

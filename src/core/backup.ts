@@ -3,6 +3,7 @@ import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 import { db } from './store';
 import { emit } from './events';
 import { sha256Hex, stableStringify } from './integrity';
+import { decryptBackupBytes, encryptBackupBlob, ENCRYPTED_BACKUP_EXT, isEncryptedBackupBytes } from './backupCrypto';
 
 const FORMAT = 'localtrace-backup';
 const VERSION = 2;
@@ -39,7 +40,7 @@ function mediaFilesOf(files, manifest) {
   return [...paths];
 }
 
-export async function exportBackup() {
+export async function exportBackup({ password = '' }: { password?: string } = {}) {
   const [trips, segments, trackChunks, waypoints, media, elevCache] = await Promise.all([
     db.trips.toArray(), db.segments.toArray(), db.trackChunks.toArray(),
     db.waypoints.toArray(), db.media.toArray(), db.elevCache.toArray()
@@ -76,9 +77,15 @@ export async function exportBackup() {
   };
   entries['manifest.json'] = strToU8(JSON.stringify(manifest));
   const zipped = zipSync(entries, { level: 6 });
-  const blob = new Blob([zipped], { type: 'application/zip' });
   const stamp = exportedAt.slice(0, 10).replace(/-/g, '');
-  return { blob, filename: `trackmint-backup-${stamp}.trip`, tripCount: trips.length, exportedAt, counts: manifest.counts };
+  const encrypted = !!password;
+  const blob = encrypted
+    ? await encryptBackupBlob(new Blob([zipped], { type: 'application/zip' }), password)
+    : new Blob([zipped], { type: 'application/zip' });
+  const filename = encrypted
+    ? `trackmint-backup-${stamp}${ENCRYPTED_BACKUP_EXT}`
+    : `trackmint-backup-${stamp}.trip`;
+  return { blob, filename, tripCount: trips.length, exportedAt, counts: manifest.counts, encrypted };
 }
 
 function readZipLimited(u8) {
@@ -200,10 +207,16 @@ function validateManifest(manifest, files) {
   }
 }
 
-export async function inspectBackup(file) {
-  if (Number(file?.size) > MAX_BACKUP_BYTES) throw new Error('backup file too large');
-  const u8 = new Uint8Array(await file.arrayBuffer());
-  if (u8.byteLength > MAX_BACKUP_BYTES) throw new Error('backup file too large');
+export async function inspectBackup(file, password = '') {
+  const maxEnvelope = MAX_BACKUP_BYTES + 1024;
+  if (Number(file?.size) > maxEnvelope) throw new Error('backup file too large');
+  let u8 = new Uint8Array(await file.arrayBuffer());
+  if (u8.byteLength > maxEnvelope) throw new Error('backup file too large');
+  const encrypted = isEncryptedBackupBytes(u8);
+  if (encrypted) {
+    u8 = await decryptBackupBytes(u8, password);
+    if (u8.byteLength > MAX_BACKUP_BYTES) throw new Error('backup file too large');
+  }
   const files = readZipLimited(u8);
   let manifest;
   try { manifest = JSON.parse(strFromU8(files['manifest.json'])); } catch { throw new Error('invalid manifest'); }
@@ -211,7 +224,7 @@ export async function inspectBackup(file) {
   const existing = new Set((await db.trips.toArray()).map((t) => t.id));
   const conflicts = manifest.trips.filter((t) => existing.has(t.id)).map((t) => t.id);
   const integrity = await verifyIntegrity(manifest, files);
-  return { manifest, files, conflicts, integrity };
+  return { manifest, files, conflicts, integrity, encrypted };
 }
 
 async function verifyIntegrity(manifest, files) {

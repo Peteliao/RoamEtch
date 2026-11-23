@@ -75,7 +75,7 @@ Version 1 invites and packets are rejected rather than downgraded.
 | Envelope | `0x02` version byte + 12-byte nonce + ciphertext/tag, base64url-encoded |
 | Replay protection | Every packet carries a per-sender, strictly increasing sequence number. All packet types pass the same per-sender guard; repeated or older sequences are dropped. Timestamps are a secondary ±5-minute sanity check, and locations also enforce newer sequence ordering. |
 | Chat dedupe | Random message ids plus a bounded seen-set, in addition to the sender sequence |
-| Transport limits | Client and relay cap packets at ~8 KB |
+| Transport limits | Client and relay cap packets at ~8 KB. The bundled relay also enforces a per-socket token bucket (8 msg/s, 40 burst), 32 clients per room, 2,000 rooms, 10,000 clients, and a 12-hour idle-room sweep |
 | MQTT topic | `${prefix}/${roomId}` (default prefix `trackmint/v2/meet`) |
 | WS path | `/room/{room}` (the relay must preserve this path) |
 
@@ -101,6 +101,14 @@ stores messages or provides history replay.
   features, not a cryptographic access-control boundary. Ephemeral device
   identity keys, authenticated host authority, and key rotation after a member
   leaves are the next protocol phase.
+- **Host-kick authority depends on the transport.** On the public MQTT broker,
+  anyone who knows the room id can subscribe and publish, and the broker offers
+  no kick API, so the host has no connection-level authority at all. On a
+  self-hosted relay, the operator can close sockets or block an IP, but the
+  relay cannot verify which device is the actual host, so such blocks are
+  coarse and affect every member behind the same address. In both cases an
+  in-app kick asks collaborating clients to drop the member; a modified client
+  can ignore it and keep receiving ciphertext.
 - **No forward secrecy.** The invite secret derives one session key. If the
   invite leaks, ciphertext captured during that session can be decrypted. Reset
   the invite to create a new room and key. Periodic key ratcheting / MLS is not

@@ -14,9 +14,19 @@ import { SITE_URL, drawQr } from './brand';
 import { paletteFor } from './palette';
 import { VIEWER_CSS, VIEWER_JS } from './htmlExportViewer';
 
-const MAX_PHOTOS = 12;
-const PHOTO_BUDGET = 680_000;
 const THEMES = ['dark', 'light', 'contrast'];
+
+export const HTML_TIERS = {
+  clear: { tol: 3, points: 2_000, waypoints: 30, photos: 12, budget: 680_000 },
+  light: { tol: 15, points: 900, waypoints: 16, photos: 6, budget: 300_000 },
+  none: { tol: 20, points: 600, waypoints: 10, photos: 0, budget: 0 }
+};
+
+export type HtmlTier = keyof typeof HTML_TIERS;
+
+export function htmlTierConfig(tier: string) {
+  return HTML_TIERS[tier as HtmlTier] || HTML_TIERS.clear;
+}
 
 function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -151,13 +161,13 @@ function nearestTrackDistance(track, lat, lon) {
   return track.cum[idx];
 }
 
-async function attachPhotos(nodes, media, enabled) {
-  if (!enabled || !media?.length) return 0;
+async function attachPhotos(nodes, media, enabled, cfg) {
+  if (!enabled || !cfg.photos || !media?.length) return 0;
   const byId = new Map(media.map((m) => [m.id, m]));
-  let budget = PHOTO_BUDGET;
+  let budget = cfg.budget;
   let used = 0;
   for (const node of nodes) {
-    if (used >= MAX_PHOTOS) break;
+    if (used >= cfg.photos) break;
     const ids = node.wp.mediaIds || [];
     if (!ids.length) continue;
     const rec = ids.map((id) => byId.get(id)).find(Boolean);
@@ -191,13 +201,27 @@ type BuildOpts = {
   onProgress?: (p: number) => void;
 };
 
+export function estimateHTMLSize(full, { tier = 'clear', privacy = {}, includePhotos = true }: BuildOpts = {}) {
+  const cfg = htmlTierConfig(tier);
+  const cropped = applyPrivacy(full, privacy);
+  const pts = simplify(cropped.segments.flatMap((s) => s.points || []), cfg.tol).slice(0, cfg.points);
+  const nodeCount = Math.min(cropped.waypoints.length, cfg.waypoints);
+  const photoCount = includePhotos && cfg.photos ? Math.min(cfg.photos, full.media?.length || 0) : 0;
+  const base = VIEWER_CSS.length + VIEWER_JS.length + 24_000;
+  const trackBytes = pts.length * 24;
+  const nodeBytes = nodeCount * 360;
+  const photoBytes = Math.min(cfg.budget, photoCount * 52_000);
+  return base + trackBytes + nodeBytes + photoBytes;
+}
+
 export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
   const { tier = 'clear', privacy = {}, includePhotos = true, onProgress } = opts;
+  const cfg = htmlTierConfig(tier);
   const cropped = applyPrivacy(full, privacy);
   const routePts = cropped.segments.flatMap((s) => s.points || []);
-  const tol = tier === 'clear' ? 3 : 15;
-  const pointLimit = tier === 'clear' ? 2000 : 900;
-  const wpsLimit = tier === 'clear' ? 30 : 16;
+  const tol = cfg.tol;
+  const pointLimit = cfg.points;
+  const wpsLimit = cfg.waypoints;
   const pts = simplify(routePts, tol).slice(0, pointLimit);
   const stats = computeStats(cropped.segments, {
     ascentThreshold: get('ascentThreshold'),
@@ -244,7 +268,7 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
     })
     .sort((a, b) => a.dNum - b.dNum || a.idx - b.idx);
 
-  const photos = await attachPhotos(nodes, full.media, includePhotos);
+  const photos = await attachPhotos(nodes, full.media, includePhotos, cfg);
   onProgress?.(0.55);
   const places = (await placePromise).filter(Boolean).slice(0, 6);
   onProgress?.(0.8);

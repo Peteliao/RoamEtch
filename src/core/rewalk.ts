@@ -5,7 +5,7 @@ import { loadTripFull } from './store';
 import { haversine, bearing, fmtDistance } from './geo';
 import { emit } from './events';
 import { t, currentLang } from './i18n';
-import { get } from './settings';
+import { get, set } from './settings';
 import { rec } from './recorder';
 
 const ARRIVE_M = 60;
@@ -40,15 +40,34 @@ export const rewalk = {
   simDist: 0, lastOffAnnounce: 0
 };
 
+let speechPrimed = false;
+
+// iOS only allows speechSynthesis.speak inside a user gesture. startRewalk runs
+// synchronously up to its first await, so the tap that starts the walk can unlock
+// voice for the GPS callbacks that speak later.
+export function primeSpeech() {
+  if (speechPrimed || !('speechSynthesis' in window)) return;
+  speechPrimed = true;
+  try {
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0;
+    u.rate = 2;
+    speechSynthesis.speak(u);
+  } catch { /* speech unsupported */ }
+}
+
 export function speak(text) {
-  if (rewalk.muted || !text || !('speechSynthesis' in window)) return;
+  if (rewalk.muted || get('rewalkVoice') === false || !text || !('speechSynthesis' in window)) return;
   const u = new SpeechSynthesisUtterance(text);
   const zh = String(currentLang()).toLowerCase().startsWith('zh');
   u.lang = zh ? 'zh-CN' : 'en-US';
   const voice = speechSynthesis.getVoices().find((v) => v.lang.replace('_', '-').toLowerCase().startsWith(zh ? 'zh' : 'en'));
   if (voice) u.voice = voice;
   u.rate = 1.05;
-  speechSynthesis.speak(u);
+  try {
+    if (speechSynthesis.paused) speechSynthesis.resume();
+    speechSynthesis.speak(u);
+  } catch { /* speech interrupted */ }
 }
 
 function nearestIdx(lat, lon, pts = rewalk.pts, hint = -1) {
@@ -81,6 +100,7 @@ function distText(m) {
 }
 
 export async function startRewalk(tripId, mode: RewalkMode = 'full-fwd') {
+  primeSpeech();
   if (rec.status === 'recording' || rec.status === 'paused') return 'busy';
   if (rewalk.active) stopRewalk();
   if (!MODE_KEYS[mode]) mode = 'full-fwd';
@@ -117,7 +137,7 @@ export async function startRewalk(tripId, mode: RewalkMode = 'full-fwd') {
     phase: 'locating' as RewalkPhase,
     targetType: (mode === 'full-rev' || mode === 'near-start') ? 'start' : 'end',
     navTarget: null, navTargetType: null, lastFix: null, simPos: null,
-    finished: false, departed: false, wps,
+    finished: false, departed: false, muted: get('rewalkVoice') === false, wps,
     announced: new Set(), nearAnnounced: new Set(), simDist: 0, lastOffAnnounce: 0
   });
   emit('rewalk:started', {
@@ -277,10 +297,17 @@ export function stopRewalk() {
   emit('rewalk:stopped', {});
 }
 
-export function toggleMute() {
-  rewalk.muted = !rewalk.muted;
-  if (rewalk.muted && 'speechSynthesis' in window) speechSynthesis.cancel();
+export function setRewalkVoice(on: boolean) {
+  const enabled = !!on;
+  set('rewalkVoice', enabled);
+  rewalk.muted = !enabled;
+  if (!enabled && 'speechSynthesis' in window) speechSynthesis.cancel();
+  if (enabled) primeSpeech();
   emit('rewalk:mute', { muted: rewalk.muted });
+}
+
+export function toggleMute() {
+  setRewalkVoice(rewalk.muted);
   return rewalk.muted;
 }
 

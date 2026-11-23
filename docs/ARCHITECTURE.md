@@ -48,7 +48,7 @@ Key principles:
 | `src/ui/map.ts` | MapLibre setup, region-specific raster styles, tile providers, and GCJ-02 render adapter. |
 | `src/ui/analysis.ts` | Compact metric card (4 hero + 9 details), elevation/speed charts with hover and touch scrubbing, gap repair, GPS quality report, timeline and waypoints. |
 | `src/ui/trips.ts` | Trip library: favorites, tags, search, filters, sorting, yearly footprint and its image/video share preview, import/export, backup entry points. |
-| `src/ui/backupFlow.ts` | Shared backup/restore UX: download, restore preview, integrity status, duplicate strategy, pre-restore snapshot. |
+| `src/ui/backupFlow.ts` | Shared backup/restore UX: download (optionally password-encrypted), restore preview, integrity status, duplicate strategy, pre-restore snapshot. |
 | `src/ui/export.ts` | Posters, replay videos, standalone HTML, share link, privacy review. |
 | `src/core/trackVideo.ts` | Realtime canvas replay, intro/outro cards, and muxing the generated music track. |
 | `src/core/footprintShare.ts` | Aggregate-only yearly footprint artwork: 1080×1350 image and 9-second 1080×1920 video with original music. |
@@ -56,6 +56,7 @@ Key principles:
 | `src/core/promo.ts` | Generic promo artwork: three designs per theme, immediate-repeat avoidance, and matching captions. |
 | `src/core/music.ts` | Four original procedural loops: composition data, Web Audio synthesis, seamless tail wrap, random/manual selection, and MediaStream output. |
 | `src/core/backup.ts` | Backup format v2: ZIP manifest, payload digest, per-media checksums, inspect/restore. |
+| `src/core/backupCrypto.ts` | Optional backup encryption: PBKDF2-SHA-256 → AES-256-GCM `TRKMBKP1` envelope (`.trackmint.enc`). |
 | `src/core/integrity.ts` | Deterministic JSON serialization and SHA-256 helpers. |
 | `src/core/footprint.ts` | Year/month aggregation over `statsCache` for the footprint card. |
 | `src/core/gpsQuality.ts` | Accuracy, poor fixes, time gaps, altitude jumps, and 0–100 quality score. |
@@ -98,8 +99,16 @@ Backups serialize every table plus binary media into a `.trip` ZIP:
 - Restore reuses the inspected archive and writes all tables plus overwrite
   deletions in one IndexedDB transaction, so a failed media write rolls back
   previously deleted trips.
-- Backups are **not encrypted**. Integrity is tamper detection, not secrecy or
-  authenticity: an attacker who rewrites the archive can recompute the checksums.
+- Full-library backups can optionally be password-encrypted into a
+  `.trackmint.enc` file: a `TRKMBKP1` header, 16-byte random salt, 12-byte nonce,
+  and AES-256-GCM ciphertext keyed by PBKDF2-SHA-256 with 600,000 iterations.
+  The header (magic, version, KDF parameters) is authenticated as AAD, so
+  tampering or a wrong password fails decryption cleanly. Encryption wraps the
+  entire `.trip` archive; the inner archive keeps its own integrity digests.
+- Unencrypted backups are **tamper-evident but not secret**: integrity is
+  detection, not authenticity, because an attacker who rewrites the archive can
+  recompute the checksums. Use the password option whenever the file leaves your
+  own devices.
 
 ## Recording pipeline
 
@@ -184,8 +193,11 @@ passes a per-sender strictly increasing sequence guard before it is accepted;
 timestamps and chat ids are additional checks. Messages live in memory only: no
 history, no late-joiner backfill, no persistence after the session ends. Version
 1 invitations and packets are rejected explicitly, so an upgraded client cannot
-silently fall back to the old 60-bit protocol. `relay/` is a minimal
-blind-forwarding template; it is not required by the static app.
+silently fall back to the old 60-bit protocol. Location publishing adapts to
+movement: roughly every 5 seconds while the device is moving and a 25-second
+heartbeat while stationary, so idle teammates stop consuming airtime. `relay/`
+is a minimal blind-forwarding template with frame-size, rate, room/client, and
+idle-TTL limits; it is not required by the static app.
 
 ## Offline and updates
 
@@ -200,11 +212,16 @@ if an old build appears.
 ## Tests and CI
 
 Vitest covers pure modules: coordinates, geo math, statistics, privacy cropping,
-GPX/KML/GeoJSON, compact links, demo data, meetup crypto, backup integrity,
-footprint aggregation and recap summaries, GPS quality, and procedural
-video-music composition. GitHub Actions
-runs typecheck, the full test suite, the production build, and a separate relay
-test job. The Pages workflow runs the same tests before publishing `dist/`.
+GPX/KML/GeoJSON, compact links, demo data, meetup crypto and cadence, backup
+integrity and encryption, footprint aggregation and recap summaries, GPS
+quality, and procedural video-music composition. Playwright smoke tests run the
+demo and simulator flows in Chromium: analysis chart switching and privacy
+cropping, poster canvas rendering, text-only HTML export, encrypted backup
+export → wipe → restore, and the iOS storage nudge. GitHub Actions
+runs typecheck, the full test suite, the production build, the Playwright suite,
+and a separate relay test job. The Pages workflow runs the same tests before
+publishing `dist/`. Pushing a `v*` tag triggers the release workflow, which
+attaches `trackmint-dist.zip` and publishes the app and relay images to GHCR.
 
 ## Related documents
 

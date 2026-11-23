@@ -17,8 +17,10 @@ npm install
 npm run dev        # Vite dev server
 npm run typecheck  # tsc --noEmit
 npm test           # Vitest unit tests
+npm run test:e2e   # Playwright smoke tests (run npm run test:e2e:install once)
 npm run build      # typecheck + production build (dist/)
 npm run preview    # preview the production build
+npm run promo:webp # regenerate the animated README demos
 ```
 
 The relay template is a separate npm package:
@@ -38,7 +40,8 @@ npm test
    checks, yearly footprints, GPS quality, GPX/KML/GeoJSON, compact links, meetup
    crypto, procedural video music, and the demo track.
 3. Run `npm run typecheck && npm test && npm run build`. If you changed the relay,
-   also run `cd relay && npm test`.
+   also run `cd relay && npm test`. If you changed recording, analysis, export,
+   backup, or the iOS nudges, run `npm run test:e2e`.
 4. For UI changes, test in a real browser at desktop and mobile widths. Include a
    screenshot or short recording in the PR when the layout changes.
 5. Use a commit message in the existing style: `feat(scope): ...`, `fix(scope): ...`,

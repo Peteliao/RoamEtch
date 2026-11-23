@@ -11,6 +11,7 @@ import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from 
 import { startPlayback, stopPlayback, isPlaying } from '../core/simulator';
 import { setLanguage, currentLang } from '../core/i18n';
 import { generatePromo } from '../core/promo';
+import { setRewalkVoice } from '../core/rewalk';
 import { APP_VERSION } from '../core/version';
 import { exportImage } from '../core/shareEnv';
 import { openInstallGuide, installSettingsInfo } from './install';
@@ -121,11 +122,21 @@ export function createSettingsView(navigate) {
   );
 
   // ---- recording ----
+  const voiceToggle = el('input', { type: 'checkbox' });
+  voiceToggle.checked = get('rewalkVoice') !== false;
+  voiceToggle.onchange = () => setRewalkVoice(voiceToggle.checked);
+  on('rewalk:mute', ({ muted }) => { voiceToggle.checked = !muted; });
+  const voiceRow = el('div', { class: 'setting-row' },
+    el('div', { class: 'txt' },
+      el('div', { class: 't' }, t('settings.rewalkVoice')),
+      el('div', { class: 'd' }, t('settings.rewalkVoiceHint'))),
+    el('label', { class: 'switch' }, voiceToggle, el('span', { class: 'slider' })));
   const recCard = panel(
     segRow(t('settings.activity'), [['auto', t('settings.activityAuto')], ...['hike', 'drive', 'bike', 'run', 'travel'].map((a) => [a, t(`record.activities.${a}`)])], get('activity'), (v) => set('activity', v), t('settings.activityAutoHint')),
     segRow(t('settings.speedDisplay'), [['auto', t('settings.speedAuto')], ['speed', t('settings.speedSpeed')], ['pace', t('settings.speedPace')]], get('speedDisplay'), (v) => set('speedDisplay', v)),
     segRow(t('settings.recordQuality'), [['high', t('settings.qHigh')], ['balanced', t('settings.qBalanced')], ['low', t('settings.qLow')]], get('recordQuality'), (v) => set('recordQuality', v)),
     switchRow(t('settings.wakeLock'), t('settings.wakeLockHint'), 'wakeLock'),
+    voiceRow,
     numRow(t('settings.ascentThreshold'), '3–5 m', 'ascentThreshold', { min: 1, max: 20, unit: 'm' }),
     numRow(t('settings.weight'), t('settings.weightHint'), 'weightKg', { min: 30, max: 200, unit: 'kg' }),
     numRow(t('settings.accuracyLimit'), '', 'accuracyLimit', { min: 10, max: 500, unit: 'm' })
@@ -272,7 +283,7 @@ export function createSettingsView(navigate) {
   };
   const restoreBtn = el('button', { class: 'btn sm' }, icon('export', 14), t('trips.restore'));
   restoreBtn.onclick = async () => {
-    const f = await filePicker('.trip,.zip');
+    const f = await filePicker('.trip,.zip,.enc,application/zip,application/octet-stream');
     if (!f) return;
     try {
       await restoreBackupFlow(f, { onRestored: () => refreshStorage() });

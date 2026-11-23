@@ -8,8 +8,9 @@ import { startRewalk } from '../core/rewalk';
 import { importDemoTrip } from '../core/demo';
 import { buildFootprints } from '../core/footprint';
 import { generateFootprintImage, generateFootprintVideo, footprintCaption } from '../core/footprintShare';
-import { videoSupported } from '../core/videoCapture';
+import { videoSupported, videoIsWebmOnly } from '../core/videoCapture';
 import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
+import { openInstallGuide, isIOS, isStandaloneMode } from './install';
 import { triggerDownload } from '../core/gpx';
 import { fmtDistance, fmtDuration, simplify } from '../core/geo';
 import { get } from '../core/settings';
@@ -93,6 +94,7 @@ function openFootprintImagePreview(result, fp) {
 function openFootprintVideoPreview(fp) {
   const caption = footprintCaption(fp);
   const controller = new AbortController();
+  const webmOnly = videoIsWebmOnly(true);
   let closed = false;
   let url = null;
   let blob = null;
@@ -100,12 +102,15 @@ function openFootprintVideoPreview(fp) {
     el('div', { class: 'fp-spinner' }),
     el('div', { class: 'small muted fp-video-progress' }, t('trips.footprintGenerating', { p: 0 })));
   const note = el('div', { class: 'small muted promo-preview-note' }, t('trips.footprintVideoKeep'));
+  const formatWarn = webmOnly
+    ? el('div', { class: 'debug-banner' }, '⚠ ' + t('export.videoWebmWarn'))
+    : null;
   const copyBtn = el('button', { class: 'btn', style: { display: 'none' } }, icon('copy', 16), t('trips.footprintCopy'));
   const saveBtn = el('button', { class: 'btn', style: { display: 'none' } }, icon('download', 16), t('trips.footprintSaveVideo'));
   const shareBtn = el('button', { class: 'btn primary', style: { display: 'none' } }, icon('share', 16), t('export.shareVideo'));
   const m = modal({
     title: t('trips.footprintVideoTitle'),
-    body: el('div', {}, note, stage),
+    body: el('div', {}, formatWarn, note, stage),
     footer: [copyBtn, saveBtn, shareBtn],
     onClose: () => {
       closed = true;
@@ -143,7 +148,8 @@ function openFootprintVideoPreview(fp) {
       poster: result.cover || '', src: url, class: 'fp-video'
     });
     stage.replaceChildren(video);
-    note.textContent = t('trips.footprintVideoReady', { size: (blob.size / 1048576).toFixed(1) + ' MB' });
+    note.textContent = t('trips.footprintVideoReady', { size: (blob.size / 1048576).toFixed(1) + ' MB' }) +
+      (blob.type.includes('webm') ? ` · ${t('export.videoWebmShort')}` : '');
     copyBtn.style.display = '';
     saveBtn.style.display = '';
     if (navigator.share && navigator.canShare?.({ files: [new File([blob], 'a', { type: blob.type })] })) {
@@ -228,9 +234,41 @@ export function createTripsView(navigate) {
   const footprintBody = el('div', {});
   const footprintCard = el('div', { class: 'card footprint-card' }, footprintBody);
   const nudge = el('div', { class: 'backup-nudge', style: { display: 'none' } });
+  const iosNudge = el('div', { class: 'backup-nudge ios-storage-nudge', style: { display: 'none' } });
+  const IOS_NUDGE_KEY = 'trackmint.iosStorageNudge.v1';
+  let iosNudgeBuilt = false;
+  function iosNudgeDismissed() {
+    try { return !!localStorage.getItem(IOS_NUDGE_KEY); } catch { return true; }
+  }
+  function renderIosNudge() {
+    const show = allTrips.length > 0 && isIOS() && !isStandaloneMode() && !iosNudgeDismissed();
+    iosNudge.style.display = show ? '' : 'none';
+    if (!show || iosNudgeBuilt) return;
+    iosNudgeBuilt = true;
+    const installBtn = el('button', { class: 'btn sm' }, icon('download', 14), t('trips.iosStorageInstall'));
+    installBtn.onclick = () => openInstallGuide();
+    const backupBtn = el('button', { class: 'btn sm' }, icon('shield', 14), t('trips.iosStorageBackup'));
+    backupBtn.onclick = async () => {
+      try { await exportBackupFlow(); renderNudge(); } catch { toast(t('backup.exportErr'), 'err'); }
+    };
+    const closeBtn = el('button', {
+      class: 'iconbtn ios-nudge-close', title: t('common.close'), 'aria-label': t('common.close')
+    }, icon('x', 15));
+    closeBtn.onclick = () => {
+      try { localStorage.setItem(IOS_NUDGE_KEY, String(Date.now())); } catch { /* storage unavailable */ }
+      iosNudge.style.display = 'none';
+    };
+    iosNudge.append(
+      icon('warn', 18),
+      el('div', { class: 'nudge-txt' },
+        el('div', { class: 'nudge-t' }, t('trips.iosStorageTitle')),
+        el('div', { class: 'nudge-d' }, t('trips.iosStorageDesc'))),
+      el('div', { class: 'ios-nudge-actions' }, installBtn, backupBtn),
+      closeBtn);
+  }
   const storageBar = el('div', { class: 'small faint', style: { marginTop: '14px', textAlign: 'center' } });
   const listBox = el('div', {});
-  scroll.append(header, summary, nudge, footprintCard, searchBar, toolbar, listBox, storageBar);
+  scroll.append(header, summary, nudge, iosNudge, footprintCard, searchBar, toolbar, listBox, storageBar);
 
   function thumbSVG(points) {
     if (!points || points.length < 2) return '<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="4" fill="var(--text-faint)"/></svg>';
@@ -410,6 +448,7 @@ export function createTripsView(navigate) {
     allTrips = await listTrips();
     renderSummary();
     renderNudge();
+    renderIosNudge();
     renderFootprint();
     renderList();
     if (!allTrips.length) { storageBar.textContent = ''; return; }
@@ -627,7 +666,7 @@ export function createTripsView(navigate) {
   }
 
   async function onRestore() {
-    const file = await filePicker('.trip,.zip,application/zip');
+    const file = await filePicker('.trip,.zip,.enc,application/zip,application/octet-stream');
     if (!file) return;
     try {
       await restoreBackupFlow(file, { onRestored: () => render() });

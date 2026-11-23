@@ -43,8 +43,15 @@ keep the URL path exactly as `/room/<id>`.
   when the app is served over HTTPS.
 - `GET /healthz` returns `{ ok, rooms, clients }` for monitoring. No room ids or message
   content are exposed.
-- Limits: 8 KB frames, 32 clients per room, 40 messages per 5 seconds per socket, and a
-  30-second ping/pong heartbeat. Adjust the constants at the top of `server.mjs` if needed.
+- Limits: 8 KB frames, 32 clients per room, 2,000 rooms, 10,000 total clients, and a
+  30-second ping/pong heartbeat. Each socket gets a token bucket of 8 messages/second
+  with a 40-message burst; exceeding it closes the socket with `1008 rate limit`.
+  Rooms with no traffic for 12 hours are swept every 60 seconds and their sockets
+  closed with `1001 room idle`. Adjust the constants at the top of `server.mjs` if needed.
+- These caps are per relay process. For a public relay, also add per-IP connection and
+  request limiting at the reverse proxy (Nginx `limit_conn`/`limit_req`, Caddy
+  `rate_limit`, or a Cloudflare rule); the relay itself does not identify users and
+  cannot distinguish clients behind the same NAT.
 - The relay is intentionally stateless: no database, no message queue, no replay. Late
   joiners see no history, matching the app's ephemeral chat contract.
 - Anyone who knows a room id can join that room and receive its ciphertext. The relay

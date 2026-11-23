@@ -18,6 +18,11 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 
 ## Screenshots
 
+<p align="center">
+  <img src="docs/screenshots/en/demo.webp" width="300" alt="Live recording demo: the Xiangshan loop trail grows with each GPS fix while distance, duration, and speed update in real time">
+  <br><sub><b>Live recording</b> · every step draws itself on the map, with distance, time, and speed updating live</sub>
+</p>
+
 <table>
   <tr>
     <td align="center" width="50%"><img src="docs/screenshots/en/record.png" width="280" alt="Live GPS track recorder with distance, duration, speed, altitude, ascent, and GPS signal"><br><sub><b>Live recording</b> · track, altitude, ascent, GPS signal, activity detection</sub></td>
@@ -79,7 +84,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 - **Replay videos**: 10 / 15 / 30-second map replays with synchronized metrics and one of four original looping soundtracks, synthesized on-device, randomly chosen by default or selected manually, and muxed into the MP4 or WebM export.
 - **Self-contained HTML**: a single offline-capable page with full stats, elevation profile, zoomable map, waypoints, and photos — ideal for people who do not have the app.
 - **Standard files**: WGS-84 GPX (works with Garmin, Strava, TwoNav, and similar tools), GeoJSON, and KML. Import GPX, XML, and ZIP batches; batch-export ZIP.
-- **Verifiable backup**: the full-library ZIP carries SHA-256 content checksums. Restore shows the export time, contents, duplicate trips, and verification result, can download a snapshot of the current database first, and refuses corrupted archives. Before writing, restore validates archive size, paths, entries, and record relationships, then applies everything in one transaction that rolls back on failure. The backup is not encrypted — store it safely.
+- **Verifiable backup**: the full-library ZIP carries SHA-256 content checksums. Restore shows the export time, contents, duplicate trips, and verification result, can download a snapshot of the current database first, and refuses corrupted archives. Before writing, restore validates archive size, paths, entries, and record relationships, then applies everything in one transaction that rolls back on failure. Backups can optionally be password-encrypted (PBKDF2-SHA-256 600,000 iterations + AES-256-GCM, `.trackmint.enc`); store unencrypted backups somewhere you trust.
 - **Compact import link**: pack a simplified track and waypoints into a URL `#` fragment under 1.5 KB. Opening it imports the trip; it is not a public page and contains no photos.
 - **Privacy review**: start/end privacy circles, sensitive-waypoint hiding, EXIF stripping, and WGS-84 export are shown together before you share or download.
 - **Promo artwork**: generate a 1080×1350 card from Settings. Each theme ships three designs — local-first, yearly footprint, and encrypted meetup — with matching captions, picked at random without immediate repeats. Product info and a QR code only; no personal data.
@@ -140,16 +145,22 @@ npm run build      # type check + production build (dist/)
 npm run preview    # preview the production build
 ```
 
-`dist/` is fully static. Deploy it to GitHub Pages, Cloudflare Pages, Netlify, Vercel, or any static web server. There is no business backend and no database to provision. CI runs typecheck, unit tests, and the production build on every push and pull request.
+`dist/` is fully static. Deploy it to GitHub Pages, Cloudflare Pages, Netlify, Vercel, or any static web server. There is no business backend and no database to provision. CI runs typecheck, unit tests, Playwright end-to-end smoke tests, and the production build on every push and pull request. Pushing a `v*` tag publishes a GitHub Release with `trackmint-dist.zip` and pushes the container images.
 
 ### Docker self-hosting
 
-The repository includes a multi-stage `Dockerfile` and an `nginx.conf` with correct PWA cache headers for `sw.js` and `index.html`:
+The repository includes a multi-stage `Dockerfile` and an `nginx.conf` with correct PWA cache headers for `sw.js` and `index.html`. Release tags publish images to GitHub Container Registry:
+
+```bash
+docker run --rm -p 8080:80 ghcr.io/peteliao/trackmint:latest
+# open http://localhost:8080
+```
+
+Or build from source:
 
 ```bash
 docker build -t trackmint .
 docker run --rm -p 8080:80 trackmint
-# open http://localhost:8080
 ```
 
 Geolocation and PWA installation on phones require HTTPS (except `localhost`), so put a TLS reverse proxy such as Caddy, Nginx, or Cloudflare Tunnel in front. This also works on a home NAS or a private server and does not depend on GitHub Pages.
@@ -159,6 +170,8 @@ Geolocation and PWA installation on phones require HTTPS (except `localhost`), s
 The default public EMQX broker is suitable for testing. For a more stable or private relay, use the minimal blind WebSocket relay in [`relay/`](relay/README.md):
 
 ```bash
+docker run --rm -p 8080:8080 ghcr.io/peteliao/trackmint-relay:latest
+# or from source:
 cd relay && npm install && npm start
 # or
 docker build -t trackmint-relay ./relay
@@ -177,7 +190,7 @@ Then choose **Settings → Team relay → Custom WS relay** and enter `wss://you
 - Files and photos: fflate (ZIP), exifr (EXIF parsing and stripping)
 - Offline: [vite-plugin-pwa](https://vite-pwa-org.netlify.app/) (Workbox)
 - Meetup: versioned invite (random public room id + 256-bit secret) + HKDF-SHA-256 + AES-256-GCM end-to-end encryption with per-sender replay protection; positions and ephemeral chat both use MQTT WSS or a custom WebSocket blind relay
-- Tests: Vitest covers coordinate conversion, track statistics, backup integrity, yearly footprints, GPS quality, GPX/KML/GeoJSON, share links, and meetup crypto; CI runs typecheck, tests, and the production build
+- Tests: Vitest covers coordinate conversion, track statistics, backup integrity and encryption, yearly footprints, GPS quality, GPX/KML/GeoJSON, share links, meetup crypto and publish cadence; Playwright smoke tests cover demo analysis, privacy cropping, posters, text-only HTML export, and the encrypted backup round-trip; CI runs typecheck, unit tests, E2E, and the production build
 - Self-hosting: multi-stage Dockerfile + nginx.conf; an optional minimal blind relay template lives in [`relay/`](relay/README.md)
 
 ```text
@@ -217,7 +230,7 @@ TrackMint is designed to keep data on your device, but “local-first” does no
 - **Photos**: EXIF location data is stripped before storage; exported posters, videos, and HTML use the locally processed images only.
 - **External service requests**: basemap tiles, elevation, place-name, and routing services require network access and receive the coordinates/viewport needed to render or compute a result, plus normal network information such as your IP. When generating a poster or video, sampled coordinates may be sent to OpenStreetMap-based reverse geocoding to label the route, and the result is cached locally. Gap repair and meetup routing send endpoints only when you explicitly trigger them. These requests never upload photos or the full trip library.
 - **Device risk**: clearing browser data, uninstalling the PWA, or changing devices removes local trips — keep a full backup. Anyone who can unlock your device may be able to read browser storage.
-- **Full backups**: the backup ZIP contains complete tracks, waypoints, and photos and is **not encrypted**. Anyone with the file can read it, so store it somewhere you trust.
+- **Full backups**: the backup ZIP contains complete tracks, waypoints, and photos. By default it is not encrypted, so anyone with the file can read it. You can set a password when exporting to produce an encrypted `.trackmint.enc` file (PBKDF2-SHA-256 600,000 iterations + AES-256-GCM); the password is never stored and cannot be recovered. Either way, keep backups somewhere you trust.
 - **Original music**: replay-video soundtracks are synthesized in the browser; no external music files are downloaded or bundled.
 
 ## FAQ

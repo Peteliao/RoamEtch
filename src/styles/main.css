@@ -744,6 +744,15 @@ html.oled-lock { color-scheme: dark; }
 .backup-nudge .nudge-txt { flex: 1; min-width: 0; }
 .backup-nudge .nudge-t { font-size: 12.5px; font-weight: 650; color: var(--text); }
 .backup-nudge .nudge-d { font-size: 11px; color: var(--text-faint); margin-top: 1px; }
+.ios-storage-nudge {
+  align-items: flex-start; flex-wrap: wrap; gap: 8px;
+  background: var(--bg-elev); border: 1px solid var(--warn); color: var(--warn);
+}
+:root[data-theme="contrast"] .ios-storage-nudge { border-width: 2px; }
+.ios-storage-nudge .nudge-txt { flex: 1 1 190px; }
+.ios-storage-nudge .nudge-d { line-height: 1.45; }
+.ios-nudge-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ios-nudge-close { margin-left: auto; color: var(--text-faint); }
 .footprint-card { padding: 14px 14px 10px; margin-bottom: 14px; }
 .footprint-head { display: flex; align-items: center; gap: 8px; }
 .footprint-title { flex: 1; display: flex; align-items: center; gap: 6px; font-weight: 650; font-size: 14px; }
@@ -795,6 +804,7 @@ html.oled-lock { color-scheme: dark; }
   line-height: 1.5; margin-top: 8px;
 }
 .backup-warning svg { flex: none; margin-top: 1px; }
+.backup-warning.ok { color: var(--accent); }
 .backup-error {
   display: flex; align-items: flex-start; gap: 7px; font-size: 12px; color: var(--danger);
   background: rgba(242, 109, 109, 0.09); border-radius: var(--radius-sm); padding: 9px 11px; margin: 8px 0;

@@ -103,6 +103,22 @@ describe('backup integrity', () => {
     expect(inspected.manifest.counts.media).toBe(1);
   });
 
+  it('wraps an encrypted backup and requires the password to inspect it', async () => {
+    const backup = await exportBackup({ password: 'correct horse battery' });
+    expect(backup.encrypted).toBe(true);
+    expect(backup.filename).toMatch(/\.trackmint\.enc$/);
+    const bytes = new Uint8Array(await backup.blob.arrayBuffer());
+    expect(new TextDecoder().decode(bytes.subarray(0, 8))).toBe('TRKMBKP1');
+    await expect(inspectBackup(asFile(backup.blob))).rejects.toMatchObject({ code: 'backup-password-required' });
+    await expect(inspectBackup(asFile(backup.blob), 'wrong password')).rejects.toMatchObject({ code: 'backup-decrypt-failed' });
+    const inspected = await inspectBackup(asFile(backup.blob), 'correct horse battery');
+    expect(inspected.encrypted).toBe(true);
+    expect(inspected.integrity.ok).toBe(true);
+    expect(inspected.manifest.trips[0].name).toBe('Test trip');
+    const restored = await restoreBackup(asFile(backup.blob), 'overwrite', inspected);
+    expect(restored).toBe(1);
+  });
+
   it('detects a modified manifest', async () => {
     const backup = await exportBackup();
     const files = unzipSync(new Uint8Array(await backup.blob.arrayBuffer()));

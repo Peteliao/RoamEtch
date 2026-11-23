@@ -6,10 +6,11 @@ import { on } from '../core/events';
 import { applyPrivacy } from '../core/privacy';
 import { generatePoster } from '../core/poster';
 import { buildGPX, buildGeoJSON, buildKML } from '../core/gpx';
-import { buildSelfContainedHTML } from '../core/htmlExport';
+import { buildSelfContainedHTML, estimateHTMLSize } from '../core/htmlExport';
 import { buildShareLink } from '../core/shareLink';
 import { generateTrackVideo, videoSupported } from '../core/trackVideo';
 import { MUSIC_TRACKS, MUSIC_PREF_RANDOM, isMusicTrackId, musicSupported } from '../core/music';
+import { videoIsWebmOnly } from '../core/videoCapture';
 import { exportImage, exportFile, isWeChat, nativeShare } from '../core/shareEnv';
 import { listTrips, loadTripFull } from '../core/store';
 import { prepareMap } from '../core/mapPaint';
@@ -34,10 +35,10 @@ export function createExportView(getRecordMap) {
 
   // ---- privacy ----
   const radiusInput = el('input', { type: 'number', min: '0', max: '5000', step: '50', value: get('privacyRadius') });
-  radiusInput.onchange = () => { set('privacyRadius', Math.max(0, +radiusInput.value || 0)); updateCropInfo(); updateLink(true); warmExport(curFull); };
+  radiusInput.onchange = () => { set('privacyRadius', Math.max(0, +radiusInput.value || 0)); updateCropInfo(); updateLink(true); updateHtmlEstimate(); warmExport(curFull); };
   const hideCb = el('input', { type: 'checkbox' });
   hideCb.checked = true;
-  hideCb.onchange = () => { updateCropInfo(); updateLink(true); warmExport(curFull); };
+  hideCb.onchange = () => { updateCropInfo(); updateLink(true); updateHtmlEstimate(); warmExport(curFull); };
   const vectorCb = el('input', { type: 'checkbox' });
   vectorCb.onchange = () => { updateCropInfo(); warmExport(curFull); };
   const cropInfo = el('div', { class: 'small', style: { color: 'var(--warn)', marginTop: '8px' } });
@@ -190,6 +191,7 @@ export function createExportView(getRecordMap) {
 
   // ---- track video ----
   const videoOk = videoSupported();
+  const videoWebmOnly = videoOk && videoIsWebmOnly(musicSupported());
   let videoBlob = null, videoExt = 'webm', videoAbort = null, videoUrl = null;
   let videoSeconds = 15;
   const durToggle = el('div', { class: 'seg-toggle sm' });
@@ -255,8 +257,9 @@ export function createExportView(getRecordMap) {
       vShareBtn.style.display = '';
       const usedTrack = MUSIC_TRACKS.find((track) => track.id === r.musicTrack);
       const musicLabel = usedTrack ? ` · ${t('export.videoMusicUsed', { name: t(usedTrack.labelKey) })}` : '';
+      const webmLabel = videoExt === 'webm' ? ` · ${t('export.videoWebmShort')}` : '';
       vNote.textContent = (r.usedVectorFallback && !vectorCb.checked ? '⚠ ' + t('export.posterVectorFallback') + ' · ' : '') +
-        t('export.videoReady', { size: (r.blob.size / 1048576).toFixed(1) + 'MB' }) + musicLabel;
+        t('export.videoReady', { size: (r.blob.size / 1048576).toFixed(1) + 'MB' }) + musicLabel + webmLabel;
     } catch (e) {
       if (e.name === 'AbortError') vNote.textContent = '';
       else if (e.message === 'no-track') toast(t('export.videoNoTrack'), 'warn');
@@ -282,6 +285,7 @@ export function createExportView(getRecordMap) {
     el('h3', {}, icon('play', 18), t('export.video')),
     el('div', { class: 'small faint', style: { marginBottom: '8px' } }, t('export.videoHint')),
     videoOk ? null : el('div', { class: 'debug-banner' }, '⚠ ' + t('export.videoUnsupported')),
+    videoWebmOnly ? el('div', { class: 'debug-banner' }, '⚠ ' + t('export.videoWebmWarn')) : null,
     isWeChat() ? el('div', { class: 'small', style: { color: 'var(--warn)', marginBottom: '8px' } }, t('export.videoWechatHint')) : null,
     musicRow,
     el('div', { class: 'card-line' }, durToggle, vGenBtn, vCancelBtn, vDlBtn, vShareBtn),
@@ -326,17 +330,42 @@ export function createExportView(getRecordMap) {
 
   // ---- self-contained HTML ----
   let htmlTier = 'clear';
+  let htmlPhotosPref = true;
   const tierToggle = el('div', { class: 'seg-toggle' });
   const tierButtons = [];
   for (const [k, label] of [['clear', t('export.htmlClear')], ['light', t('export.htmlLight')], ['none', t('export.htmlNone')]]) {
     const b = el('button', { class: k === htmlTier ? 'active' : '' }, label);
-    b.onclick = () => { htmlTier = k; tierToggle.querySelectorAll('button').forEach((x) => x.classList.remove('active')); b.classList.add('active'); };
+    b.onclick = () => {
+      htmlTier = k;
+      tierToggle.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+      syncHtmlTierControls();
+    };
     tierToggle.append(b);
     tierButtons.push(b);
   }
   const htmlPhotosCb = el('input', { type: 'checkbox' });
-  htmlPhotosCb.checked = true;
+  const htmlPhotosRow = el('label', { class: 'row', style: { cursor: 'pointer', fontSize: '13px', marginTop: '8px' } }, htmlPhotosCb, t('export.htmlPhotos'));
+  const htmlEstimate = el('div', { class: 'small faint', style: { marginTop: '6px' } });
   const htmlBtn = el('button', { class: 'btn' }, icon('export', 16), t('export.html'));
+  function syncHtmlTierControls() {
+    const none = htmlTier === 'none';
+    htmlPhotosCb.checked = none ? false : htmlPhotosPref;
+    htmlPhotosCb.disabled = none;
+    htmlPhotosRow.style.opacity = none ? '0.55' : '';
+    updateHtmlEstimate();
+  }
+  function updateHtmlEstimate() {
+    if (!curFull) { htmlEstimate.textContent = ''; return; }
+    const bytes = estimateHTMLSize(curFull, {
+      tier: htmlTier,
+      privacy: privacyOpts(),
+      includePhotos: htmlTier !== 'none' && htmlPhotosCb.checked
+    });
+    const size = bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    htmlEstimate.textContent = t('export.htmlEstimate', { size });
+  }
+  htmlPhotosCb.onchange = () => { htmlPhotosPref = htmlPhotosCb.checked; updateHtmlEstimate(); };
   htmlBtn.onclick = async () => {
     const full = curFull;
     if (!full) return toast(t('analysis.noTrip'), 'warn');
@@ -348,7 +377,7 @@ export function createExportView(getRecordMap) {
       const { html, size, photos } = await buildSelfContainedHTML(full, {
         tier: htmlTier,
         privacy: privacyOpts(),
-        includePhotos: htmlPhotosCb.checked,
+        includePhotos: htmlTier !== 'none' && htmlPhotosCb.checked,
         onProgress: (p) => { htmlBtn.textContent = `${t('export.htmlBuilding')} ${Math.round(p * 100)}%`; }
       });
       if (size > 1_500_000) toast(t('export.htmlWarn', { size: (size / 1048576).toFixed(1) + 'MB' }), 'warn', 4000);
@@ -359,17 +388,20 @@ export function createExportView(getRecordMap) {
       toast(String(e?.message || e), 'err');
     }
     htmlBtn.disabled = false;
-    htmlPhotosCb.disabled = false;
+    htmlPhotosCb.disabled = htmlTier === 'none';
     tierButtons.forEach((b) => { b.disabled = false; });
     htmlBtn.innerHTML = '';
     htmlBtn.append(icon('export', 16), t('export.html'));
+    updateHtmlEstimate();
   };
   const htmlCard = el('div', { class: 'card' },
     el('h3', {}, icon('globe', 18), t('export.html')),
     el('div', { class: 'small faint', style: { marginBottom: '8px' } }, t('export.htmlHint')),
     el('div', { class: 'row wrap' }, tierToggle, htmlBtn),
-    el('label', { class: 'row', style: { cursor: 'pointer', fontSize: '13px', marginTop: '8px' } }, htmlPhotosCb, t('export.htmlPhotos'))
+    htmlPhotosRow,
+    htmlEstimate
   );
+  syncHtmlTierControls();
 
   // ---- share link (compact import URL, fragment only) ----
   const linkInput = el('input', { type: 'text', readonly: true, class: 'link-input' });
@@ -485,6 +517,7 @@ export function createExportView(getRecordMap) {
       : t('analysis.noTrip');
     updateCropInfo();
     updateLink(true);
+    updateHtmlEstimate();
     warmExport(curFull);
   }
   on('trip:active', (full) => {

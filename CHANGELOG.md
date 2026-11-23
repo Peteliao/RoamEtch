@@ -4,6 +4,49 @@ All notable changes to TrackMint are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-11-23
+
+### Added
+
+- Optional password encryption for full-library backups. Encrypted backups use a
+  `TRKMBKP1` envelope with PBKDF2-SHA-256 (600,000 iterations), a random 16-byte
+  salt, and AES-256-GCM, and are saved as `.trackmint.enc`. Restoring prompts for
+  the password, retries without touching local data on failure, and shows the
+  integrity and snapshot preview before writing.
+- Playwright end-to-end smoke suite covering demo analysis and chart switching,
+  privacy crop, poster rendering, text-only HTML export, encrypted backup
+  export → wipe IndexedDB → restore, and the iOS storage nudge. CI runs it on
+  every push.
+- Release workflow for `v*` tags: typecheck, unit tests, build, a
+  `trackmint-dist.zip` release asset, and GHCR images `ghcr.io/peteliao/trackmint`
+  and `ghcr.io/peteliao/trackmint-relay`.
+- Closable 7-day IndexedDB eviction warning on iOS in a browser tab, with
+  Add to Home Screen and backup actions. Dismissal is remembered locally.
+- Animated bilingual WebP demos in both READMEs, regenerated with
+  `npm run promo:webp`.
+
+### Changed
+
+- Meetup publishes adapt to movement: about 5 seconds between updates while
+  moving and 25 seconds when stationary, instead of one fixed cadence.
+- Re-walk speech is primed synchronously inside the start gesture so iOS
+  `speechSynthesis` works on the first waypoint; the global voice toggle is
+  persisted across sessions.
+- Video export detects WebM-only browsers and explains the limitation before
+  and after export.
+- Self-contained HTML export offers clear / light / text-only image tiers,
+  per-tier photo budgets, and an estimated file size before export.
+- The bundled relay now enforces 8 KB frames, a per-socket token bucket,
+  room/client caps, and a 12-hour idle-room sweep; docs cover reverse-proxy
+  per-IP limiting.
+- SECURITY documents that host-kick is advisory and explains how authority
+  differs between the public MQTT broker and a self-hosted relay.
+
+### Fixed
+
+- The restore file picker now accepts `.trackmint.enc` backups instead of
+  filtering them out.
+
 ## [2.0.0] - 2026-11-23
 
 ### Added

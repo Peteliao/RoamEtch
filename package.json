@@ -1,7 +1,7 @@
 {
   "name": "trackmint",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.1.0",
   "type": "module",
   "license": "GPL-3.0-only",
   "description": "Pure-frontend trip recorder & analyzer with dual-region (CN/Global) adaptive service routing",
@@ -15,6 +15,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install chromium",
+    "promo:webp": "node tools/make-demo-webp.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },
@@ -29,6 +32,7 @@
     "uplot": "^1.6.32"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.1",
     "jsdom": "^27.4.0",
     "typescript": "^5.9.3",
     "vite": "^6.3.5",

@@ -12,6 +12,7 @@ const DEFAULTS = {
   speedDisplay: 'auto',        // auto | speed | pace
   recordQuality: 'balanced',   // high | balanced | low
   wakeLock: true,
+  rewalkVoice: true,           // voice guidance during re-walk
   ascentThreshold: 4,          // metres hysteresis
   weightKg: 65,                // used for calorie estimates
   accuracyLimit: 50,           // metres, worse fixes flagged invalid

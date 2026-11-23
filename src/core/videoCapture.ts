@@ -19,6 +19,10 @@ export function pickVideoMime(hasAudio = false) {
   return candidates.find((m) => MediaRecorder.isTypeSupported(m)) || '';
 }
 
+export function videoIsWebmOnly(hasAudio = false) {
+  return videoSupported() && !pickVideoMime(hasAudio).startsWith('video/mp4');
+}
+
 export function makeVideoRecorder(stream: MediaStream, hasAudio = false) {
   const mime = pickVideoMime(hasAudio);
   const options: MediaRecorderOptions = { videoBitsPerSecond: 6_000_000, audioBitsPerSecond: 128_000 };

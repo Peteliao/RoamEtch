@@ -26,6 +26,25 @@ function nextMessage(ws) {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function closeCode(ws) {
+  return new Promise((resolve) => {
+    ws.once('close', (code) => resolve(code));
+    ws.once('error', () => { /* close event carries the code */ });
+  });
+}
+
+function rejected(url) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(url);
+    const timer = setTimeout(() => reject(new Error('close timeout')), 2000);
+    ws.once('close', (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+    ws.once('error', () => { /* server closes after rejecting */ });
+  });
+}
+
 test('relays ciphertext only within the same room', async (t) => {
   const relay = createRelayServer({ port: 0, host: '127.0.0.1' });
   const address = await relay.listen();
@@ -68,4 +87,66 @@ test('rejects malformed room paths and binary frames', async (t) => {
   a.send(Buffer.from('binary-frame'));
   await delay(150);
   assert.equal(leaked, false);
+});
+
+test('closes abusive sockets and caps rooms', async (t) => {
+  const relay = createRelayServer({
+    port: 0,
+    host: '127.0.0.1',
+    maxRooms: 1,
+    messageRate: 1,
+    messageBurst: 2
+  });
+  const address = await relay.listen();
+  const base = `ws://127.0.0.1:${address.port}/room/`;
+  t.after(() => relay.close());
+
+  const a = await connect(base + ROOM_A);
+  const b = await connect(base + ROOM_A);
+  t.after(() => { a.close(); b.close(); });
+  assert.equal(await rejected(base + ROOM_B), 1013);
+
+  const limited = closeCode(a);
+  for (let i = 0; i < 4; i++) a.send(`frame-${i}`);
+  assert.equal(await limited, 1008);
+
+  const health = await fetch(`http://127.0.0.1:${address.port}/healthz`).then((res) => res.json());
+  assert.equal(health.rooms, 1);
+  assert.equal(health.clients, 1);
+});
+
+test('rejects extra clients in a full room', async (t) => {
+  const relay = createRelayServer({ port: 0, host: '127.0.0.1', maxClientsPerRoom: 1 });
+  const address = await relay.listen();
+  const base = `ws://127.0.0.1:${address.port}/room/`;
+  t.after(() => relay.close());
+  const a = await connect(base + ROOM_A);
+  t.after(() => a.close());
+  assert.equal(await rejected(base + ROOM_A), 1013);
+  const health = await fetch(`http://127.0.0.1:${address.port}/healthz`).then((res) => res.json());
+  assert.equal(health.rooms, 1);
+  assert.equal(health.clients, 1);
+});
+
+test('closes oversized frames', async (t) => {
+  const relay = createRelayServer({ port: 0, host: '127.0.0.1', maxMessageBytes: 256 });
+  const address = await relay.listen();
+  const ws = new WebSocket(`ws://127.0.0.1:${address.port}/room/${ROOM_A}`);
+  t.after(() => { ws.terminate(); return relay.close(); });
+  const closed = closeCode(ws);
+  await new Promise((resolve) => ws.once('open', resolve));
+  ws.send('x'.repeat(512));
+  assert.equal(await closed, 1009);
+});
+
+test('sweeps idle rooms and releases their sockets', async (t) => {
+  const relay = createRelayServer({ port: 0, host: '127.0.0.1', roomIdleMs: 150, sweepMs: 50 });
+  const address = await relay.listen();
+  const ws = await connect(`ws://127.0.0.1:${address.port}/room/${ROOM_A}`);
+  t.after(() => { ws.terminate(); return relay.close(); });
+  const closed = closeCode(ws);
+  assert.equal(await closed, 1001);
+  const health = await fetch(`http://127.0.0.1:${address.port}/healthz`).then((res) => res.json());
+  assert.equal(health.rooms, 0);
+  assert.equal(health.clients, 0);
 });

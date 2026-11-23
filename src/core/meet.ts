@@ -16,11 +16,12 @@ import {
 } from './meetLink';
 import { acceptMeetSequence, pruneMeetReplay } from './meetReplay';
 import { createMeetRelay } from './meetRelay';
+import { shouldPublishFix } from './meetCadence';
 import { routeOverRoads } from './gapRepair';
 
 const STALE_MS = 45_000;
 const REMOVE_MS = 10 * 60_000;
-const HEARTBEAT_MS = 12_000;
+const HEARTBEAT_MS = 20_000;
 const MAX_EXPIRY_MIN = 480;
 export const MEET_CHAT_MAX_LEN = 500;
 const MAX_CHAT_MESSAGES = 120;
@@ -302,13 +303,9 @@ export function injectMeetFix(fix: any) {
 function maybePublishFix(lat: number, lon: number, now: number) {
   const s = session;
   if (!s || !s.sharing) return;
-  const moved = s.lastPublish
-    ? haversine(s.lastPublish.lat, s.lastPublish.lon, lat, lon)
-    : Infinity;
-  if (!s.lastPublish || now - s.lastPublish.at >= 5000 || moved >= 8) {
-    s.lastPublish = { lat, lon, at: now };
-    publishLoc();
-  }
+  if (!shouldPublishFix(s.lastPublish, lat, lon, now, s.self.speed)) return;
+  s.lastPublish = { lat, lon, at: now };
+  publishLoc();
 }
 
 function startRelay() {
@@ -397,8 +394,12 @@ function sendPresence() {
   const s = session;
   if (!s) return;
   publishHi();
-  if (s.sharing && s.self.hasFix) publishLoc();
-  else publishState();
+  if (s.sharing && s.self.hasFix) {
+    s.lastPublish = { lat: s.self.lat, lon: s.self.lon, at: Date.now() };
+    publishLoc();
+  } else {
+    publishState();
+  }
 }
 
 function touchPeer(msg: any, now: number) {
@@ -593,8 +594,7 @@ function tick() {
     pruneMeetReplay(s.replay, new Set(s.peers.keys()), now, REMOVE_MS);
   }
   if (s.tickCount % Math.round(HEARTBEAT_MS / 1000) === 0) {
-    if (s.sharing && s.self.hasFix) publishLoc();
-    else publishState();
+    publishState();
     if (s.hostId === s.self.id && s.tickCount % 36 === 0) publishHi();
   }
 }

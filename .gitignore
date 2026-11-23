@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .verify/
+test-results/
+playwright-report/
+blob-report/
 *.local
 .DS_Store
 Thumbs.db

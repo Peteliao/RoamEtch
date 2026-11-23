@@ -18,6 +18,11 @@
 
 ## 界面预览
 
+<p align="center">
+  <img src="docs/screenshots/zh/demo.webp" width="300" alt="实时记录演示：香山环线轨迹随 GPS 实时生长，里程、时长与速度同步更新">
+  <br><sub><b>实时记录</b> · 每一步都在地图上生长，里程、时长与速度实时刷新</sub>
+</p>
+
 <table>
   <tr>
     <td align="center" width="50%"><img src="docs/screenshots/zh/record.png" width="280" alt="实时 GPS 轨迹记录：里程、时长、速度、海拔、爬升与 GPS 信号"><br><sub><b>实时记录</b> · 轨迹、海拔、爬升、GPS 信号与活动识别</sub></td>
@@ -79,7 +84,7 @@
 - **轨迹视频**：10 / 15 / 30 秒地图回放，参数同步展示；内置 4 段设备端合成的循环纯音乐，默认随机、可手动选择，并随 MP4 / WebM 一起导出，可下载或调用系统分享。
 - **自包含网页**：导出一个可离线打开的单文件 HTML，内含完整统计、海拔曲线、可缩放地图、节点与照片，适合发给没有安装 App 的朋友。
 - **标准文件**：GPX（WGS-84，兼容两步路 / Garmin / Strava 等）、GeoJSON、KML；支持 GPX、XML 与 ZIP 批量导入，以及批量导出 ZIP。
-- **可验证备份**：整库 ZIP 写入 SHA-256 内容校验；恢复前显示导出时间、内容、重复行程与校验结果，可先导出当前数据库快照，校验失败会阻止恢复。恢复会先校验压缩包大小、路径、条目与数据关联，再在单个事务中写入，失败自动回滚；备份未加密，请妥善保管。
+- **可验证备份**：整库 ZIP 写入 SHA-256 内容校验；恢复前显示导出时间、内容、重复行程与校验结果，可先导出当前数据库快照，校验失败会阻止恢复。恢复会先校验压缩包大小、路径、条目与数据关联，再在单个事务中写入，失败自动回滚。备份可选用密码加密（PBKDF2-SHA-256 60 万次 + AES-256-GCM，`.trackmint.enc`）；未加密的备份请存放在可信位置。
 - **轻量分享链接**：把简化轨迹与节点压缩进 1.5 KB 以内的 URL `#` 片段，对方打开即可导入，不生成公开网页，也不包含照片。
 - **应用宣传图**：设置页一键生成 1080×1350 宣传图；每套主题内置“本机优先”“年度足迹”“加密组队”三款设计与对应文案，随机展示且不会连续重复。只含产品信息与二维码，不含任何个人数据。
 - **隐私检查**：起终点隐私圈、敏感节点隐藏、照片 EXIF 剥离、WGS-84 导出提示集中在同一页，导出前一眼确认。
@@ -140,16 +145,22 @@ npm run build      # 类型检查 + 生产构建（dist/）
 npm run preview    # 预览生产构建
 ```
 
-`dist/` 是完全静态的，可部署到 GitHub Pages、Cloudflare Pages、Netlify、Vercel 或任意静态服务器。项目没有业务后端，不需要数据库。CI 会在每次 Push / PR 时运行类型检查、单元测试和生产构建。
+`dist/` 是完全静态的，可部署到 GitHub Pages、Cloudflare Pages、Netlify、Vercel 或任意静态服务器。项目没有业务后端，不需要数据库。CI 会在每次 Push / PR 时运行类型检查、单元测试、Playwright 端到端冒烟测试和生产构建；推送 `v*` 标签时会自动生成 GitHub Release（附 `trackmint-dist.zip`）并推送容器镜像。
 
 ### Docker 自托管
 
-仓库自带多阶段 `Dockerfile` 与 `nginx.conf`（已为 `sw.js`、`index.html` 设置正确的 PWA 缓存头）：
+仓库自带多阶段 `Dockerfile` 与 `nginx.conf`（已为 `sw.js`、`index.html` 设置正确的 PWA 缓存头）。发布标签会自动构建镜像到 GitHub Container Registry：
+
+```bash
+docker run --rm -p 8080:80 ghcr.io/peteliao/trackmint:latest
+# 打开 http://localhost:8080
+```
+
+也可以从源码构建：
 
 ```bash
 docker build -t trackmint .
 docker run --rm -p 8080:80 trackmint
-# 打开 http://localhost:8080
 ```
 
 手机访问定位与安装 PWA 需要 HTTPS（`localhost` 除外），请在前面加一层 Caddy / Nginx / Cloudflare Tunnel 等 TLS 反向代理。国内 NAS、云服务器或内网机器可直接用这条命令运行，不依赖 GitHub Pages。
@@ -159,6 +170,8 @@ docker run --rm -p 8080:80 trackmint
 默认公共 EMQX MQTT 适合测试。需要更稳定或更私密的组队中继时，可使用 [`relay/`](relay/README.md) 中的极简 WebSocket 盲中继：
 
 ```bash
+docker run --rm -p 8080:8080 ghcr.io/peteliao/trackmint-relay:latest
+# 或从源码：
 cd relay && npm install && npm start
 # 或
 docker build -t trackmint-relay ./relay
@@ -177,7 +190,7 @@ docker run --rm -p 8080:8080 trackmint-relay
 - 文件与图片：fflate（ZIP）、exifr（EXIF 解析与剥离）
 - 离线：[vite-plugin-pwa](https://vite-pwa-org.netlify.app/)（Workbox）
 - 组队：v2 邀请（128 位随机房间标识 + 256 位密钥）+ HKDF-SHA-256 + AES-256-GCM；唯一 nonce、按发送者序号防重放，位置与临时聊天均经 MQTT WSS 或自定义 WS 盲转发
-- 测试：Vitest 覆盖坐标转换、轨迹统计、备份完整性、年度足迹、GPS 质量、GPX/KML/GeoJSON、分享链接与组队加密；CI 运行类型检查、单测与生产构建
+- 测试：Vitest 覆盖坐标转换、轨迹统计、备份完整性、年度足迹、GPS 质量、GPX/KML/GeoJSON、分享链接、组队加密与发布节奏、备份加密；Playwright 冒烟测试覆盖示例分析、隐私裁剪、海报、纯文字网页与加密备份往返；CI 运行类型检查、单测、E2E 与生产构建
 - 自托管：多阶段 Dockerfile + nginx.conf；组队可选 [`relay/`](relay/README.md) 极简盲中继模板
 
 ```text
@@ -217,7 +230,7 @@ TrackMint 的设计原则是“数据默认留在设备上”，但这不等于�
 - **照片**：写入存储前剥离 EXIF 位置信息；导出的海报、视频与网页只使用本地处理后的图片。
 - **外部服务请求**：底图瓦片、海拔、地名与路网服务需要联网，并会收到渲染或计算所需的坐标/视口请求及常规网络信息（如 IP）。生成海报/视频时，抽样坐标可能用于 OpenStreetMap 系逆地理编码以生成路线地名，结果缓存在本机；断点补全和汇合路线规划只在你主动操作时发送必要的端点坐标。这些请求不会上传照片或整库数据。
 - **设备风险**：清除浏览器数据、卸载 PWA 或更换设备会丢失本地行程；请定期使用整库备份。设备本身被他人解锁时，浏览器中的数据也可能被读取。
-- **整库备份**：备份 ZIP 包含完整轨迹、节点与照片，且**不加密**；任何拿到文件的人都能读取内容，请存放在可信位置。
+- **整库备份**：备份 ZIP 包含完整轨迹、节点与照片；默认未加密，任何拿到文件的人都能读取内容。导出时可设置密码加密为 `.trackmint.enc`（PBKDF2-SHA-256 60 万次 + AES-256-GCM），密码不会被保存，遗失后无法恢复。无论是否加密，请把备份存放在可信位置。
 - **自制配乐**：轨迹视频的纯音乐由浏览器实时合成，不下载或打包任何外部音乐素材。
 
 ## 常见问题
