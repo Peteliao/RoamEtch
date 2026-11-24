@@ -86,6 +86,7 @@ export function createMeetView(navigate) {
   let lastTickRender = 0;
   let chatModal = null;
   let chatRefresh: (() => void) | null = null;
+  let chatAudioHost: HTMLDivElement | null = null;
   let chatImageViewer = null;
   let photoRefTimer = 0;
   const chatImageUrls = new Map<string, string>();
@@ -260,9 +261,13 @@ export function createMeetView(navigate) {
     const blob = chatVoiceBlob({ base64: msg.voice.data, mime: msg.voice.mime });
     if (!blob) return null;
     const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.preload = 'metadata';
+    const audio = new Audio();
+    audio.preload = 'auto';
     audio.setAttribute('playsinline', '');
+    audio.setAttribute('webkit-playsinline', '');
+    chatAudioHost?.append(audio);
+    audio.src = url;
+    audio.load();
     const player: { audio: HTMLAudioElement; url: string; button?: HTMLButtonElement; icon?: HTMLElement; time?: HTMLSpanElement } = { audio, url };
     audio.onplay = () => {
       for (const [id, other] of chatVoicePlayers) {
@@ -302,6 +307,8 @@ export function createMeetView(navigate) {
       URL.revokeObjectURL(player.url);
     }
     chatVoicePlayers.clear();
+    chatAudioHost?.replaceChildren();
+    chatAudioHost = null;
   }
 
   function fmtImageSize(bytes: number) {
@@ -599,8 +606,6 @@ export function createMeetView(navigate) {
           player.button = bubble;
           player.icon = voiceIcon;
           player.time = time;
-          player.audio.hidden = true;
-          bubble.append(player.audio);
           bubble.addEventListener('click', async () => {
             if (player.audio.paused) {
               try { await player.audio.play(); } catch { toast(t('meet.chatVoicePlayFail'), 'err'); }
@@ -700,6 +705,7 @@ export function createMeetView(navigate) {
     }, ...CHAT_EMOJIS.map((emoji) => el('button', {
       type: 'button', 'aria-label': emoji, 'data-emoji': emoji
     }, emoji)));
+    chatAudioHost = el('div', { class: 'meet-chat-audio-host', 'aria-hidden': 'true' });
     const toggleEmoji = (open = emojiPanel.hidden) => {
       if (open && inputMode !== 'text') {
         inputMode = 'text';
@@ -734,7 +740,7 @@ export function createMeetView(navigate) {
     }, icon('mic', 18), el('span', {}, t('meet.chatVoice')));
     const entry = el('div', { class: 'meet-chat-entry' }, input, voiceBtn, recordPanel);
     const composer = el('div', { class: 'meet-chat-compose' }, modeBtn, entry, emojiBtn, sendBtn, camBtn);
-    const body = el('div', { class: 'meet-chat' }, note, list, emojiPanel, composer);
+    const body = el('div', { class: 'meet-chat' }, note, list, emojiPanel, composer, chatAudioHost);
     let sending = false;
     let inputMode: 'text' | 'voice' = 'text';
     let recorder: ChatVoiceRecorder | null = null;

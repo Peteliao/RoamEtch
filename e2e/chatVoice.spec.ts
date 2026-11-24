@@ -36,10 +36,12 @@ test('team chat switches input modes and exchanges emoji and voice with a camera
   const relay = createRelayServer({ port: 0, host: '127.0.0.1' });
   const address = await relay.listen();
   const url = `ws://127.0.0.1:${address.port}/room/{room}`;
+  const pageErrors: string[] = [];
   let peerContext: Awaited<ReturnType<typeof browser.newContext>> | undefined;
   try {
     await context.grantPermissions(['microphone'], { origin: 'http://127.0.0.1:5199' });
     await blockExternal(page);
+    page.on('pageerror', (error) => pageErrors.push(error.message));
     await page.goto('/');
     await expect.poll(() => page.evaluate(() => !!window.__lt)).toBe(true);
     await configureWsRelay(page, url);
@@ -53,6 +55,7 @@ test('team chat switches input modes and exchanges emoji and voice with a camera
       locale: 'zh-CN', viewport: { width: 430, height: 932 }, permissions: ['camera', 'microphone']
     });
     const peer = await peerContext.newPage();
+    peer.on('pageerror', (error) => pageErrors.push(error.message));
     await blockExternal(peer);
     await peer.goto('/');
     await expect.poll(() => peer.evaluate(() => !!window.__lt)).toBe(true);
@@ -108,9 +111,20 @@ test('team chat switches input modes and exchanges emoji and voice with a camera
     expect(duration).toBeGreaterThanOrEqual(500);
 
     const receivedVoice = peer.locator('.mc-voice').last();
+    const receivedAudio = peer.locator('.meet-chat-audio-host audio').last();
+    await expect(receivedAudio).toHaveAttribute('preload', 'auto');
+    await expect(receivedAudio).toBeAttached();
+    await expect.poll(() => receivedAudio.evaluate((audio: HTMLAudioElement) => audio.readyState)).toBeGreaterThanOrEqual(3);
+    expect(await receivedAudio.evaluate((audio: HTMLAudioElement) => audio.hidden)).toBe(false);
     await receivedVoice.click();
     await expect(receivedVoice).toHaveClass(/is-playing/);
-    await expect.poll(() => receivedVoice.locator('audio').evaluate((audio: HTMLAudioElement) => audio.currentTime)).toBeGreaterThan(0);
+    await expect.poll(() => receivedAudio.evaluate((audio: HTMLAudioElement) => audio.currentTime)).toBeGreaterThan(0);
+    await receivedVoice.click();
+    await expect(receivedVoice).not.toHaveClass(/is-playing/);
+    const pausedAt = await receivedAudio.evaluate((audio: HTMLAudioElement) => audio.currentTime);
+    await receivedVoice.click();
+    await expect(receivedVoice).toHaveClass(/is-playing/);
+    await expect.poll(() => receivedAudio.evaluate((audio: HTMLAudioElement) => audio.currentTime)).toBeGreaterThan(pausedAt);
     await receivedVoice.click();
     await expect(receivedVoice).not.toHaveClass(/is-playing/);
 
@@ -118,6 +132,11 @@ test('team chat switches input modes and exchanges emoji and voice with a camera
     await holdVoice(page, 800, true);
     await expect(page.locator('#toast-root')).toContainText('已取消语音');
     expect(await page.evaluate(() => window.__lt.meet.snapshot().messages.length)).toBe(beforeCancel);
+
+    await peer.locator('.meet-chat-modal').getByRole('button', { name: 'close', exact: true }).click();
+    await expect(peer.locator('.meet-chat-modal')).toHaveCount(0);
+    await expect(peer.locator('.meet-chat-audio-host audio')).toHaveCount(0);
+    expect(pageErrors).toEqual([]);
   } finally {
     await peerContext?.close();
     await page.evaluate(() => window.__lt.meet.leave()).catch(() => {});

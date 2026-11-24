@@ -1345,6 +1345,11 @@ html.oled-lock { color-scheme: dark; }
 .meet-create-note svg { flex: none; margin-top: 1px; color: var(--accent); }
 
 .meet-chat { display: flex; flex-direction: column; gap: 10px; }
+.meet-chat-audio-host {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+.meet-chat-audio-host audio { display: block; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .meet-chat-modal .m-body { padding-bottom: calc(16px + var(--safe-b)); }
 .meet-chat-note {
   display: flex; align-items: flex-start; gap: 7px; padding: 8px 10px;
