@@ -4,6 +4,27 @@ All notable changes to TrackMint are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [2.5.0] - 2026-11-24
+
+### Added
+
+- A 36-emoji picker in encrypted meetup chat, with cursor-aware insertion and
+  large emoji-only bubbles. Emoji continue to use the existing ephemeral,
+  end-to-end encrypted text-message path.
+- WeChat-style press-and-hold voice messages with live waveform, duration,
+  slide-up cancellation, keyboard hold support, automatic 15-second stop, and
+  one-at-a-time playback. Voice uses bounded 64 KB Opus/WebM, Opus/Ogg or MP4
+  packets over the existing encrypted relay and is never persisted.
+- Microphone permission and recording-error guidance in Chinese and English,
+  plus cleanup of audio players and object URLs when messages expire or chat
+  closes.
+
+### Tests
+
+- Added protocol validation, encrypted packet-size, in-memory expiry, emoji and
+  voice session tests, plus a real two-client Chromium E2E covering emoji,
+  recording, encrypted delivery, playback and slide-to-cancel.
+
 ## [2.4.0] - 2026-11-24
 
 ### Added

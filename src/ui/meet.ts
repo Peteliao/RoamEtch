@@ -14,8 +14,19 @@ import { el, icon, toast, modal, confirmModal, filePicker } from './helpers';
 import { openCamera } from './camera';
 import { openQrScanner } from './qrScanner';
 import { CHAT_IMAGE_KEEP, readChatImageHeader } from '../core/chatImage';
+import { CHAT_VOICE_KEEP, CHAT_VOICE_MAX_DURATION_MS, ChatVoiceRecorder, chatVoiceBlob } from '../core/chatVoice';
 import { P2PTransferError } from '../core/webrtcTransfer';
 import { exportImage } from '../core/shareEnv';
+
+const CHAT_EMOJIS = [
+  '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🙂', '🙃', '😉', '😊', '😍',
+  '🥰', '😘', '😎', '🤔', '😐', '😴', '😭', '😡', '👍', '👎', '👏', '🙌',
+  '💪', '🤝', '✌️', '👌', '🙏', '🎉', '❤️', '🔥', '✅', '⭐', '🚀', '🌈'
+];
+
+function emojiOnly(text: string) {
+  return /^(?:\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic})*\s*){1,12}$/u.test(text);
+}
 
 export function createMeetView(navigate) {
   const view = el('div', { class: 'view', id: 'view-meet' });
@@ -85,6 +96,11 @@ export function createMeetView(navigate) {
     peerId: string; fileId: string; sha256: string; token: number;
   }>();
   const originalControls = new Map<string, { action: HTMLButtonElement; status: HTMLSpanElement; cancel: HTMLButtonElement; label: string }>();
+  const chatVoicePlayers = new Map<string, {
+    audio: HTMLAudioElement; url: string; button?: HTMLButtonElement;
+    icon?: HTMLElement; time?: HTMLSpanElement;
+  }>();
+  let cancelChatRecording: (() => void) | null = null;
   let originalTransferToken = 0;
 
   function originalKey(peerId: string, fileId: string, sha256 = '') {
@@ -210,6 +226,82 @@ export function createMeetView(navigate) {
       try { URL.revokeObjectURL(url); } catch { /* already revoked */ }
     }
     chatImageUrls.clear();
+  }
+
+  function voiceSeconds(duration: number) {
+    return Math.max(1, Math.round(duration / 1000));
+  }
+
+  function voiceWaveform(msg) {
+    const samples = msg.voice?.waveform?.length ? msg.voice.waveform : null;
+    if (samples) return Array.from({ length: 18 }, (_, i) => samples[Math.floor(i * samples.length / 18)] ?? 8);
+    let hash = 2166136261;
+    for (const char of String(msg.voice?.data || msg.id)) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
+    return Array.from({ length: 18 }, (_, i) => 6 + ((hash >>> ((i % 8) * 4)) % 25));
+  }
+
+  function updateVoicePlayer(id: string) {
+    const player = chatVoicePlayers.get(id);
+    if (!player?.button) return;
+    const playing = !player.audio.paused && !player.audio.ended;
+    player.button.classList.toggle('is-playing', playing);
+    player.button.setAttribute('aria-label', t(playing ? 'meet.chatVoicePause' : 'meet.chatVoicePlay', {
+      s: voiceSeconds(Number(player.button.dataset.duration || 0))
+    }));
+    player.icon?.replaceChildren(icon(playing ? 'pause' : 'play', 17));
+    const progress = player.audio.duration ? player.audio.currentTime / player.audio.duration : 0;
+    player.button.style.setProperty('--voice-progress', `${Math.min(100, Math.max(0, progress * 100))}%`);
+  }
+
+  function chatVoicePlayer(msg) {
+    if (!msg?.voice?.data || !chatModal) return null;
+    const cached = chatVoicePlayers.get(msg.id);
+    if (cached) return cached;
+    const blob = chatVoiceBlob({ base64: msg.voice.data, mime: msg.voice.mime });
+    if (!blob) return null;
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.preload = 'metadata';
+    audio.setAttribute('playsinline', '');
+    const player: { audio: HTMLAudioElement; url: string; button?: HTMLButtonElement; icon?: HTMLElement; time?: HTMLSpanElement } = { audio, url };
+    audio.onplay = () => {
+      for (const [id, other] of chatVoicePlayers) {
+        if (id !== msg.id && !other.audio.paused) other.audio.pause();
+      }
+      updateVoicePlayer(msg.id);
+    };
+    audio.onpause = () => updateVoicePlayer(msg.id);
+    audio.onended = () => updateVoicePlayer(msg.id);
+    audio.ontimeupdate = () => updateVoicePlayer(msg.id);
+    audio.onerror = () => toast(t('meet.chatVoicePlayFail'), 'err');
+    chatVoicePlayers.set(msg.id, player);
+    return player;
+  }
+
+  function syncChatVoicePlayers(messages) {
+    const live = new Set(messages.filter((m) => m.voice?.data).map((m) => m.id));
+    for (const [id, player] of chatVoicePlayers) {
+      if (live.has(id)) continue;
+      player.audio.pause();
+      URL.revokeObjectURL(player.url);
+      chatVoicePlayers.delete(id);
+    }
+    while (chatVoicePlayers.size > CHAT_VOICE_KEEP + 8) {
+      const oldest = chatVoicePlayers.keys().next().value;
+      if (!oldest) break;
+      const player = chatVoicePlayers.get(oldest);
+      player?.audio.pause();
+      if (player) URL.revokeObjectURL(player.url);
+      chatVoicePlayers.delete(oldest);
+    }
+  }
+
+  function clearChatVoicePlayers() {
+    for (const player of chatVoicePlayers.values()) {
+      player.audio.pause();
+      URL.revokeObjectURL(player.url);
+    }
+    chatVoicePlayers.clear();
   }
 
   function fmtImageSize(bytes: number) {
@@ -382,11 +474,14 @@ export function createMeetView(navigate) {
     const m = chatModal;
     chatModal = null;
     chatRefresh = null;
+    cancelChatRecording?.();
+    cancelChatRecording = null;
     cancelOriginalTransfers();
     clearOriginalImages();
     chatImageViewer?.close();
     chatImageViewer = null;
     clearChatImageUrls();
+    clearChatVoicePlayers();
     m?.close();
   }
 
@@ -486,8 +581,37 @@ export function createMeetView(navigate) {
         img.src = url;
         bubble.disabled = false;
       });
+    } else if (msg.voice) {
+      if (!msg.voice.data) {
+        bubble = el('div', { class: 'mc-voice-expired' }, icon('mic', 17), t('meet.chatVoiceExpired'));
+      } else {
+        const player = chatVoicePlayer(msg);
+        const voiceIcon = el('span', { class: 'mc-voice-icon' }, icon('play', 17));
+        const time = el('span', { class: 'mc-voice-time' }, `${voiceSeconds(msg.voice.duration)}″`);
+        const bars = el('span', { class: 'mc-voice-wave', 'aria-hidden': 'true' },
+          ...voiceWaveform(msg).map((level) => el('i', { style: { height: `${20 + level * 2.5}%` } })));
+        bubble = el('button', {
+          class: 'mc-voice', type: 'button', disabled: !player,
+          'aria-label': t('meet.chatVoicePlay', { s: voiceSeconds(msg.voice.duration) }),
+          'data-duration': String(msg.voice.duration)
+        }, voiceIcon, bars, time);
+        if (player) {
+          player.button = bubble;
+          player.icon = voiceIcon;
+          player.time = time;
+          player.audio.hidden = true;
+          bubble.append(player.audio);
+          bubble.addEventListener('click', async () => {
+            if (player.audio.paused) {
+              try { await player.audio.play(); } catch { toast(t('meet.chatVoicePlayFail'), 'err'); }
+            } else {
+              player.audio.pause();
+            }
+          });
+        }
+      }
     } else {
-      bubble = el('div', { class: 'mc-bubble' }, msg.text);
+      bubble = el('div', { class: 'mc-bubble' + (emojiOnly(msg.text || '') ? ' mc-emoji' : '') }, msg.text);
     }
     const main = el('div', { class: 'mc-main' },
       own ? null : el('div', { class: 'mc-name' }, msg.name),
@@ -563,9 +687,57 @@ export function createMeetView(navigate) {
         }
       });
     });
-    const composer = el('div', { class: 'meet-chat-compose' }, camBtn, input, sendBtn);
-    const body = el('div', { class: 'meet-chat' }, note, list, composer);
+    const emojiBtn = el('button', {
+      class: 'meet-chat-emoji', type: 'button', title: t('meet.chatEmoji'),
+      'aria-label': t('meet.chatEmoji'), 'aria-expanded': 'false'
+    }, icon('smile', 19));
+    const emojiPanel = el('div', {
+      class: 'meet-chat-emoji-panel', role: 'group', 'aria-label': t('meet.chatEmoji'), hidden: true
+    }, ...CHAT_EMOJIS.map((emoji) => el('button', {
+      type: 'button', 'aria-label': emoji, 'data-emoji': emoji
+    }, emoji)));
+    const toggleEmoji = (open = emojiPanel.hidden) => {
+      emojiPanel.hidden = !open;
+      emojiBtn.classList.toggle('active', open);
+      emojiBtn.setAttribute('aria-expanded', String(open));
+    };
+    emojiBtn.addEventListener('click', () => toggleEmoji());
+    emojiPanel.addEventListener('click', (event: any) => {
+      const button = event.target.closest?.('[data-emoji]');
+      if (!button) return;
+      const emoji = button.dataset.emoji;
+      const start = input.selectionStart ?? input.value.length;
+      const end = input.selectionEnd ?? start;
+      const next = input.value.slice(0, start) + emoji + input.value.slice(end);
+      input.value = Array.from(next).slice(0, MEET_CHAT_MAX_LEN).join('');
+      input.selectionStart = input.selectionEnd = Math.min(start + emoji.length, input.value.length);
+      grow();
+      syncSend();
+      input.focus();
+    });
+    const recordDot = el('span', { class: 'mc-record-dot' });
+    const recordTime = el('span', { class: 'mc-record-time' }, '0:00');
+    const recordHint = el('span', { class: 'mc-record-hint' }, t('meet.chatVoiceSlideCancel'));
+    const recordPanel = el('div', { class: 'meet-chat-recording', hidden: true },
+      recordDot, recordTime, recordHint);
+    const voiceBtn = el('button', {
+      class: 'meet-chat-voice-btn', type: 'button', title: t('meet.chatVoice'),
+      'aria-label': t('meet.chatVoice')
+    }, icon('mic', 19));
+    const entry = el('div', { class: 'meet-chat-entry' }, input, recordPanel);
+    const composer = el('div', { class: 'meet-chat-compose' }, camBtn, emojiBtn, entry, sendBtn, voiceBtn);
+    const body = el('div', { class: 'meet-chat' }, note, list, emojiPanel, composer);
     let sending = false;
+    let recorder: ChatVoiceRecorder | null = null;
+    let recording = false;
+    let starting = false;
+    let released = false;
+    let cancelled = false;
+    let pointerId: number | null = null;
+    let startY = 0;
+    let startedAt = 0;
+    let recordTimer: any = null;
+    let recordToken = 0;
 
     const grow = () => {
       input.style.height = 'auto';
@@ -576,6 +748,7 @@ export function createMeetView(navigate) {
       const s = getMeetSnapshot();
       const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
       syncChatImageUrls(s.messages);
+      syncChatVoicePlayers(s.messages);
       list.innerHTML = '';
       if (!s.messages.length) list.append(chatEmptyState());
       else for (const msg of s.messages) list.append(chatRow(s, msg));
@@ -587,6 +760,7 @@ export function createMeetView(navigate) {
       if (sending) return;
       const text = input.value;
       if (!text.trim()) return;
+      toggleEmoji(false);
       sending = true;
       syncSend();
       const ok = await meet.sendMessage(text);
@@ -603,6 +777,171 @@ export function createMeetView(navigate) {
       }
     };
 
+    const resetRecordUi = () => {
+      clearInterval(recordTimer);
+      recordTimer = null;
+      composer.classList.remove('is-recording', 'is-processing');
+      voiceBtn.classList.remove('is-starting', 'is-recording', 'is-cancel');
+      voiceBtn.disabled = false;
+      input.hidden = false;
+      recordPanel.hidden = true;
+      recordPanel.classList.remove('is-cancel');
+      recordHint.textContent = t('meet.chatVoiceSlideCancel');
+      recordTime.textContent = '0:00';
+    };
+    const voiceErrorText = (error: any) => {
+      const code = error?.name === 'NotAllowedError' || error?.name === 'SecurityError' ? 'voice-denied' : error?.message;
+      if (code === 'voice-unsupported') return t('meet.chatVoiceUnsupported');
+      if (code === 'voice-denied') return t('meet.chatVoiceDenied');
+      if (code === 'voice-too-short') return t('meet.chatVoiceTooShort');
+      if (code === 'voice-too-large') return t('meet.chatVoiceTooLarge');
+      return t('meet.chatVoiceFailed');
+    };
+    const startVoice = async () => {
+      if (starting || recording || sending) return;
+      const token = ++recordToken;
+      const current = new ChatVoiceRecorder();
+      recorder = current;
+      starting = true;
+      released = false;
+      cancelled = false;
+      toggleEmoji(false);
+      composer.classList.add('is-recording');
+      voiceBtn.classList.add('is-starting');
+      input.hidden = true;
+      recordPanel.hidden = false;
+      recordHint.textContent = t('meet.chatVoiceRequesting');
+      try {
+        await current.start();
+        if (token !== recordToken || !chatModal) {
+          current.cancel();
+          return;
+        }
+        starting = false;
+        recording = true;
+        startedAt = Date.now();
+        voiceBtn.classList.remove('is-starting');
+        voiceBtn.classList.add('is-recording');
+        recordHint.textContent = t('meet.chatVoiceSlideCancel');
+        if (released) {
+          void finishVoice();
+          return;
+        }
+        recordTimer = window.setInterval(() => {
+          const elapsed = Date.now() - startedAt;
+          recordTime.textContent = `${Math.floor(elapsed / 60000)}:${String(Math.floor(elapsed % 60000 / 1000)).padStart(2, '0')}`;
+          if (elapsed >= CHAT_VOICE_MAX_DURATION_MS) void finishVoice();
+        }, 100);
+      } catch (error) {
+        if (token !== recordToken) return;
+        recorder = null;
+        starting = false;
+        resetRecordUi();
+        toast(voiceErrorText(error), 'warn', 3600);
+      }
+    };
+    const finishVoice = async (forceCancel = false) => {
+      if (starting) {
+        released = true;
+        cancelled ||= forceCancel;
+        return;
+      }
+      if (!recording) return;
+      const current = recorder;
+      if (!current) return;
+      const token = recordToken;
+      recording = false;
+      clearInterval(recordTimer);
+      recordTimer = null;
+      cancelled ||= forceCancel;
+      const abort = cancelled || token !== recordToken || !chatModal;
+      pointerId = null;
+      composer.classList.add('is-processing');
+      voiceBtn.disabled = true;
+      recordHint.textContent = abort ? t('meet.chatVoiceCanceled') : t('meet.chatVoiceSending');
+      try {
+        const result = await current.stop();
+        recorder = null;
+        if (abort || token !== recordToken || !chatModal) {
+          if (cancelled) toast(t('meet.chatVoiceCanceled'), 'info', 1800);
+          return;
+        }
+        const ok = await meet.sendVoice({
+          au: result.base64, aut: result.mime, aud: result.duration, auw: result.waveform
+        });
+        if (ok) {
+          render(true);
+          meet.markChatRead();
+          toast(t('meet.chatVoiceSent'), 'ok', 1800);
+        } else {
+          toast(t('meet.chatVoiceFailed'), 'err');
+        }
+      } catch (error) {
+        recorder = null;
+        if (!abort) toast(voiceErrorText(error), 'warn', 3600);
+      } finally {
+        resetRecordUi();
+      }
+    };
+    const cancelVoice = () => {
+      recordToken++;
+      clearInterval(recordTimer);
+      const current = recorder;
+      recorder = null;
+      starting = false;
+      recording = false;
+      released = false;
+      cancelled = false;
+      pointerId = null;
+      current?.cancel();
+      resetRecordUi();
+    };
+    cancelChatRecording = cancelVoice;
+
+    voiceBtn.addEventListener('pointerdown', (event: any) => {
+      if (event.button !== 0 || starting || recording) return;
+      event.preventDefault();
+      pointerId = event.pointerId;
+      startY = event.clientY;
+      try { voiceBtn.setPointerCapture(event.pointerId); } catch { /* synthetic pointer */ }
+      void startVoice();
+    });
+    voiceBtn.addEventListener('pointermove', (event: any) => {
+      if (!recording || event.pointerId !== pointerId) return;
+      cancelled = startY - event.clientY > 70;
+      voiceBtn.classList.toggle('is-cancel', cancelled);
+      recordPanel.classList.toggle('is-cancel', cancelled);
+      recordHint.textContent = t(cancelled ? 'meet.chatVoiceReleaseCancel' : 'meet.chatVoiceSlideCancel');
+    });
+    voiceBtn.addEventListener('pointerup', (event: any) => {
+      if (event.pointerId !== pointerId) return;
+      event.preventDefault();
+      void finishVoice();
+    });
+    voiceBtn.addEventListener('pointercancel', (event: any) => {
+      if (event.pointerId !== pointerId) return;
+      void finishVoice(true);
+    });
+    voiceBtn.addEventListener('lostpointercapture', (event: any) => {
+      if (recording && event.pointerId === pointerId) void finishVoice(true);
+    });
+    voiceBtn.addEventListener('keydown', (event: any) => {
+      if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) {
+        event.preventDefault();
+        void startVoice();
+      }
+    });
+    voiceBtn.addEventListener('keyup', (event: any) => {
+      if (event.key === ' ' || event.key === 'Enter') {
+        event.preventDefault();
+        void finishVoice();
+      }
+    });
+    const cancelOnBlur = () => { if (starting || recording) cancelVoice(); };
+    const cancelWhenHidden = () => { if (document.hidden) cancelOnBlur(); };
+    window.addEventListener('blur', cancelOnBlur);
+    document.addEventListener('visibilitychange', cancelWhenHidden);
+
     input.addEventListener('input', () => { grow(); syncSend(); });
     input.addEventListener('keydown', (e: any) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -618,11 +957,16 @@ export function createMeetView(navigate) {
       onClose: () => {
         chatModal = null;
         chatRefresh = null;
+        cancelVoice();
+        cancelChatRecording = null;
+        window.removeEventListener('blur', cancelOnBlur);
+        document.removeEventListener('visibilitychange', cancelWhenHidden);
         cancelOriginalTransfers();
         clearOriginalImages();
         chatImageViewer?.close();
         chatImageViewer = null;
         clearChatImageUrls();
+        clearChatVoicePlayers();
       }
     });
     m.box.classList.add('meet-chat-modal');

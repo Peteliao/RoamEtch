@@ -29,6 +29,7 @@ import {
   sha256Hex
 } from './chatImage';
 import { OriginalImageCache, type CachedOriginalImage } from './originalImageCache';
+import { CHAT_VOICE_KEEP, sanitizeChatVoicePacket } from './chatVoice';
 import { sanitizeRtcSignal, SignalDeduplicator, RtcSignalRateLimiter } from './rtcSignal';
 import { buildIceServers } from './webrtcConfig';
 import { P2PTransferError, P2PTransferManager, webrtcAvailable } from './webrtcTransfer';
@@ -98,6 +99,12 @@ function pushChatMessage(s: MeetSession, message: any) {
     const old = images[i];
     if (old.img?.data) old.img = { ...old.img, data: null };
     old.imgExpired = true;
+  }
+  const voices = s.messages.filter((m: any) => m.voice);
+  for (let i = 0; i < voices.length - CHAT_VOICE_KEEP; i++) {
+    const old = voices[i];
+    if (old.voice?.data) old.voice = { ...old.voice, data: null };
+    old.voiceExpired = true;
   }
 }
 
@@ -571,8 +578,11 @@ async function handleIncoming(text: string) {
     if (!/^[A-Za-z0-9_-]{8,32}$/.test(mid) || s.chatSeen.has(mid)) return;
     const image = msg.im != null ? sanitizeChatImagePacket(msg) : null;
     if (msg.im != null && !image) return;
+    const voice = msg.au != null ? sanitizeChatVoicePacket(msg) : null;
+    if (msg.au != null && !voice) return;
+    if (image && voice) return;
     const text = cleanChatText(msg.tx);
-    if (!image && !text) return;
+    if (!image && !voice && !text) return;
     if (!chatRateOk(s, senderId, now)) return;
     if (image && !imageRateOk(s, senderId, now)) return;
     const touched = touchPeer(msg, now);
@@ -607,6 +617,12 @@ async function handleIncoming(text: string) {
           hdHeight: image.hdHeight,
           hdSha256: image.hdSha256
         } : {})
+      } : null,
+      voice: voice ? {
+        data: voice.base64,
+        mime: voice.mime,
+        duration: voice.duration,
+        waveform: voice.waveform
       } : null,
       lat: image?.lat ?? null,
       lon: image?.lon ?? null,
@@ -937,6 +953,39 @@ export async function sendMeetMessage(raw: string) {
   return true;
 }
 
+export async function sendMeetVoice(raw: any) {
+  const s = session;
+  if (!s) return false;
+  const voice = sanitizeChatVoicePacket(raw);
+  if (!voice) return false;
+  const epoch = s.epoch;
+  const mid = randomMeetId();
+  const now = Date.now();
+  const ok = await publishPacket({
+    k: 'msg', id: s.self.id, name: s.self.name, c: s.self.color,
+    mid, au: voice.base64, aut: voice.mime, aud: voice.duration, auw: voice.waveform
+  });
+  if (session !== s || s.epoch !== epoch || !ok) return false;
+  rememberChatId(s, mid);
+  pushChatMessage(s, {
+    id: mid,
+    fromId: s.self.id,
+    name: s.self.name,
+    color: s.self.color,
+    text: '',
+    ts: now,
+    self: true,
+    voice: {
+      data: voice.base64,
+      mime: voice.mime,
+      duration: voice.duration,
+      waveform: voice.waveform
+    }
+  });
+  emit('meet:chat', { unread: s.chatUnread });
+  return true;
+}
+
 export function markMeetChatRead() {
   const s = session;
   if (!s || !s.chatUnread) return;
@@ -1165,6 +1214,7 @@ export const meet = {
   reset: resetMeetCode,
   setSharing: setMeetSharing,
   sendMessage: sendMeetMessage,
+  sendVoice: sendMeetVoice,
   sendImage: sendMeetImage,
   originalBlob: getMeetOriginalBlob,
   requestOriginal: requestMeetOriginal,
