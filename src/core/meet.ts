@@ -23,8 +23,15 @@ import {
   CHAT_IMAGE_COOLDOWN_MS,
   CHAT_IMAGE_KEEP,
   CHAT_IMAGE_MAX_BASE64,
-  sanitizeChatImagePacket
+  ORIGINAL_IMAGE_MIMES,
+  readLocalImageHeader,
+  sanitizeChatImagePacket,
+  sha256Hex
 } from './chatImage';
+import { OriginalImageCache, type CachedOriginalImage } from './originalImageCache';
+import { sanitizeRtcSignal, SignalDeduplicator, RtcSignalRateLimiter } from './rtcSignal';
+import { buildIceServers } from './webrtcConfig';
+import { P2PTransferError, P2PTransferManager, webrtcAvailable } from './webrtcTransfer';
 
 const STALE_MS = 45_000;
 const REMOVE_MS = 10 * 60_000;
@@ -36,10 +43,22 @@ const CHAT_SEEN_LIMIT = 240;
 const CHAT_RATE_WINDOW_MS = 3_000;
 const CHAT_RATE_LIMIT = 6;
 const IMAGE_RECEIVE_GAP_MS = CHAT_IMAGE_COOLDOWN_MS - 750;
+const RTC_SIGNAL_QUEUE_LIMIT = 64;
 const PEER_COLORS = ['#5aa7f0', '#f5b942', '#f26d6d', '#b07cf7', '#f28ac6', '#7ed957', '#ff9e5e', '#45d1c8'];
 
 type MeetSession = any;
+type RtcLane = { promise: Promise<boolean>; queued: number; active: boolean };
 let session: MeetSession = null;
+
+function createRtcLane(): RtcLane {
+  return { promise: Promise.resolve(true), queued: 0, active: true };
+}
+
+function invalidateRtcLane(s: MeetSession) {
+  const lane = s.rtcLane as RtcLane;
+  lane.active = false;
+  s.rtcLane = { promise: Promise.resolve(true), queued: 0, active: false };
+}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -356,12 +375,19 @@ function startRelay() {
   s.relay = relay;
 }
 
-function publishPacket(body: any) {
+function publishPacket(body: any, lane: 'critical' | 'rtc' = 'critical') {
   const s = session;
   if (!s) return Promise.resolve(false);
+  const rtcLane = s.rtcLane as RtcLane;
+  const privacyReject = body.typ === 'pull-reject' && body.p?.reason === 'privacy-disabled';
+  if (lane === 'rtc' && (s.leaving || (!privacyReject && (s.p2pStopped || get('meetP2PEnabled') !== true))
+    || !rtcLane.active || rtcLane.queued >= RTC_SIGNAL_QUEUE_LIMIT)) return Promise.resolve(false);
+  if (lane === 'rtc') rtcLane.queued++;
   const epoch = s.epoch;
-  const job = s.sendChain.then(async () => {
-    if (session !== s || s.epoch !== epoch || !s.relay) return false;
+  const previous = lane === 'rtc' ? rtcLane.promise : s.sendChain;
+  const rtcCurrent = () => rtcLane.active && s.rtcLane === rtcLane;
+  const job = previous.then(async () => {
+    if (session !== s || s.epoch !== epoch || !s.relay || (lane === 'rtc' && !rtcCurrent())) return false;
     const relay = s.relay;
     try {
       const seq = ++s.sendSeq;
@@ -369,14 +395,64 @@ function publishPacket(body: any) {
       const packet = { ...body, v: MEET_PROTOCOL_VERSION, sq: seq, ts: Date.now() };
       const text = await encryptMeetPacket(packet, s.room);
       if (text.length > MEET_MAX_PACKET_CHARS) return false;
-      if (session !== s || s.epoch !== epoch || s.relay !== relay) return false;
+      if (session !== s || s.epoch !== epoch || s.relay !== relay || (lane === 'rtc' && !rtcCurrent())) return false;
       return relay.send(text);
     } catch {
       return false;
     }
-  }).catch(() => false);
-  s.sendChain = job;
+  }).catch(() => false).finally(() => {
+    if (lane === 'rtc') rtcLane.queued--;
+  });
+  if (lane === 'rtc') rtcLane.promise = job;
+  else s.sendChain = job;
   return job;
+}
+
+function startP2P(s: MeetSession) {
+  s.p2p = new P2PTransferManager({
+    selfId: s.self.id,
+    enabled: () => session === s && get('meetP2PEnabled') === true,
+    iceServers: () => buildIceServers({
+      stun: get('meetStun'),
+      turnUrl: get('meetTurnUrl'),
+      turnUser: get('meetTurnUser'),
+      turnPass: get('meetTurnPass')
+    }),
+    publish: (signal) => session === s ? publishPacket({
+      k: 'rtc', id: s.self.id, to: signal.toPeerId, mid: signal.msgId,
+      sid: signal.sessionId, typ: signal.type, p: signal.payload
+    }, 'rtc') : Promise.resolve(false),
+    getOriginal: (fileId) => s.imageCache.get(fileId),
+    onProgress: ({ peerId, fileId, sha256, progress }) => {
+      if (session === s) emit('meet:p2p', { type: 'progress', peerId, fileId, sha256, progress });
+    },
+    onError: ({ peerId, fileId, sha256, code }) => {
+      if (session === s) emit('meet:p2p', { type: 'error', peerId, fileId, sha256, code });
+    }
+  });
+}
+
+async function prepareOriginalImage(input: any): Promise<CachedOriginalImage | null> {
+  const blob = input?.original;
+  if (!(blob instanceof Blob)) return null;
+  const header = await readLocalImageHeader(blob);
+  if (!header || !ORIGINAL_IMAGE_MIMES.includes(header.mime)) return null;
+  const mime = String(input?.originalMime || blob.type || header.mime);
+  if (mime !== header.mime) return null;
+  if (input?.originalWidth != null && Number(input.originalWidth) !== header.width) return null;
+  if (input?.originalHeight != null && Number(input.originalHeight) !== header.height) return null;
+  const sha256 = await sha256Hex(await blob.arrayBuffer());
+  return {
+    fileId: randomMeetId(),
+    sha256,
+    size: blob.size,
+    mime,
+    width: header.width,
+    height: header.height,
+    blob,
+    createdAt: Date.now(),
+    lastUsed: Date.now()
+  };
 }
 
 function hiPacket() {
@@ -460,6 +536,14 @@ async function handleIncoming(text: string) {
   if (!isFinite(ts) || Math.abs(now - ts) > 5 * 60_000) return;
   const senderId = String(msg.id || '').slice(0, 40);
   if (!senderId || senderId === s.self.id) return;
+  if (msg.k === 'rtc') {
+    if (s.leaving) return;
+    const signal = sanitizeRtcSignal(msg, s.self.id, now);
+    if (!signal || !s.rtcSeen.accept(signal.fromPeerId, signal.msgId, now)) return;
+    if (!s.rtcRate.accept(signal.fromPeerId, now)) return;
+    void s.p2p.handleSignal(signal).catch(() => undefined);
+    return;
+  }
   if (!acceptMeetSequence(s.replay, senderId, Number(msg.sq), now)) return;
 
   if (msg.k === 'hi') {
@@ -514,7 +598,15 @@ async function handleIncoming(text: string) {
         data: image.base64,
         mime: image.mime,
         width: image.width,
-        height: image.height
+        height: image.height,
+        ...(image.fileId ? {
+          fileId: image.fileId,
+          hdSize: image.hdSize,
+          hdMime: image.hdMime,
+          hdWidth: image.hdWidth,
+          hdHeight: image.hdHeight,
+          hdSha256: image.hdSha256
+        } : {})
       } : null,
       lat: image?.lat ?? null,
       lon: image?.lon ?? null,
@@ -573,12 +665,13 @@ async function handleIncoming(text: string) {
   }
 
   if (msg.k === 'bye') {
-    if (s.peers.delete(senderId)) {
-      if (s.hostId === senderId) s.hostId = null;
-      if (s.route?.peerId === senderId) { s.route = null; }
-      emit('meet:peerleft', { id: senderId });
-      emitState();
-    }
+    const known = s.peers.delete(senderId);
+    s.p2p?.closePeer(senderId);
+    if (!known) return;
+    if (s.hostId === senderId) s.hostId = null;
+    if (s.route?.peerId === senderId) s.route = null;
+    emit('meet:peerleft', { id: senderId });
+    emitState();
     return;
   }
 
@@ -592,10 +685,11 @@ async function handleIncoming(text: string) {
       await leaveMeet('kicked');
       return;
     }
-    if (s.peers.delete(target)) {
-      if (s.route?.peerId === target) s.route = null;
-      emitState();
-    }
+    const known = s.peers.delete(target);
+    s.p2p?.closePeer(target);
+    if (!known) return;
+    if (s.route?.peerId === target) s.route = null;
+    emitState();
   }
 }
 
@@ -603,6 +697,7 @@ function tick() {
   const s = session;
   if (!s) return;
   const now = Date.now();
+  s.rtcRate.prune(now);
   const remaining = Math.max(0, s.expiresAt - now);
   emit('meet:tick', { remaining, now });
   if (remaining <= 0) {
@@ -616,6 +711,7 @@ function tick() {
       const age = now - p.lastSeen;
       if (age > REMOVE_MS) {
         s.peers.delete(id);
+        s.p2p?.closePeer(id);
         if (s.hostId === id) s.hostId = null;
         if (s.route?.peerId === id) s.route = null;
         changed = true;
@@ -662,6 +758,12 @@ async function beginSession({ invite, name, host, expiryMin }: { invite: string;
     chatRate: new Map(),
     chatImageRate: new Map(),
     lastImageAt: 0,
+    imageCache: new OriginalImageCache(),
+    rtcSeen: new SignalDeduplicator(),
+    rtcRate: new RtcSignalRateLimiter(),
+    rtcLane: createRtcLane(),
+    p2pStopped: false,
+    p2p: null,
     replay: new Map(),
     relay: null,
     relayState: 'connecting',
@@ -692,6 +794,7 @@ async function beginSession({ invite, name, host, expiryMin }: { invite: string;
     if (s.relayState === 'connected') sendPresence();
   };
   document.addEventListener('visibilitychange', s.onVisible);
+  startP2P(s);
   startWatch();
   startRelay();
   s.tickTimer = setInterval(tick, 1000);
@@ -711,6 +814,7 @@ export async function leaveMeet(reason = 'manual') {
   const s = session;
   if (!s || s.leaving) return;
   s.leaving = true;
+  invalidateRtcLane(s);
   if (reason !== 'switch') {
     await Promise.race([publishPacket({ k: 'bye', id: s.self.id }), sleep(250)]);
   }
@@ -722,6 +826,7 @@ export async function leaveMeet(reason = 'manual') {
 }
 
 function cleanupSession(s: MeetSession) {
+  invalidateRtcLane(s);
   clearInterval(s.tickTimer);
   s.routeAbort?.abort();
   s.routeAbort = null;
@@ -738,12 +843,18 @@ function cleanupSession(s: MeetSession) {
   s.chatRate.clear();
   s.chatImageRate.clear();
   s.lastImageAt = 0;
+  s.p2p?.close();
+  s.p2p = null;
+  s.imageCache.clear();
+  s.rtcSeen.clear();
+  s.rtcRate.clear();
   s.replay.clear();
 }
 
 export async function resetMeetCode() {
   const s = session;
   if (!s || s.hostId !== s.self.id) return null;
+  invalidateRtcLane(s);
   s.epoch++;
   s.relayGen++;
   try { s.relay?.close(); } catch { /* ignore */ }
@@ -755,6 +866,11 @@ export async function resetMeetCode() {
   s.chatRate.clear();
   s.chatImageRate.clear();
   s.lastImageAt = 0;
+  s.p2p?.close();
+  s.p2p = null;
+  s.imageCache.clear();
+  s.rtcSeen.clear();
+  s.rtcRate.clear();
   s.replay.clear();
   s.routeAbort?.abort();
   s.route = null;
@@ -775,6 +891,9 @@ export async function resetMeetCode() {
   s.sendSeq = 0;
   s.relayState = 'connecting';
   s.relayError = null;
+  s.p2pStopped = false;
+  s.rtcLane = createRtcLane();
+  startP2P(s);
   startRelay();
   publishHi();
   if (s.self.hasFix) publishLoc();
@@ -831,9 +950,10 @@ export function meetImageCooldownLeft(now = Date.now()) {
   return Math.max(0, CHAT_IMAGE_COOLDOWN_MS - (now - s.lastImageAt));
 }
 
-export async function sendMeetImage({ base64, mime, width, height, caption = '', lat = null, lon = null, acc = null }: any) {
+export async function sendMeetImage({ base64, mime, width, height, caption = '', lat = null, lon = null, acc = null, original = null, originalMime = '', originalWidth = null, originalHeight = null }: any) {
   const s = session;
   if (!s) return false;
+  const epoch = s.epoch;
   const image = sanitizeChatImagePacket({
     im: base64,
     imt: mime,
@@ -847,12 +967,29 @@ export async function sendMeetImage({ base64, mime, width, height, caption = '',
   const now = Date.now();
   if (meetImageCooldownLeft(now) > 0) return false;
   s.lastImageAt = now;
+  let cached: CachedOriginalImage | null = null;
+  if (original && get('meetP2PEnabled')) {
+    try {
+      cached = await prepareOriginalImage({ original, originalMime, originalWidth, originalHeight });
+    } catch {
+      cached = null;
+    }
+  }
+  if (session !== s || s.epoch !== epoch) return false;
   const text = cleanChatText(caption);
   const mid = randomMeetId();
   const body: any = {
     k: 'msg', id: s.self.id, name: s.self.name, c: s.self.color,
     mid, im: image.base64, imt: image.mime, imw: image.width, imh: image.height
   };
+  if (cached) {
+    body.fid = cached.fileId;
+    body.hs = cached.size;
+    body.hm = cached.mime;
+    body.hw = cached.width;
+    body.hh = cached.height;
+    body.hsh = cached.sha256;
+  }
   if (text) body.tx = text;
   if (image.lat != null && image.lon != null) {
     body.la = image.lat;
@@ -860,11 +997,12 @@ export async function sendMeetImage({ base64, mime, width, height, caption = '',
     if (image.acc != null) body.ac = image.acc;
   }
   const ok = await publishPacket(body);
-  if (session !== s) return false;
+  if (session !== s || s.epoch !== epoch) return false;
   if (!ok) {
     if (s.lastImageAt === now) s.lastImageAt = 0;
     return false;
   }
+  if (cached) s.imageCache.put(cached);
   rememberChatId(s, mid);
   pushChatMessage(s, {
     id: mid,
@@ -878,7 +1016,15 @@ export async function sendMeetImage({ base64, mime, width, height, caption = '',
       data: image.base64,
       mime: image.mime,
       width: image.width,
-      height: image.height
+      height: image.height,
+      ...(cached ? {
+        fileId: cached.fileId,
+        hdSize: cached.size,
+        hdMime: cached.mime,
+        hdWidth: cached.width,
+        hdHeight: cached.height,
+        hdSha256: cached.sha256
+      } : {})
     },
     lat: image.lat,
     lon: image.lon,
@@ -909,6 +1055,7 @@ export async function kickMeetPeer(peerId: string) {
   await publishPacket({ k: 'kick', id: s.self.id, target: peerId, by: s.self.id });
   if (session !== s) return false;
   s.peers.delete(peerId);
+  s.p2p?.closePeer(peerId);
   if (s.route?.peerId === peerId) s.route = null;
   emitState();
   return true;
@@ -967,6 +1114,49 @@ export function clearMeetRoute() {
   emitState();
 }
 
+export function getMeetOriginalBlob(fileId: string) {
+  return session?.imageCache.get(fileId)?.blob || null;
+}
+
+export function requestMeetOriginal({ peerId, fileId, sha256, onProgress }: { peerId: string; fileId: string; sha256: string; onProgress?: (progress: number) => void }) {
+  const s = session;
+  if (!s) return Promise.reject(new P2PTransferError('closed'));
+  const image = s.messages.find((message) => message.fromId === peerId
+    && message.img?.fileId === fileId && message.img.hdSha256 === sha256)?.img;
+  if (!image?.hdSha256 || !image.hdSize || !image.hdMime || !image.hdWidth || !image.hdHeight) return Promise.reject(new P2PTransferError('expired'));
+  if (!webrtcAvailable()) return Promise.reject(new P2PTransferError('unsupported'));
+  return s.p2p.requestFile({
+    peerId,
+    fileId,
+    sha256: image.hdSha256,
+    size: image.hdSize,
+    mime: image.hdMime,
+    width: image.hdWidth,
+    height: image.hdHeight,
+    onProgress
+  });
+}
+
+export function cancelMeetOriginal(peerId: string, fileId: string, sha256?: string) {
+  session?.p2p.cancelFile(peerId, fileId, sha256);
+}
+
+export function stopMeetP2P() {
+  const s = session;
+  if (!s) return;
+  invalidateRtcLane(s);
+  s.p2pStopped = true;
+  s.rtcLane = createRtcLane();
+  s.p2p?.close();
+}
+
+export function resumeMeetP2P() {
+  const s = session;
+  if (!s || s.leaving || get('meetP2PEnabled') !== true) return;
+  s.p2pStopped = false;
+  s.rtcLane = createRtcLane();
+}
+
 export const meet = {
   snapshot: getMeetSnapshot,
   create: createMeetSession,
@@ -976,6 +1166,11 @@ export const meet = {
   setSharing: setMeetSharing,
   sendMessage: sendMeetMessage,
   sendImage: sendMeetImage,
+  originalBlob: getMeetOriginalBlob,
+  requestOriginal: requestMeetOriginal,
+  cancelOriginal: cancelMeetOriginal,
+  stopP2P: stopMeetP2P,
+  resumeP2P: resumeMeetP2P,
   imageCooldownLeft: meetImageCooldownLeft,
   markChatRead: markMeetChatRead,
   sendNow: sendMeetNow,

@@ -8,7 +8,9 @@ import {
   chatImageLadder,
   readChatImageHeader,
   readLocalImageHeader,
-  sanitizeChatImagePacket
+  sanitizeChatImagePacket,
+  sanitizeChatOriginalMeta,
+  sha256Hex
 } from '../src/core/chatImage';
 
 const packet = () => ({
@@ -92,6 +94,39 @@ describe('chat image packet validation', () => {
   it('enforces the intended long-edge and pixel budgets', () => {
     expect(sanitizeChatImagePacket({ ...packet(), imw: CHAT_IMAGE_MAX_EDGE + 1, imh: 480 })).toBeNull();
     expect(sanitizeChatImagePacket({ ...packet(), imw: CHAT_IMAGE_MAX_EDGE, imh: CHAT_IMAGE_MAX_EDGE })).not.toBeNull();
+  });
+});
+
+describe('chat original metadata', () => {
+  const original = {
+    fid: 'original-1234', hs: 1024, hm: 'image/jpeg', hw: 4032, hh: 3024, hsh: 'A'.repeat(64)
+  };
+
+  it('accepts a complete bounded original descriptor and normalizes its hash', () => {
+    expect(sanitizeChatOriginalMeta(original)).toEqual({
+      fileId: original.fid, size: original.hs, mime: original.hm,
+      width: original.hw, height: original.hh, sha256: original.hsh.toLowerCase()
+    });
+    expect(sanitizeChatImagePacket({ ...packet(), ...original })).toMatchObject({
+      fileId: original.fid, hdSize: original.hs, hdMime: original.hm,
+      hdWidth: original.hw, hdHeight: original.hh, hdSha256: original.hsh.toLowerCase()
+    });
+  });
+
+  it.each([
+    ['partial descriptor', { fid: original.fid, hs: undefined, hm: undefined, hw: undefined, hh: undefined, hsh: undefined }],
+    ['bad file id', { fid: 'short' }],
+    ['bad hash', { hsh: 'not-a-hash' }],
+    ['zero size', { hs: 0 }],
+    ['unsupported MIME', { hm: 'image/gif' }],
+    ['pixel bomb', { hw: 20_000, hh: 20_000 }]
+  ])('rejects %s instead of advertising an unusable original', (_name, patch) => {
+    expect(sanitizeChatImagePacket({ ...packet(), ...original, ...patch })).toBeNull();
+  });
+
+  it('computes SHA-256 for transfer verification', async () => {
+    expect(await sha256Hex(new TextEncoder().encode('abc').buffer as ArrayBuffer))
+      .toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
   });
 });
 

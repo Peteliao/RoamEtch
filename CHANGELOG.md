@@ -4,6 +4,71 @@ All notable changes to TrackMint are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [2.4.0] - 2026-11-24
+
+### Added
+
+- Opt-in WebRTC delivery for full-resolution meetup chat originals. Encrypted
+  thumbnails still use the existing MQTT/WS relay; the original moves only after
+  an explicit request over a one-to-one DataChannel, with the file holder always
+  acting as Offerer.
+- Targeted, encrypted RTC signaling for pull requests, rejection, Offer/Answer,
+  ICE and abort. Signals are bounded, expire after 30 seconds, use a 500-entry
+  sender/message-id deduplicator, and are rate-limited per sender so redundant
+  broker delivery cannot start duplicate sessions.
+- Reliable 16 KiB original transfer with SCTP backpressure, SHA-256 and image
+  header/dimension verification, 10-second connection timeout, 30-second idle
+  cleanup, and a two-session sender limit. The sender keeps at most 10 originals
+  or 50 MB in memory; evicted files are reported as expired.
+- Original-image progress, cancellation, retry and inline failure states in
+  encrypted chat, plus an original viewer and save action. Location, text and
+  thumbnails remain usable when a direct connection fails.
+- A default-off P2P privacy switch with a first-use IP-visibility notice, three
+  bundled STUN defaults, and optional custom STUN/TURN credentials stored only
+  in local settings. No public TURN server is bundled.
+
+### Fixed
+
+- Fresh P2P opt-in now survives reload instead of being mistaken for a legacy
+  settings record; RTC dedupe is scoped by sender and expires over time.
+- RTC signaling has an independent bounded send lane and incoming per-sender
+  rate limits, keeping signaling floods away from the location/chat send chain.
+- Optional HD preparation failures fall back to the thumbnail, and preparation
+  that spans an invite reset can no longer publish into the new room.
+- Original requests require an exact SHA-256 match. Cancellation and cache keys
+  include the peer/file/hash identity, preventing cancelled transfers from
+  reopening and collisions across senders or reused file ids.
+- Binary framing rejects empty, short, or extra chunks. The connection deadline
+  now lasts until the DataChannel opens, stalled transfers time out, and late
+  async completions cannot revive closed sessions.
+- Leaving, removal, and invite reset close P2P sessions even for peers no longer
+  present in the ordinary member list.
+- STUN and TURN textareas now initialize their live values correctly, so the
+  default ICE pool and saved custom configuration are visible and editable.
+
+### Security
+
+- Documented the split between strict ordinary-packet sequence replay checks
+  and RTC sender/message dedupe, the DTLS DataChannel boundary, memory limits,
+  peer/STUN/TURN IP visibility, and the fact that original bytes bypass the
+  meetup relay while TURN may carry encrypted traffic.
+- Upgraded i18next to the patched 26.3.4 release, restoring a clean
+  `npm audit --omit=dev` result. Remaining moderate glob/minimatch advisories
+  are confined to the development-only Workbox build chain.
+
+### Tests
+
+- Added transport state-machine tests for fixed-Offerer handshakes, early ICE,
+  exact chunk framing, duplicate EOF, checksum rejection, backpressure,
+  expiry/privacy refusal, sender limits, channel-open and stalled timeouts,
+  oversized requests, and synchronous cancellation.
+- Added RTC sender-aware dedupe/rate-limit, ICE configuration, original-cache,
+  settings-migration, thumbnail-fallback, and room-reset race regressions.
+- Added a real two-client Chromium E2E test that verifies lazy connection,
+  encrypted relay signaling, wrong-hash rejection, original
+  bytes/hash/dimensions, download, privacy refusal and continued chat after
+  failure, plus default-off/custom ICE persistence and failure-path E2E cases.
+
 ## [2.3.0] - 2026-11-24
 
 ### Added

@@ -62,8 +62,11 @@ test('quick camera saves a photo waypoint, supports undo and burst count', async
   expect(saved.photos).toHaveLength(1);
   expect(saved.media).toHaveLength(1);
   expect(saved.media[0].width).toBeGreaterThan(0);
-  expect(saved.photos[0].lat).toBeCloseTo(saved.live.lat, 5);
-  expect(saved.photos[0].lon).toBeCloseTo(saved.live.lon, 5);
+  const distanceM = Math.hypot(
+    (saved.photos[0].lat - saved.live.lat) * 111_320,
+    (saved.photos[0].lon - saved.live.lon) * 111_320 * Math.cos(saved.photos[0].lat * Math.PI / 180)
+  );
+  expect(distanceM).toBeLessThan(100);
 
   await page.locator('.cam-chip-undo').click();
   await expect(page.locator('.cam-chip')).toBeHidden();

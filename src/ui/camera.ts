@@ -6,7 +6,7 @@ import { el, icon } from './helpers';
 import { armKeepAlive } from '../core/keepalive';
 import { processPhoto } from '../core/photos';
 import { saveOriginalPhoto } from '../core/deviceSave';
-import { CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MAX_EDGE, chatImageLadder, readLocalImageHeader } from '../core/chatImage';
+import { CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MAX_EDGE, LOCAL_IMAGE_MAX_PIXELS, chatImageLadder, readLocalImageHeader } from '../core/chatImage';
 
 export type CameraFix = {
   lat: number;
@@ -28,6 +28,10 @@ export type ChatCameraShot = CameraPhoto & {
   bytes: number;
   caption: string;
   fix: CameraFix | null;
+  original?: Blob;
+  originalMime?: string;
+  originalWidth?: number;
+  originalHeight?: number;
 };
 
 export type QuickCameraShot = CameraPhoto & {
@@ -149,7 +153,7 @@ function blobToBase64(blob: Blob) {
   });
 }
 
-async function fileToCanvas(file: File, header?: { width: number; height: number }) {
+async function fileToCanvas(file: File, header?: { width: number; height: number }, maxEdge = CHAT_IMAGE_MAX_EDGE) {
   const size = header || await readLocalImageHeader(file);
   if (!size) throw new Error('image-too-large');
   return new Promise<HTMLCanvasElement>((resolve, reject) => {
@@ -158,7 +162,7 @@ async function fileToCanvas(file: File, header?: { width: number; height: number
     img.onload = () => {
       const sourceWidth = img.naturalWidth || img.width;
       const sourceHeight = img.naturalHeight || img.height;
-      const scale = Math.min(1, CHAT_IMAGE_MAX_EDGE / Math.max(sourceWidth, sourceHeight));
+      const scale = Math.min(1, maxEdge / Math.max(sourceWidth, sourceHeight));
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(sourceWidth * scale));
       canvas.height = Math.max(1, Math.round(sourceHeight * scale));
@@ -531,7 +535,7 @@ export function openCamera(opts: CameraOptions) {
 
     releaseUrl(previewUrl);
     previewUrl = '';
-    img.src = canvas.toDataURL('image/jpeg', 0.72);
+    img.src = resizeCanvas(canvas, CHAT_IMAGE_MAX_EDGE).toDataURL('image/jpeg', 0.72);
 
     retake.addEventListener('click', () => {
       if (busy) return;
@@ -585,6 +589,12 @@ export function openCamera(opts: CameraOptions) {
         if (compressed.oversize) return;
         const base64 = await blobToBase64(compressed.blob);
         if (closed || seq !== previewSeq || !preview?.isConnected) return;
+        let original: Blob | undefined;
+        if (canvas.width * canvas.height <= LOCAL_IMAGE_MAX_PIXELS) {
+          const encoded = await canvasBlob(canvas, 'image/jpeg', 0.92);
+          if (encoded && await readLocalImageHeader(encoded)) original = encoded;
+        }
+        if (closed || seq !== previewSeq || !preview?.isConnected) return;
         previewShot = {
           blob: compressed.blob,
           thumb: compressed.blob,
@@ -594,7 +604,13 @@ export function openCamera(opts: CameraOptions) {
           mime: compressed.mime,
           bytes: compressed.blob.size,
           caption: caption.value.trim(),
-          fix
+          fix,
+          ...(original ? {
+            original,
+            originalMime: 'image/jpeg',
+            originalWidth: canvas.width,
+            originalHeight: canvas.height
+          } : {})
         };
         send.disabled = false;
         send.focus();
@@ -624,7 +640,7 @@ export function openCamera(opts: CameraOptions) {
     if (!header) { camToast(t('camera.imageReject'), 'err'); return; }
     if (opts.mode === 'chat') {
       try {
-        const canvas = await fileToCanvas(file, header);
+        const canvas = await fileToCanvas(file, header, Number.POSITIVE_INFINITY);
         await openChatPreview(canvas);
       } catch {
         if (!closed) camToast(t('camera.compressFail'), 'err');

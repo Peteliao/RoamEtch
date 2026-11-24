@@ -14,6 +14,8 @@ import { el, icon, toast, modal, confirmModal, filePicker } from './helpers';
 import { openCamera } from './camera';
 import { openQrScanner } from './qrScanner';
 import { CHAT_IMAGE_KEEP, readChatImageHeader } from '../core/chatImage';
+import { P2PTransferError } from '../core/webrtcTransfer';
+import { exportImage } from '../core/shareEnv';
 
 export function createMeetView(navigate) {
   const view = el('div', { class: 'view', id: 'view-meet' });
@@ -77,6 +79,21 @@ export function createMeetView(navigate) {
   let photoRefTimer = 0;
   const chatImageUrls = new Map<string, string>();
   const chatImagePending = new Map<string, Promise<string>>();
+  const originalImages = new Map<string, { blob: Blob; url: string }>();
+  const originalTransfers = new Map<string, {
+    status: 'loading' | 'ready' | 'error'; progress: number; code?: string;
+    peerId: string; fileId: string; sha256: string; token: number;
+  }>();
+  const originalControls = new Map<string, { action: HTMLButtonElement; status: HTMLSpanElement; cancel: HTMLButtonElement; label: string }>();
+  let originalTransferToken = 0;
+
+  function originalKey(peerId: string, fileId: string, sha256 = '') {
+    return `${peerId}:${fileId}:${sha256}`;
+  }
+
+  function messageOriginalKey(msg) {
+    return originalKey(msg.fromId, msg.img?.fileId || '', msg.img?.hdSha256 || '');
+  }
 
   function initialCenter() {
     if (snap.active && snap.self?.hasFix) return [snap.self.lon, snap.self.lat] as any;
@@ -172,6 +189,20 @@ export function createMeetView(navigate) {
       URL.revokeObjectURL(url);
       chatImageUrls.delete(id);
     }
+    const liveOriginals = new Set(messages.filter((m) => m.img?.fileId).map(messageOriginalKey));
+    for (const [key, entry] of originalImages) {
+      if (liveOriginals.has(key)) continue;
+      URL.revokeObjectURL(entry.url);
+      originalImages.delete(key);
+    }
+    for (const [key, transfer] of originalTransfers) {
+      if (liveOriginals.has(key)) continue;
+      if (transfer.status === 'loading') meet.cancelOriginal(transfer.peerId, transfer.fileId, transfer.sha256);
+      originalTransfers.delete(key);
+    }
+    for (const key of originalControls.keys()) {
+      if (!liveOriginals.has(key)) originalControls.delete(key);
+    }
   }
 
   function clearChatImageUrls() {
@@ -181,10 +212,178 @@ export function createMeetView(navigate) {
     chatImageUrls.clear();
   }
 
+  function fmtImageSize(bytes: number) {
+    return bytes >= 1024 * 1024
+      ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+      : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  }
+
+  function originalErrorText(code = 'closed') {
+    const keys = {
+      unsupported: 'originalErrUnsupported', disabled: 'originalErrDisabled',
+      offline: 'originalErrOffline', expired: 'originalErrExpired', busy: 'originalErrBusy',
+      'privacy-disabled': 'originalErrPrivacy', timeout: 'originalErrTimeout',
+      aborted: 'originalErrAborted', checksum: 'originalErrChecksum',
+      protocol: 'originalErrProtocol', closed: 'originalErrClosed'
+    };
+    return t(`meet.${keys[code] || keys.closed}`);
+  }
+
+  function originalFilename(msg) {
+    const ext = msg?.img?.hdMime === 'image/png' ? 'png' : msg?.img?.hdMime === 'image/webp' ? 'webp' : 'jpg';
+    return `trackmint-${msg?.img?.fileId || Date.now()}.${ext}`;
+  }
+
+  function cacheOriginal(key: string, blob: Blob) {
+    const cached = originalImages.get(key);
+    if (cached) {
+      originalImages.delete(key);
+      originalImages.set(key, cached);
+      return cached.url;
+    }
+    const url = URL.createObjectURL(blob);
+    originalImages.set(key, { blob, url });
+    while (originalImages.size > 4 || [...originalImages.values()].reduce((sum, entry) => sum + entry.blob.size, 0) > 64 * 1024 * 1024) {
+      const oldest = originalImages.keys().next().value;
+      if (!oldest || oldest === key) break;
+      URL.revokeObjectURL(originalImages.get(oldest)!.url);
+      originalImages.delete(oldest);
+    }
+    return url;
+  }
+
+  function clearOriginalImages() {
+    for (const entry of originalImages.values()) URL.revokeObjectURL(entry.url);
+    originalImages.clear();
+    originalTransfers.clear();
+    originalControls.clear();
+  }
+
+  function cancelOriginalTransfers() {
+    for (const transfer of originalTransfers.values()) {
+      if (transfer.status !== 'loading') continue;
+      meet.cancelOriginal(transfer.peerId, transfer.fileId, transfer.sha256);
+    }
+  }
+
+  function updateOriginalControl(key: string) {
+    const control = originalControls.get(key);
+    if (!control) return;
+    const transfer = originalTransfers.get(key);
+    control.action.disabled = transfer?.status === 'loading';
+    control.cancel.hidden = transfer?.status !== 'loading';
+    if (!transfer) {
+      control.action.replaceChildren(icon('download', 14), control.label);
+      control.status.textContent = '';
+      control.status.classList.remove('error');
+      return;
+    }
+    if (transfer.status === 'loading') {
+      control.action.replaceChildren(el('span', { class: 'mc-mini-spin' }), t('meet.originalLoading', { n: transfer.progress }));
+      control.status.textContent = '';
+      control.status.classList.remove('error');
+    } else if (transfer.status === 'ready') {
+      control.action.replaceChildren(icon('photo', 14), t('meet.originalView'));
+      control.status.textContent = '';
+      control.status.classList.remove('error');
+    } else {
+      control.action.replaceChildren(icon('refresh', 14), t('meet.originalRetry'));
+      control.status.textContent = originalErrorText(transfer.code);
+      control.status.classList.add('error');
+    }
+  }
+
+  async function loadOriginal(msg) {
+    const fileId = msg.img?.fileId;
+    const sha256 = msg.img?.hdSha256;
+    if (!fileId || !sha256 || !chatModal) return;
+    const key = messageOriginalKey(msg);
+    const cached = originalImages.get(key);
+    if (cached) {
+      await openChatImage(msg, cached.blob);
+      return;
+    }
+    const current = originalTransfers.get(key);
+    if (current?.status === 'loading') return;
+    if (msg.self || msg.fromId === getMeetSnapshot().self?.id) {
+      const blob = meet.originalBlob(fileId);
+      if (!blob) {
+        originalTransfers.set(key, {
+          status: 'error', progress: 0, code: 'expired', peerId: msg.fromId,
+          fileId, sha256, token: ++originalTransferToken
+        });
+        updateOriginalControl(key);
+        return;
+      }
+      originalTransfers.set(key, {
+        status: 'ready', progress: 100, peerId: msg.fromId,
+        fileId, sha256, token: ++originalTransferToken
+      });
+      cacheOriginal(key, blob);
+      updateOriginalControl(key);
+      await openChatImage(msg, blob);
+      return;
+    }
+    const token = ++originalTransferToken;
+    originalTransfers.set(key, { status: 'loading', progress: 0, peerId: msg.fromId, fileId, sha256, token });
+    updateOriginalControl(key);
+    try {
+      const blob = await meet.requestOriginal({
+        peerId: msg.fromId, fileId, sha256,
+        onProgress: (progress: number) => {
+          const transfer = originalTransfers.get(key);
+          if (!transfer || transfer.token !== token || transfer.status !== 'loading') return;
+          transfer.progress = Math.max(transfer.progress, Math.min(99, progress));
+          updateOriginalControl(key);
+        }
+      });
+      if (!chatModal || originalTransfers.get(key)?.token !== token) return;
+      originalTransfers.set(key, { status: 'ready', progress: 100, peerId: msg.fromId, fileId, sha256, token });
+      cacheOriginal(key, blob);
+      updateOriginalControl(key);
+      await openChatImage(msg, blob);
+    } catch (error) {
+      if (!chatModal || originalTransfers.get(key)?.token !== token) return;
+      originalTransfers.set(key, {
+        status: 'error', progress: 0, peerId: msg.fromId, fileId, sha256, token,
+        code: error instanceof P2PTransferError ? error.code : 'closed'
+      });
+      updateOriginalControl(key);
+    }
+  }
+
+  function originalControl(msg) {
+    const fileId = msg.img?.fileId;
+    const sha256 = msg.img?.hdSha256;
+    if (!fileId || !sha256) return null;
+    const key = messageOriginalKey(msg);
+    const action = el('button', { class: 'mc-original-action', type: 'button' });
+    const status = el('span', { class: 'mc-original-status' });
+    const cancel = el('button', {
+      class: 'mc-original-cancel', type: 'button', hidden: true,
+      title: t('common.cancel'), 'aria-label': t('common.cancel')
+    }, icon('x', 12));
+    cancel.onclick = () => {
+      originalTransfers.delete(key);
+      meet.cancelOriginal(msg.fromId, fileId, sha256);
+      updateOriginalControl(key);
+    };
+    action.onclick = () => { void loadOriginal(msg); };
+    originalControls.set(key, {
+      action, status, cancel,
+      label: t('meet.originalLoad', { size: fmtImageSize(msg.img.hdSize) })
+    });
+    const box = el('div', { class: 'mc-original' }, action, cancel, status);
+    updateOriginalControl(key);
+    return box;
+  }
+
   function closeChat() {
     const m = chatModal;
     chatModal = null;
     chatRefresh = null;
+    cancelOriginalTransfers();
+    clearOriginalImages();
     chatImageViewer?.close();
     chatImageViewer = null;
     clearChatImageUrls();
@@ -212,27 +411,50 @@ export function createMeetView(navigate) {
     toast(t('meet.chatImageMapHint'), 'ok');
   }
 
-  async function openChatImage(msg) {
-    const url = await chatImageUrl(msg);
+  async function openChatImage(msg, original: Blob | null = null) {
+    chatImageViewer?.close();
+    chatImageViewer = null;
+    const url = original ? cacheOriginal(msg.img.fileId, original) : await chatImageUrl(msg);
     if (!url) return;
     const time = new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     const coords = msg.lat != null && msg.lon != null
       ? `${msg.lat.toFixed(5)}, ${msg.lon.toFixed(5)} (WGS-84)`
       : t('meet.chatImageNoFix');
-    const body = el('div', { class: 'chat-image-viewer' },
-      el('img', { src: url, alt: t('meet.chatImageView') }),
+    const image = el('img', { src: url, alt: t('meet.chatImageView') });
+    const body = el('div', { class: 'chat-image-viewer' + (original ? ' is-original' : '') },
+      image,
       msg.text ? el('div', { class: 'iv-caption' }, msg.text) : null,
       el('div', { class: 'iv-meta' }, `${msg.name} · ${time} · ${coords}`));
+    const footer = el('div', { class: 'iv-actions' });
+    if (msg.lat != null && msg.lon != null) {
+      footer.append(el('button', {
+        class: 'btn primary', type: 'button',
+        onclick: () => { chatImageViewer?.close(); chatImageViewer = null; locateChatPhoto(msg); }
+      }, icon('map', 16), t('meet.chatImageLocate')));
+    }
+    if (original) {
+      const saveBtn = el('button', { class: 'btn ghost', type: 'button' }, icon('download', 16), t('meet.originalSave'));
+      saveBtn.onclick = async () => {
+        saveBtn.disabled = true;
+        try {
+          const result = await exportImage(original, originalFilename(msg));
+          if (result.mode === 'longpress') {
+            image.src = result.dataUrl;
+            toast(t('settings.promoLongPress'), 'warn');
+          } else toast(t('settings.promoDownloaded'), 'ok');
+        } catch {
+          toast(t('camera.originalFail'), 'err');
+        } finally {
+          saveBtn.disabled = false;
+        }
+      };
+      footer.append(saveBtn);
+    }
     chatImageViewer = modal({
-      title: t('meet.chatImageView'),
+      title: original ? t('meet.originalView') : t('meet.chatImageView'),
       body,
       wide: true,
-      footer: msg.lat != null && msg.lon != null
-        ? el('button', {
-          class: 'btn primary block', type: 'button',
-          onclick: () => { chatImageViewer?.close(); chatImageViewer = null; locateChatPhoto(msg); }
-        }, icon('map', 16), t('meet.chatImageLocate'))
-        : null,
+      footer: footer.children.length ? footer : null,
       onClose: () => { chatImageViewer = null; }
     });
   }
@@ -247,8 +469,13 @@ export function createMeetView(navigate) {
       bubble = el('button', {
         class: 'mc-image', type: 'button', disabled: true,
         'aria-label': t('meet.chatImageView')
-      }, img, lock);
-      bubble.addEventListener('click', () => { void openChatImage(msg); });
+      }, img,
+      msg.img.fileId ? el('span', { class: 'mc-hd-badge' }, 'HD', fmtImageSize(msg.img.hdSize)) : null,
+      lock);
+      bubble.addEventListener('click', () => {
+        const original = msg.img.fileId ? originalImages.get(messageOriginalKey(msg))?.blob : null;
+        void openChatImage(msg, original || null);
+      });
       void chatImageUrl(msg).then((url) => {
         if (!bubble.isConnected) return;
         if (!url) {
@@ -266,6 +493,7 @@ export function createMeetView(navigate) {
       own ? null : el('div', { class: 'mc-name' }, msg.name),
       bubble,
       msg.img && msg.text ? el('div', { class: 'mc-caption' }, msg.text) : null,
+      originalControl(msg),
       el('div', { class: 'mc-time' }, time));
     const row = el('div', { class: 'meet-chat-row' + (own ? ' self' : '') });
     if (!own) {
@@ -320,7 +548,11 @@ export function createMeetView(navigate) {
             caption: shot.caption,
             lat: shot.fix?.lat ?? null,
             lon: shot.fix?.lon ?? null,
-            acc: shot.fix?.acc ?? null
+            acc: shot.fix?.acc ?? null,
+            original: shot.original,
+            originalMime: shot.originalMime,
+            originalWidth: shot.originalWidth,
+            originalHeight: shot.originalHeight
           });
           if (ok) {
             render(true);
@@ -386,6 +618,8 @@ export function createMeetView(navigate) {
       onClose: () => {
         chatModal = null;
         chatRefresh = null;
+        cancelOriginalTransfers();
+        clearOriginalImages();
         chatImageViewer?.close();
         chatImageViewer = null;
         clearChatImageUrls();
@@ -929,6 +1163,18 @@ export function createMeetView(navigate) {
     if (!chatModal) return;
     if (s.chatUnread) meet.markChatRead();
     chatRefresh?.();
+  });
+  on('meet:p2p', ({ type, peerId, fileId, sha256, progress, code }) => {
+    if (!chatModal || !fileId || !sha256) return;
+    const key = originalKey(peerId, fileId, sha256);
+    const transfer = originalTransfers.get(key);
+    if (type === 'progress' && transfer?.status === 'loading') {
+      transfer.progress = Math.max(transfer.progress, Math.min(99, Number(progress) || 0));
+      updateOriginalControl(key);
+    } else if (type === 'error' && transfer?.status === 'loading') {
+      originalTransfers.set(key, { ...transfer, status: 'error', progress: 0, code });
+      updateOriginalControl(key);
+    }
   });
   on('meet:ended', ({ reason }) => {
     closeChat();

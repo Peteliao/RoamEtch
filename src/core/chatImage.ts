@@ -11,7 +11,9 @@ export const CHAT_IMAGE_MAX_PIXELS = 720 * 720;
 export const CHAT_IMAGE_MIMES = ['image/webp', 'image/jpeg'];
 export const LOCAL_IMAGE_MAX_BYTES = 32 * 1024 * 1024;
 export const LOCAL_IMAGE_MAX_PIXELS = 40 * 1000 * 1000;
+export const ORIGINAL_IMAGE_MIMES = ['image/jpeg', 'image/webp', 'image/png'];
 const LOCAL_IMAGE_HEADER_BYTES = 1024 * 1024;
+const ORIGINAL_META_KEYS = ['fid', 'hs', 'hm', 'hw', 'hh', 'hsh'];
 
 export type ChatImagePayload = {
   base64: string;
@@ -21,6 +23,12 @@ export type ChatImagePayload = {
   lat: number | null;
   lon: number | null;
   acc: number | null;
+  fileId?: string;
+  hdSize?: number;
+  hdMime?: string;
+  hdWidth?: number;
+  hdHeight?: number;
+  hdSha256?: string;
 };
 
 export function chatImageLadder(lowData = false) {
@@ -31,6 +39,20 @@ export function chatImageLadder(lowData = false) {
     for (const quality of qualities) steps.push({ maxEdge, quality });
   }
   return steps;
+}
+
+export function sanitizeChatOriginalMeta(msg: any) {
+  const fileId = typeof msg?.fid === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(msg.fid) ? msg.fid : '';
+  const sha256 = typeof msg?.hsh === 'string' && /^[A-Fa-f0-9]{64}$/.test(msg.hsh) ? msg.hsh.toLowerCase() : '';
+  const size = Number(msg?.hs);
+  const mime = String(msg?.hm || '');
+  const width = Number(msg?.hw);
+  const height = Number(msg?.hh);
+  if (!fileId || !sha256 || !Number.isSafeInteger(size) || size < 1 || size > LOCAL_IMAGE_MAX_BYTES) return null;
+  if (!ORIGINAL_IMAGE_MIMES.includes(mime)) return null;
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 32_767 || height > 32_767) return null;
+  if (width * height > LOCAL_IMAGE_MAX_PIXELS) return null;
+  return { fileId, sha256, size, mime, width, height };
 }
 
 /** Validate an untrusted `msg` image packet. Returns null when unusable. */
@@ -55,6 +77,9 @@ export function sanitizeChatImagePacket(msg: any): ChatImagePayload | null {
     && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
   const accValue = msg?.ac;
   const acc = typeof accValue === 'number' ? accValue : Number.NaN;
+  const hasOriginal = ORIGINAL_META_KEYS.some((key) => msg?.[key] != null);
+  const original = hasOriginal ? sanitizeChatOriginalMeta(msg) : null;
+  if (hasOriginal && !original) return null;
   return {
     base64,
     mime,
@@ -62,8 +87,22 @@ export function sanitizeChatImagePacket(msg: any): ChatImagePayload | null {
     height,
     lat: hasFix ? lat : null,
     lon: hasFix ? lon : null,
-    acc: hasFix && Number.isFinite(acc) && acc >= 0 && acc <= 10_000 ? acc : null
+    acc: hasFix && Number.isFinite(acc) && acc >= 0 && acc <= 10_000 ? acc : null,
+    ...(original ? {
+      fileId: original.fileId,
+      hdSize: original.size,
+      hdMime: original.mime,
+      hdWidth: original.width,
+      hdHeight: original.height,
+      hdSha256: original.sha256
+    } : {})
   };
+}
+
+export async function sha256Hex(buffer: ArrayBuffer) {
+  if (!crypto?.subtle) throw new Error('crypto-unavailable');
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', buffer));
+  return [...hash].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function fourCC(bytes: Uint8Array, at: number) {

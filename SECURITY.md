@@ -82,7 +82,8 @@ Version 1 invites and packets are rejected rather than downgraded.
 | Nonce | 96 bits = 64-bit random per-device prefix + 32-bit monotonic counter; a new prefix is generated for every session, and exhaustion aborts sends |
 | AAD | `"trackmint-meet-v2-aad:" + roomId` |
 | Envelope | `0x02` version byte + 12-byte nonce + ciphertext/tag, base64url-encoded |
-| Replay protection | Every packet carries a per-sender, strictly increasing sequence number. All packet types pass the same per-sender guard; repeated or older sequences are dropped. Timestamps are a secondary ±5-minute sanity check, and locations also enforce newer sequence ordering. |
+| Ordinary-packet replay protection | Positions, chat, and ordinary control packets carry a per-sender, strictly increasing sequence number. Repeated or older sequences are dropped. Timestamps are a secondary ±5-minute sanity check, and locations also enforce newer sequence ordering. |
+| RTC signaling | The encrypted `k: "rtc"` branch carries message, session, sender and target ids plus type, timestamp and payload. It is processed before the ordinary sequence guard because redundant brokers can reorder signaling independently; misaddressed, malformed, older-than-30-second or over-5-second-future signals are rejected. A 500-entry sender/message-id deduplicator and a 40-signals-per-3-seconds per-sender limiter bound replay and flooding. Outgoing signaling uses a separate bounded queue so it cannot block the location/chat send chain. |
 | Chat dedupe | Random message ids plus a bounded seen-set, in addition to the sender sequence |
 | Transport limits | Client and relay cap packets at 128 KB. The bundled relay also enforces a per-socket token bucket (8 msg/s, 40 burst), 32 clients per room, 2,000 rooms, 10,000 clients, and a 12-hour idle-room sweep |
 | Public MQTT nodes | Concurrent subscriptions to `broker-cn.emqx.io:8084`, `broker.emqx.io:8084`, and `mqtt-dashboard.com:8884`; the fastest response starts the session immediately and every connected node also receives outgoing ciphertext as redundancy. A custom URL replaces this set unless it is the legacy default |
@@ -94,6 +95,16 @@ MQTT topic or WS path learns only that public id and cannot derive the AES key
 from it. The 256-bit invite secret never appears in a topic, URL query, HTTP
 path, or relay log. Anyone who obtains the full invite can decrypt the session
 and must be treated as a room member.
+
+### On-demand WebRTC originals
+
+- P2P original transfer is **off by default** and requires an explicit local opt-in with an IP-visibility notice. The encrypted thumbnail is sent first; no peer connection is created until a receiver chooses **Load original**. The requester generates a session id, and the file holder reuses it and always acts as Offerer, avoiding SDP glare.
+- Only `pull-req`, `pull-reject`, `offer`, `answer`, `ice`, and `abort` are accepted. Signals include message/session/sender/target ids and timestamps, are AES-256-GCM encrypted inside the meetup envelope, and use the RTC-specific replay and rate controls above. Leaving, being removed, resetting the invite, or disabling local P2P closes affected sessions.
+- The original travels over an ordered, reliable WebRTC DataChannel protected by DTLS, not over MQTT/WS. Signaling and file metadata are encrypted; the relay never receives original bytes. A configured TURN server can carry the encrypted DataChannel traffic when a direct route is unavailable.
+- Files use JSON metadata and exact 16 KiB binary chunks with an explicit chunk count and EOF. The receiver rejects short, empty, extra, or out-of-budget chunks. SCTP buffered-byte thresholds are 256 KB/64 KB; a sender handles at most two simultaneous transfers and rejects additional requests as busy.
+- The connection must reach DataChannel-open within 10 seconds. Connected or stalled transfers close after 30 seconds without activity. Cancellation, abort, room teardown, timeout, checksum failure, and protocol errors close the session without interrupting location, text, or thumbnails.
+- The receiver verifies SHA-256 and the encoded JPEG/PNG/WebP header, declared dimensions, byte size, and pixel budget before exposing the blob to the UI. Album-derived originals are bounded to 32 MB and 40 MP. A wrong file id/hash/size cannot reopen or replace another transfer.
+- Sender memory is an LRU of at most 10 originals/50 MB; evicted files are expired. Receiver blob/object-URL state is bounded to 4 files/64 MB and keyed by peer + file id + SHA-256. Neither thumbnails nor originals are written to IndexedDB, backups, or a TrackMint server.
 
 ### Ephemeral chat photos
 
@@ -113,21 +124,31 @@ and must be treated as a room member.
   match those declared dimensions, and stay within the 720 px edge and 518,400
   pixel budget. Local album inputs are separately bounded to 32 MB and 40 MP,
   with JPEG/PNG/WebP headers checked before object URL creation or pixel decode.
-- Photos exist only in session memory. The latest 20 image payloads are kept;
-  older payloads are nulled and show an expired placeholder. Object URLs are
-  bounded and revoked, and chat photos are never written to IndexedDB, uploaded
-  to a TrackMint server, or added to backup archives.
+- Chat thumbnails exist only in session memory. The latest 20 image payloads are
+  kept; older payloads are nulled and show an expired placeholder. HD originals
+  use the separate bounded P2P caches described above. Object URLs are bounded
+  and revoked, and neither thumbnails nor originals are written to IndexedDB,
+  uploaded to a TrackMint server, or added to backup archives.
 - Closing the camera stops only its media tracks and re-arms the iOS keepalive
   video. It does not stop geolocation or the meetup relay. Capture coordinates,
   when available, travel inside the encrypted image packet.
 
 ### What a relay can see / 中继可见信息
 
-A public MQTT broker or a self-hosted relay can observe the random room id,
-connection timestamps, packet sizes and timing, and the client's IP address. It
-cannot see positions, names, chat text, photos, or the invite secret. Larger
-ciphertext frames can reveal that a chat photo is being transmitted, but not its
-contents. Neither transport stores messages or provides history replay.
+A public MQTT broker or a self-hosted meetup relay can observe the random room
+id, connection timestamps, packet sizes and timing, and the client's IP address.
+It cannot see positions, names, chat text, thumbnails, HD originals, or the
+invite secret. Larger ciphertext frames can reveal that a chat thumbnail or RTC
+signal is being transmitted, but not its contents. Original bytes bypass this
+relay entirely. Neither transport stores messages or provides history replay.
+
+When P2P originals are enabled, the two devices can observe each other's network
+IP addresses during ICE negotiation and transfer. STUN servers see binding
+requests and public address mappings; a configured TURN server sees relay
+allocation, traffic timing/volume, and the client's address as well. TURN relays
+encrypted DataChannel bytes and cannot read their contents. WebRTC is therefore
+not an anonymity mechanism, and custom STUN/TURN operators become additional
+network observers.
 
 ### Known limitations / 已知局限
 
@@ -158,7 +179,12 @@ contents. Neither transport stores messages or provides history replay.
   through a trusted channel.
 - **Client-side enforcement only.** A malicious client can keep or re-share data
   it has already decrypted. The app cannot force another device to delete
-  positions, messages, or photos.
+  positions, messages, thumbnails, or originals.
+- **P2P reveals network metadata.** Opting into originals exposes peer network IP
+  addresses during ICE negotiation/transfer and relevant metadata to STUN/TURN.
+  A TURN fallback can relay encrypted bytes. The setting is off by default and
+  does not change the encrypted MQTT/WS path used by location, text, thumbnails,
+  and signaling.
 - **Not an emergency tool.** Meetup is not SOS, rescue, or safety-critical
   communication. GPS pauses when the OS suspends the browser.
 
@@ -173,12 +199,14 @@ README for the full data-boundary description.
 ## Dependency and cache hygiene
 
 - The production bundle is built from pinned `package-lock.json` dependencies.
-  `npm audit --omit=dev` reports zero vulnerabilities; MapLibre GL JS is pinned
-  to a release that includes the style sanitizer fix.
+  `npm audit --omit=dev` reports zero vulnerabilities; i18next is pinned to the
+  patched 26.3.4 release, and MapLibre GL JS is pinned to a release that includes
+  the style sanitizer fix.
 - The Workbox build toolchain currently carries moderate `glob` / `minimatch`
   advisories. They run only during the local/CI production build, are not part
-  of the shipped bundle, and have no upstream fixed release yet; re-check with
-  `npm audit` when updating `vite-plugin-pwa`.
+  of the shipped bundle, and have no upstream fixed release compatible with the
+  current Workbox 7.4.1 pin yet; re-check with `npm audit` when updating
+  `vite-plugin-pwa` / Workbox.
 - The service worker caches only same-origin app assets and viewed map tiles,
   with bounded LRU caches and quota-error eviction.
 - Third-party SDKs, remote fonts, analytics, and telemetry are intentionally not
@@ -187,8 +215,9 @@ README for the full data-boundary description.
 ## 中文摘要
 
 - 组队邀请同时包含随机房间标识（128 位）与随机密钥（256 位），只存在于 URL `#` 片段与本机内存；中继只看到房间标识与 AES-256-GCM 密文。
-- 房间标识与密钥相互独立，主题/路径不包含邀请密钥；每个会话使用独立 nonce 前缀与单调计数器，并对所有包类型执行按发送者严格递增的防重放检查。
+- 房间标识与密钥相互独立，主题/路径不包含邀请密钥；每个会话使用独立 nonce 前缀与单调计数器。普通包按发送者严格递增序号防重放；RTC 信令因多中继可能乱序而单独按发送者/消息 ID 去重，校验 30 秒时效并限制每发送者 3 秒 40 条，使用独立有界发送队列。
 - 旧版 12 位组队码与 v1 数据包会被明确拒绝，不会静默降级；升级后需重新生成邀请。
 - 组队端到端加密目前仍没有发送者身份认证，也没有前向保密；邀请泄露等同于房间内容泄露。设备身份签名、发起人认证、成员变动后的密钥轮换与 MLS/前向保密属于下一阶段。
-- 聊天图片在网页内存中压缩后加密发送，原始图片上限 56 KB，加密传输包上限 128 KB；发送冷却 5 秒，接收按发送者限流，仅保留最新 20 张，不写入 IndexedDB 或备份。中继可看到密文大小与时间，但看不到图片内容或可选拍摄坐标。
+- 聊天缩略图在网页内存中压缩后加密发送，原始图片上限 56 KB，加密传输包上限 128 KB；发送冷却 5 秒，接收按发送者限流，仅保留最新 20 张，不写入 IndexedDB 或备份。中继可看到密文大小与时间，但看不到图片内容或可选拍摄坐标。
+- 高清原图默认不传输。用户主动开启并加载后，才建立 DTLS 加密的一对一 WebRTC DataChannel：文件持有者固定为 Offerer，16 KiB 分片、SHA-256 与图片头校验，10 秒建连、30 秒空闲关闭；发送方最多 2 路并发、10 张/50 MB 缓存，接收方最多 4 张/64 MB。原图不经过组队中继、不落盘；但双方设备可见彼此网络 IP，STUN/TURN 可观察连接信息，TURN 还可能转发仍加密的字节。
 - 本机数据不加密，依赖设备解锁；整库备份 ZIP 同样未加密，请妥善保管。请定期导出整库备份。恢复时会把压缩包视为不可信输入：限制大小、条目数、压缩比与点数，拒绝异常路径，并在单个事务中写入。漏洞请走私密报告入口。

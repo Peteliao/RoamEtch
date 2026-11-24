@@ -3,6 +3,14 @@ import { emit } from './events';
 
 const KEY = 'localtrace.settings.v1';
 
+export const MEET_P2P_NOTICE_VERSION = 1;
+
+export const DEFAULT_MEET_STUN = [
+  'stun:stun.miwifi.com:3478',
+  'stun:stun.chat.bilibili.com:3478',
+  'stun:stun.cloudflare.com:3478'
+];
+
 const DEFAULTS = {
   language: 'auto',            // auto | zh | en   (UI language, independent of region)
   regionMode: 'auto',          // auto | cn | global  (manual override wins)
@@ -28,8 +36,11 @@ const DEFAULTS = {
   meetMqttUrl: '',             // blank = auto-select public WSS nodes
   meetMqttPrefix: 'trackmint/v2/meet',
   meetWsUrl: '',               // must contain {room}
-  meetStun: 'stun:stun.cloudflare.com:3478',
-  meetTurnUrl: '',             // reserved for future WebRTC transport
+  meetP2PEnabled: false,
+  meetP2PNoticeVersion: 0,
+  migrateMeetP2P: 1,
+  meetStun: DEFAULT_MEET_STUN.join('\n'),
+  meetTurnUrl: '',
   meetTurnUser: '',
   meetTurnPass: '',
   sim: {                       // debug simulation switches [v1.4]
@@ -66,6 +77,13 @@ function load() {
     if (parsed && parsed.migrateMeetMulti !== 1) {
       if (!parsed.meetMqttUrl || parsed.meetMqttUrl === 'wss://broker.emqx.io:8084/mqtt') parsed.meetMqttUrl = '';
       parsed.migrateMeetMulti = 1;
+      localStorage.setItem(KEY, JSON.stringify(parsed));
+    }
+    if (parsed && parsed.migrateMeetP2P !== 1) {
+      if (parsed.meetStun === 'stun:stun.cloudflare.com:3478') parsed.meetStun = DEFAULTS.meetStun;
+      parsed.meetP2PEnabled = false;
+      parsed.meetP2PNoticeVersion = 0;
+      parsed.migrateMeetP2P = 1;
       localStorage.setItem(KEY, JSON.stringify(parsed));
     }
     cache = parsed

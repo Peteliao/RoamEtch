@@ -1,7 +1,8 @@
 // Settings view: region (dual-profile) control, language/units/theme, recording prefs,
 // BYOK advanced sources, debug simulation switches, storage & data management.
 import { t } from '../core/i18n';
-import { get, set, patch, resetSettings } from '../core/settings';
+import { get, set, patch, resetSettings, MEET_P2P_NOTICE_VERSION } from '../core/settings';
+import { meet } from '../core/meet';
 import { on } from '../core/events';
 import { regionState, setRegionMode, runProbe } from '../core/region';
 import { storageEstimate, eraseAll, isolateDamaged } from '../core/store';
@@ -61,6 +62,12 @@ export function createSettingsView(navigate) {
   }
   function textRow(label, hint, key, placeholder = '', type = 'text') {
     const inp = el('input', { type, value: get(key) || '', placeholder });
+    inp.onchange = () => { set(key, inp.value.trim()); toast(t('settings.keySaved'), 'ok', 1800); };
+    return el('div', { class: 'field' }, el('label', {}, label), inp, hint ? el('div', { class: 'hint' }, hint) : null);
+  }
+  function textAreaRow(label, hint, key, placeholder = '') {
+    const inp = el('textarea', { rows: '3', placeholder, spellcheck: 'false' });
+    inp.value = get(key) || '';
     inp.onchange = () => { set(key, inp.value.trim()); toast(t('settings.keySaved'), 'ok', 1800); };
     return el('div', { class: 'field' }, el('label', {}, label), inp, hint ? el('div', { class: 'hint' }, hint) : null);
   }
@@ -190,13 +197,41 @@ export function createSettingsView(navigate) {
     ], meetRelayMode, (v) => { meetRelayMode = v; set('meetRelayMode', v); renderMeetRelayFields(); }, t('settings.meetSettingsNote')),
     meetRelayFields
   );
+  const p2pToggle = el('input', { type: 'checkbox' });
+  p2pToggle.checked = get('meetP2PEnabled') === true;
+  p2pToggle.onchange = async () => {
+    const enabled = p2pToggle.checked;
+    p2pToggle.disabled = true;
+    if (enabled && Number(get('meetP2PNoticeVersion')) < MEET_P2P_NOTICE_VERSION) {
+      p2pToggle.checked = false;
+      const accepted = await confirmModal({
+        title: t('meet.p2pNoticeTitle'),
+        message: t('meet.p2pNoticeBody'),
+        confirmText: t('meet.p2pNoticeConfirm')
+      });
+      if (!accepted) { p2pToggle.disabled = false; return; }
+      set('meetP2PNoticeVersion', MEET_P2P_NOTICE_VERSION);
+    }
+    set('meetP2PEnabled', enabled);
+    if (enabled) meet.resumeP2P();
+    else meet.stopP2P();
+    p2pToggle.checked = enabled;
+    p2pToggle.disabled = false;
+  };
+  const p2pSection = el('div', { class: 'relay-settings-block' },
+    el('div', { class: 'settings-subhead relay-subhead' }, icon('shield', 15), t('settings.meetP2P')),
+    el('div', { class: 'setting-row' },
+      el('div', { class: 'txt' }, el('div', { class: 't' }, t('settings.meetP2P')), el('div', { class: 'd' }, t('settings.meetP2PHint'))),
+      el('label', { class: 'switch' }, p2pToggle, el('span', { class: 'slider' }))),
+    el('div', { class: 'small faint', style: { marginTop: '8px' } }, t('settings.meetP2PPrivacy')));
   const meetCard = card('meet', t('settings.meetGroup'),
     relaySection,
     el('div', { class: 'sep' }),
     textRow(t('settings.meetNick'), t('settings.meetNickHint'), 'meetName', t('meet.namePlaceholder')),
+    p2pSection,
     el('div', { class: 'settings-subhead' }, icon('globe', 15), t('settings.meetIce')),
-    textRow(t('settings.meetStun'), '', 'meetStun', 'stun:stun.cloudflare.com:3478'),
-    textRow(t('settings.meetTurn'), '', 'meetTurnUrl', 'turn:turn.example.com:3478'),
+    textAreaRow(t('settings.meetStun'), t('settings.meetStunHint'), 'meetStun', 'stun:stun.cloudflare.com:3478'),
+    textAreaRow(t('settings.meetTurn'), t('settings.meetTurnHint'), 'meetTurnUrl', 'turn:turn.example.com:3478'),
     textRow(t('settings.meetTurnUser'), '', 'meetTurnUser'),
     textRow(t('settings.meetTurnPass'), t('settings.meetIceHint'), 'meetTurnPass', '', 'password')
   );
@@ -307,6 +342,7 @@ export function createSettingsView(navigate) {
       confirmText: t('settings.resetAction')
     });
     if (!ok) return;
+    meet.stopP2P();
     resetSettings();
     toast(t('settings.resetDone'), 'ok', 1600);
     setTimeout(() => location.reload(), 450);
