@@ -1,4 +1,3 @@
-import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({
@@ -80,7 +79,7 @@ beforeEach(() => {
     setItem: (key: string, value: string) => values.set(key, value),
     removeItem: (key: string) => values.delete(key)
   });
-  vi.stubGlobal('crypto', webcrypto);
+  vi.stubGlobal('crypto', globalThis.crypto);
   vi.stubGlobal('document', {
     visibilityState: 'visible',
     addEventListener: vi.fn(),
