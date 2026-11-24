@@ -7,7 +7,7 @@ export type DeviceSaveResult = 'shared' | 'picked' | 'downloaded' | 'cancelled' 
 function photoFileName(takenAt: number) {
   const d = new Date(takenAt || Date.now());
   const p = (n: number) => String(n).padStart(2, '0');
-  return `trackmint-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.jpg`;
+  return `roametch-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.jpg`;
 }
 
 function shareSupported(file: File) {

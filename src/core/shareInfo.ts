@@ -3,17 +3,21 @@
 import { haversine, fmtDuration } from './geo';
 import { currentLang } from './i18n';
 import { applyPrivacy } from './privacy';
+import { migrateLegacyKey } from './storageKeys';
 
-const CACHE_KEY = 'trackmint.places.v1';
+const CACHE_KEY = 'roametch.places.v1';
 const CACHE_TTL = 30 * 24 * 3600 * 1000;
 const EMPTY_TTL = 24 * 3600 * 1000;
 const MAX_CACHE = 400;
 const PHOTON_GAP = 350;
 const NOMINATIM_GAP = 1100;
 const PLACE_BUDGET = 9000;
-const CITY_CACHE_KEY = 'trackmint.cities.v1';
+const CITY_CACHE_KEY = 'roametch.cities.v1';
 const CITY_CACHE_TTL = 180 * 24 * 3600 * 1000;
 const CITY_BUDGET = 45_000;
+
+migrateLegacyKey('trackmint.places.v1', CACHE_KEY);
+migrateLegacyKey('trackmint.cities.v1', CITY_CACHE_KEY);
 
 type Entry = { name: string; ts: number };
 export type CityFootprint = { name: string; lat: number; lon: number };

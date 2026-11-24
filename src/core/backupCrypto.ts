@@ -13,7 +13,7 @@ const MIN_ITERATIONS = 100_000;
 const MAX_ITERATIONS = 2_000_000;
 
 export const MIN_BACKUP_PASSWORD = 8;
-export const ENCRYPTED_BACKUP_EXT = '.trackmint.enc';
+export const ENCRYPTED_BACKUP_EXT = '.roametch.enc';
 
 export type BackupCryptoErrorCode =
   | 'backup-password-required'

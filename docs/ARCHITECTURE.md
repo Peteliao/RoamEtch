@@ -1,11 +1,11 @@
-# TrackMint architecture / 架构说明
+# RoamEtch architecture / 架构说明
 
-TrackMint is a static, local-first TypeScript PWA. There is no application server,
+RoamEtch is a static, local-first TypeScript PWA. There is no application server,
 account system, cloud trip library, or analytics endpoint. The production artifact
 is a folder of static files (`dist/`) that can be hosted on GitHub Pages, nginx, or
 any static host.
 
-TrackMint 是纯静态、本地优先的 TypeScript PWA，没有业务后端、账号体系、云端行程库
+RoamEtch 是纯静态、本地优先的 TypeScript PWA，没有业务后端、账号体系、云端行程库
 或统计上报。构建产物是可部署到任意静态托管的 `dist/`。
 
 ## Runtime at a glance
@@ -53,10 +53,10 @@ Key principles:
 | `src/core/trackVideo.ts` | Realtime canvas replay, intro/outro cards, and muxing the generated music track. |
 | `src/core/footprintShare.ts` | Aggregate-only yearly footprint artwork: 1080×1350 image and 9-second 1080×1920 video with original music. |
 | `src/core/videoCapture.ts` | Shared MediaRecorder support check and MIME/bitrate selection (MP4/H.264 preferred, WebM fallback). |
-| `src/core/promo.ts` | Generic promo artwork: three designs per theme, immediate-repeat avoidance, and matching captions. |
+| `src/core/promo.ts` | Generic promo artwork: eight designs per theme, preview cycling, immediate-repeat avoidance, and matching captions. |
 | `src/core/music.ts` | Four original procedural loops: composition data, Web Audio synthesis, seamless tail wrap, random/manual selection, and MediaStream output. |
 | `src/core/backup.ts` | Backup format v2: ZIP manifest, payload digest, per-media checksums, inspect/restore. |
-| `src/core/backupCrypto.ts` | Optional backup encryption: PBKDF2-SHA-256 → AES-256-GCM `TRKMBKP1` envelope (`.trackmint.enc`). |
+| `src/core/backupCrypto.ts` | Optional backup encryption: PBKDF2-SHA-256 → AES-256-GCM `TRKMBKP1` envelope (`.roametch.enc`; older `.trackmint.enc` backups remain restorable). |
 | `src/core/integrity.ts` | Deterministic JSON serialization and SHA-256 helpers. |
 | `src/core/footprint.ts` | Year/month aggregation over `statsCache` for the footprint card. |
 | `src/core/gpsQuality.ts` | Accuracy, poor fixes, time gaps, altitude jumps, and 0–100 quality score. |
@@ -102,7 +102,8 @@ Backups serialize every table plus binary media into a `.trip` ZIP:
   deletions in one IndexedDB transaction, so a failed media write rolls back
   previously deleted trips.
 - Full-library backups can optionally be password-encrypted into a
-  `.trackmint.enc` file: a `TRKMBKP1` header, 16-byte random salt, 12-byte nonce,
+  `.roametch.enc` file (older `.trackmint.enc` backups remain restorable): a
+  `TRKMBKP1` header, 16-byte random salt, 12-byte nonce,
   and AES-256-GCM ciphertext keyed by PBKDF2-SHA-256 with 600,000 iterations.
   The header (magic, version, KDF parameters) is authenticated as AAD, so
   tampering or a wrong password fails decryption cleanly. Encryption wraps the
@@ -228,8 +229,8 @@ decode one frame and normalize the text through the same invite parser, with
 secret derives a non-extractable AES-256-GCM key via HKDF-SHA-256 with v2 domain
 separation; the room id is used for routing and bound into the packet AAD.
 Positions and ephemeral chat are encrypted on-device and sent through the default
-public MQTT WSS providers (`trackmint/v2/meet/<roomId>`) or a custom WebSocket
-relay. The three public endpoints connect concurrently; the first successful
+public MQTT WSS providers (`roametch/v2/meet/<roomId>`) or a custom WebSocket
+relay. Existing saved legacy or custom topic prefixes remain valid. The three public endpoints connect concurrently; the first successful
 connection reports the session ready, all connected endpoints receive outgoing
 ciphertext for redundancy, and duplicate envelopes are dropped by the per-sender
 sequence and chat-id guards. An empty custom URL means this automatic set,
@@ -280,7 +281,8 @@ GitHub Actions
 runs typecheck, the full test suite, the production build, the Playwright suite,
 and a separate relay test job. The Pages workflow runs the same tests before
 publishing `dist/`. Pushing a `v*` tag triggers the release workflow, which
-attaches `trackmint-dist.zip` and publishes the app and relay images to GHCR.
+attaches `roametch-dist.zip` and publishes `ghcr.io/peteliao/roametch` and
+`ghcr.io/peteliao/roametch-relay` to GHCR.
 
 ## Related documents
 

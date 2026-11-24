@@ -44,7 +44,7 @@ describe('city footprint resolution', () => {
       expect(lon).toBeGreaterThan(0);
       expect(url).not.toContain('家');
     }
-    const cached = JSON.parse(localStorage.getItem('trackmint.cities.v1') || '{}');
+    const cached = JSON.parse(localStorage.getItem('roametch.cities.v1') || '{}');
     for (const entry of Object.values(cached) as any[]) {
       expect(Object.keys(entry).sort()).toEqual(['lat', 'lon', 'name', 'ts']);
     }

@@ -15,6 +15,7 @@ import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from 
 import { openInstallGuide, isIOS, isStandaloneMode } from './install';
 import { triggerDownload } from '../core/gpx';
 import { fmtDistance, fmtDuration, simplify } from '../core/geo';
+import { migrateLegacyKey } from '../core/storageKeys';
 import { get } from '../core/settings';
 import { exportImage, exportFile, isWeChat, wechatFileGuidance } from '../core/shareEnv';
 import { appState, setActiveTrip } from './state';
@@ -129,12 +130,12 @@ function openFootprintVideoPreview(fp) {
   copyBtn.onclick = () => copyFootprintCaption(fp);
   saveBtn.onclick = () => {
     if (!blob) return;
-    exportFile(blob, `trackmint-footprint-${fp.year}-${Date.now()}.${blob.type.includes('mp4') ? 'mp4' : 'webm'}`);
+    exportFile(blob, `roametch-footprint-${fp.year}-${Date.now()}.${blob.type.includes('mp4') ? 'mp4' : 'webm'}`);
     toast(t('export.exported'), 'ok');
   };
   shareBtn.onclick = async () => {
     if (!blob) return;
-    const file = new File([blob], `trackmint-footprint-${fp.year}.${blob.type.includes('mp4') ? 'mp4' : 'webm'}`, { type: blob.type });
+    const file = new File([blob], `roametch-footprint-${fp.year}.${blob.type.includes('mp4') ? 'mp4' : 'webm'}`, { type: blob.type });
     try {
       await navigator.share({ title: t('trips.footprintTitle'), text: caption, files: [file] });
     } catch (e) {
@@ -241,7 +242,7 @@ export function createTripsView(navigate) {
   sortSel.onchange = () => { sortMode = sortSel.value; renderList(); };
   const toolbar = el('div', { class: 'trips-toolbar' }, chipBar, sortSel);
 
-  const CITY_CONSENT_KEY = 'trackmint.cityFootprintConsent.v1';
+  const CITY_CONSENT_KEY = 'roametch.cityFootprintConsent.v1';
   const footprintStates = new Map();
   const footprintJobs = new Map();
   const footprintAborts = new Map();
@@ -254,7 +255,9 @@ export function createTripsView(navigate) {
   const footprintCard = el('div', { class: 'card footprint-card' }, footprintBody);
   const nudge = el('div', { class: 'backup-nudge', style: { display: 'none' } });
   const iosNudge = el('div', { class: 'backup-nudge ios-storage-nudge', style: { display: 'none' } });
-  const IOS_NUDGE_KEY = 'trackmint.iosStorageNudge.v1';
+  const IOS_NUDGE_KEY = 'roametch.iosStorageNudge.v1';
+  migrateLegacyKey('trackmint.cityFootprintConsent.v1', CITY_CONSENT_KEY);
+  migrateLegacyKey('trackmint.iosStorageNudge.v1', IOS_NUDGE_KEY);
   let iosNudgeBuilt = false;
   function iosNudgeDismissed() {
     try { return !!localStorage.getItem(IOS_NUDGE_KEY); } catch { return true; }

@@ -1,11 +1,11 @@
-# Contributing to TrackMint / 贡献指南
+# Contributing to RoamEtch / 贡献指南
 
-Thanks for helping improve TrackMint. The project is deliberately small: a static,
+Thanks for helping improve RoamEtch. The project is deliberately small: a static,
 offline-first TypeScript PWA with no backend, no framework, and no telemetry.
 Please keep contributions aligned with that shape. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the module map and data flow.
 
-感谢参与 TrackMint。项目刻意保持轻量：纯静态、离线优先、TypeScript + 原生 DOM，
+感谢参与 RoamEtch。项目刻意保持轻量：纯静态、离线优先、TypeScript + 原生 DOM，
 没有后端、没有前端框架、没有统计上报。提交前请先读完下面的约定。
 
 ## Development setup
@@ -75,7 +75,7 @@ These are the rules that are easy to break accidentally:
   remote font/SDK. New runtime dependencies need a clear reason and a review.
 - **Bilingual UI:** every user-facing string goes in `src/core/i18n.ts` with both
   `zh` and `en` entries. Keep the Chinese copy aligned with the product
-  terminology already in the file (for example 组队 / 实时组队, not 会合).
+  terminology already in the file (always use 组队 / 实时组队).
 - **UI language vs. region:** they are independent. Do not derive one from the
   other, and do not let a region switch rewrite stored data.
 - **Settings reset:** “restore defaults” resets preferences only. Trips,

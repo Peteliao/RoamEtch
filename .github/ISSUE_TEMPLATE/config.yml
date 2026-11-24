@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: Try the live demo
-    url: https://peteliao.github.io/TrackMint/
+    url: https://peteliao.github.io/RoamEtch/
     about: Open the hosted PWA and load the built-in demo trip from the Trips tab.
   - name: Security policy
-    url: https://github.com/Peteliao/TrackMint/blob/main/SECURITY.md
+    url: https://github.com/Peteliao/RoamEtch/blob/main/SECURITY.md
     about: Report vulnerabilities privately. Do not post exploits, meetup codes, or personal tracks in a public issue.
   - name: Contributing guide
-    url: https://github.com/Peteliao/TrackMint/blob/main/CONTRIBUTING.md
+    url: https://github.com/Peteliao/RoamEtch/blob/main/CONTRIBUTING.md
     about: Development setup, project invariants, tests, and browser verification.

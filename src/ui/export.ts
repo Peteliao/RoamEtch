@@ -136,7 +136,7 @@ export function createExportView(getRecordMap) {
   const genBtn = el('button', { class: 'btn primary sm' }, icon('photo', 15), t('export.generateShort'));
   const dlBtn = el('button', { class: 'btn sm icon-only', title: t('export.downloadPoster'), 'aria-label': t('export.downloadPoster'), style: { display: 'none' } }, icon('download', 16));
   const posterShareBtn = el('button', { class: 'btn sm icon-only', title: t('export.shareImage'), 'aria-label': t('export.shareImage'), style: { display: 'none' } }, icon('share', 16));
-  posterShareBtn.onclick = () => { if (posterBlob) shareMedia(posterBlob, `localtrace-poster-${Date.now()}.png`, 'image'); };
+  posterShareBtn.onclick = () => { if (posterBlob) shareMedia(posterBlob, `roametch-poster-${Date.now()}.png`, 'image'); };
   const posterNote = el('div', { class: 'small faint', style: { marginTop: '6px' } });
   genBtn.onclick = async () => {
     if (!curFull || !currentTripId()) { toast(t('analysis.noTrip'), 'warn'); return; }
@@ -173,7 +173,7 @@ export function createExportView(getRecordMap) {
   };
   dlBtn.onclick = async () => {
     if (!posterBlob) return;
-    const name = `localtrace-poster-${Date.now()}.png`;
+    const name = `roametch-poster-${Date.now()}.png`;
     const r = await exportImage(posterBlob, name);
     if (r.mode === 'longpress') {
       modal({
@@ -213,7 +213,7 @@ export function createExportView(getRecordMap) {
   const vCancelBtn = el('button', { class: 'btn ghost sm icon-only', title: t('common.cancel'), 'aria-label': t('common.cancel'), style: { display: 'none' } }, icon('x', 16));
   const vDlBtn = el('button', { class: 'btn sm icon-only', title: t('export.videoDownload'), 'aria-label': t('export.videoDownload'), style: { display: 'none' } }, icon('download', 16));
   const vShareBtn = el('button', { class: 'btn sm icon-only', title: t('export.shareVideo'), 'aria-label': t('export.shareVideo'), style: { display: 'none' } }, icon('share', 16));
-  vShareBtn.onclick = () => { if (videoBlob) shareMedia(videoBlob, `localtrace-video-${Date.now()}.${videoExt}`, 'video'); };
+  vShareBtn.onclick = () => { if (videoBlob) shareMedia(videoBlob, `roametch-video-${Date.now()}.${videoExt}`, 'video'); };
   const vPreview = el('video', { controls: true, playsinline: true, 'webkit-playsinline': '', preload: 'metadata', style: { width: '100%', display: 'none', marginTop: '10px', borderRadius: '10px', background: '#000' } });
   const vNote = el('div', { class: 'small faint', style: { marginTop: '6px' } });
   const musicPref = get('videoMusic');
@@ -287,7 +287,7 @@ export function createExportView(getRecordMap) {
   };
   vDlBtn.onclick = () => {
     if (!videoBlob) return;
-    exportFile(videoBlob, `localtrace-video-${Date.now()}.${videoExt}`);
+    exportFile(videoBlob, `roametch-video-${Date.now()}.${videoExt}`);
     toast(t('export.exported'), 'ok');
   };
   if (!videoOk) vGenBtn.disabled = true;

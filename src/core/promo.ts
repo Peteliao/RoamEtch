@@ -28,12 +28,21 @@ function headlineSize(ctx: CanvasRenderingContext2D, lines: string[], maxW: numb
   return 60;
 }
 
-const VARIANT_COUNT = 3;
+export const PROMO_VARIANT_COUNT = 8;
 let lastVariant = -1;
+
+function normalizeVariant(variant: number) {
+  const n = Number.isFinite(variant) ? Math.trunc(variant) : 0;
+  return ((n % PROMO_VARIANT_COUNT) + PROMO_VARIANT_COUNT) % PROMO_VARIANT_COUNT;
+}
+
+export function nextVariant(variant: number) {
+  return (normalizeVariant(variant) + 1) % PROMO_VARIANT_COUNT;
+}
 
 export function pickPromoVariant(random = Math.random) {
   const pool = [];
-  for (let i = 0; i < VARIANT_COUNT; i++) if (i !== lastVariant) pool.push(i);
+  for (let i = 0; i < PROMO_VARIANT_COUNT; i++) if (i !== lastVariant) pool.push(i);
   const next = pool[Math.min(pool.length - 1, Math.floor(random() * pool.length))];
   lastVariant = next;
   return next;
@@ -388,6 +397,10 @@ function featureGlyph(ctx: CanvasRenderingContext2D, kind: string, x: number, y:
     ctx.beginPath();
     ctx.arc(16.5, 15.5, 2.6, 0, Math.PI * 2);
     ctx.fill();
+  } else if (kind === 'route') {
+    circle(5, 18.5, 2);
+    circle(19, 5.5, 2);
+    ctx.stroke(new Path2D('M7 18.5h5.5a4 4 0 0 0 0-8H10a4 4 0 0 1 0-8h7'));
   } else {
     ctx.stroke(new Path2D('m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Zm6-3v15m6-12v15'));
   }
@@ -701,6 +714,574 @@ function drawMeetCard(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
   ctx.textAlign = 'left';
 }
 
+function drawPill(ctx: CanvasRenderingContext2D, P, highContrast: boolean, label: string, x: number, y: number, height = 42) {
+  ctx.font = `600 19px ${FONT}`;
+  const width = ctx.measureText(label).width + 40;
+  roundRectPath(ctx, x, y, width, height, height / 2);
+  if (highContrast) {
+    ctx.fillStyle = P.accent;
+    ctx.fill();
+    ctx.fillStyle = P.panel;
+  } else {
+    ctx.fillStyle = P.badgeBg;
+    ctx.fill();
+    ctx.strokeStyle = P.badgeEdge;
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.fillStyle = P.accent;
+  }
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(label, x + 20, y + height / 2 + 7);
+  return width;
+}
+
+function drawCardHeading(ctx: CanvasRenderingContext2D, P, highContrast: boolean, x: number, y: number, w: number, title: string, pill: string) {
+  ctx.textAlign = 'left';
+  ctx.fillStyle = P.text;
+  ctx.font = `700 28px ${FONT}`;
+  ctx.fillText(fitText(ctx, title, w * 0.58), x + 38, y + 54);
+  ctx.font = `600 19px ${FONT}`;
+  const pw = ctx.measureText(pill).width + 40;
+  drawPill(ctx, P, highContrast, pill, x + w - 38 - pw, y + 26);
+}
+
+function drawChips(ctx: CanvasRenderingContext2D, P, highContrast: boolean, labels: string[], x: number, y: number, w: number) {
+  const gap = 12;
+  const cw = (w - gap * (labels.length - 1)) / labels.length;
+  ctx.font = `600 20px ${FONT}`;
+  labels.forEach((label, i) => {
+    const cx = x + i * (cw + gap);
+    roundRectPath(ctx, cx, y, cw, 46, 23);
+    if (highContrast) {
+      ctx.fillStyle = P.accent;
+      ctx.fill();
+      ctx.fillStyle = P.panel;
+    } else {
+      ctx.fillStyle = P.accentSoft;
+      ctx.fill();
+      ctx.strokeStyle = P.accentLine;
+      ctx.lineWidth = 1.3;
+      ctx.stroke();
+      ctx.fillStyle = P.accent;
+    }
+    ctx.textAlign = 'center';
+    ctx.fillText(fitText(ctx, label, cw - 24), cx + cw / 2, y + 31);
+  });
+  ctx.textAlign = 'left';
+}
+
+function drawStat(ctx: CanvasRenderingContext2D, P, highContrast: boolean, value: string, unit: string, label: string, x: number, y: number, w: number) {
+  ctx.textAlign = 'left';
+  ctx.fillStyle = P.text;
+  ctx.font = `800 38px ${SPORT_FONT}`;
+  ctx.fillText(value, x, y);
+  const vw = ctx.measureText(value).width;
+  if (unit) {
+    ctx.fillStyle = highContrast ? P.accent : P.muted;
+    ctx.font = `600 18px ${FONT}`;
+    ctx.fillText(unit, x + vw + 6, y - 2);
+  }
+  ctx.fillStyle = highContrast ? P.faint : P.muted;
+  ctx.font = `500 18px ${FONT}`;
+  ctx.fillText(fitText(ctx, label, w), x, y + 28);
+}
+
+function drawSyntheticPhoto(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, P, highContrast: boolean) {
+  ctx.save();
+  roundRectPath(ctx, x, y, w, h, 14);
+  ctx.clip();
+  const sky = ctx.createLinearGradient(0, y, 0, y + h);
+  sky.addColorStop(0, highContrast ? rgba(P.accent, 0.32) : rgba(P.accent, 0.22));
+  sky.addColorStop(1, P.panel);
+  ctx.fillStyle = sky;
+  ctx.fillRect(x, y, w, h);
+  ctx.beginPath();
+  ctx.arc(x + w * 0.76, y + h * 0.27, h * 0.12, 0, Math.PI * 2);
+  ctx.fillStyle = P.amber;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x, y + h);
+  ctx.lineTo(x + w * 0.28, y + h * 0.36);
+  ctx.lineTo(x + w * 0.52, y + h * 0.76);
+  ctx.lineTo(x + w * 0.72, y + h * 0.48);
+  ctx.lineTo(x + w, y + h);
+  ctx.closePath();
+  ctx.fillStyle = highContrast ? P.text : P.accent;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(x + w * 0.38, y + h);
+  ctx.lineTo(x + w * 0.64, y + h * 0.54);
+  ctx.lineTo(x + w, y + h * 0.86);
+  ctx.lineTo(x + w, y + h);
+  ctx.closePath();
+  ctx.fillStyle = highContrast ? P.accent : P.muted;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawActivityCard(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
+  const x = M, y = 566, w = W - M * 2, h = 500;
+  drawPanel(ctx, P, highContrast, x, y, w, h);
+  drawCardHeading(ctx, P, highContrast, x, y, w, t('promo.aTitle'), t('promo.aPill'));
+
+  const left = x + 78, right = x + w - 78, top = y + 132, bottom = y + 306;
+  ctx.font = `600 18px ${FONT}`;
+  ctx.fillStyle = P.accent;
+  ctx.fillText(t('promo.aElevation'), left, y + 96);
+  ctx.fillStyle = P.amber;
+  ctx.fillText(t('promo.aSpeed'), left + 132, y + 96);
+  ctx.strokeStyle = highContrast ? rgba(P.text, 0.2) : P.grid;
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 3; i++) {
+    const gy = top + (bottom - top) * i / 3;
+    ctx.beginPath();
+    ctx.moveTo(left, gy);
+    ctx.lineTo(right, gy);
+    ctx.stroke();
+  }
+  ctx.fillStyle = P.faint;
+  ctx.font = `500 15px ${MONO}`;
+  ctx.textAlign = 'right';
+  ctx.fillText('1,240 m', left - 12, top + 5);
+  ctx.fillText('800 m', left - 12, bottom + 5);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = P.amber;
+  ctx.fillText('32 km/h', right + 12, top + 5);
+  ctx.fillText('0', right + 12, bottom + 5);
+
+  const elevation = [0.2, 0.34, 0.29, 0.52, 0.68, 0.61, 0.84, 0.74, 0.93, 0.79, 0.88, 0.96];
+  const speed = [0.22, 0.4, 0.34, 0.57, 0.48, 0.66, 0.54, 0.78, 0.62, 0.86, 0.7, 0.9];
+  const points = (values: number[]) => values.map((v, i) => {
+    const px = left + (right - left) * i / (values.length - 1);
+    const py = bottom - v * (bottom - top);
+    return [px, py] as [number, number];
+  });
+  const elevPts = points(elevation);
+  const speedPts = points(speed);
+  const fill = ctx.createLinearGradient(0, top, 0, bottom);
+  fill.addColorStop(0, rgba(P.accent, highContrast ? 0.2 : 0.16));
+  fill.addColorStop(1, rgba(P.accent, 0));
+  ctx.beginPath();
+  ctx.moveTo(left, bottom);
+  elevPts.forEach(([px, py]) => ctx.lineTo(px, py));
+  ctx.lineTo(right, bottom);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+  for (const [series, color] of [[elevPts, P.accent], [speedPts, P.amber]] as const) {
+    smoothPath(ctx, series);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 4;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+  elevPts.forEach(([px, py], i) => {
+    if (i % 3) return;
+    ctx.beginPath();
+    ctx.arc(px, py, 5, 0, Math.PI * 2);
+    ctx.fillStyle = P.panel;
+    ctx.fill();
+    ctx.strokeStyle = P.accent;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  });
+
+  drawChips(ctx, P, highContrast, [t('promo.aHike'), t('promo.aBike'), t('promo.aRun'), t('promo.aDrive')], x + 38, y + 350, w - 76);
+  const sw = (w - 76) / 3;
+  drawStat(ctx, P, highContrast, '8.6', 'km', t('promo.aDistance'), x + 38, y + 430, sw - 18);
+  drawStat(ctx, P, highContrast, '642', 'm', t('promo.aAscent'), x + 38 + sw, y + 430, sw - 18);
+  drawStat(ctx, P, highContrast, '28.4', 'km/h', t('promo.aMaxSpeed'), x + 38 + sw * 2, y + 430, sw - 18);
+}
+
+function drawRecapCard(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
+  const x = M, y = 566, w = W - M * 2, h = 500;
+  drawPanel(ctx, P, highContrast, x, y, w, h);
+  drawCardHeading(ctx, P, highContrast, x, y, w, t('promo.rTitle'), t('promo.rExport'));
+
+  const vx = x + 38, vy = y + 88, vw = w - 76, vh = 264;
+  ctx.save();
+  roundRectPath(ctx, vx, vy, vw, vh, 20);
+  ctx.clip();
+  ctx.fillStyle = P.panel;
+  ctx.fillRect(vx, vy, vw, vh);
+  drawMapTexture(ctx, vx, vy, vw, vh, P, highContrast);
+  const route = [[vx + 96, vy + 184], [vx + 228, vy + 124], [vx + 382, vy + 166], [vx + 548, vy + 96], [vx + 730, vy + 146]];
+  smoothPath(ctx, route);
+  ctx.strokeStyle = rgba(P.accent, 0.18);
+  ctx.lineWidth = 18;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  smoothPath(ctx, route);
+  ctx.strokeStyle = P.accent;
+  ctx.lineWidth = 4;
+  ctx.stroke();
+  route.forEach(([px, py], i) => {
+    ctx.beginPath();
+    ctx.arc(px, py, i === 0 || i === route.length - 1 ? 10 : 7, 0, Math.PI * 2);
+    ctx.fillStyle = i === route.length - 1 ? P.amber : P.accent;
+    ctx.fill();
+    ctx.strokeStyle = P.panel;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  });
+
+  roundRectPath(ctx, vx + 34, vy + 28, 236, 58, 12);
+  ctx.fillStyle = P.panel;
+  ctx.fill();
+  ctx.strokeStyle = highContrast ? P.text : P.grid;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.textAlign = 'left';
+  ctx.fillStyle = P.accent;
+  ctx.font = `700 15px ${FONT}`;
+  ctx.fillText(t('promo.rNodeLabel'), vx + 50, vy + 51);
+  ctx.fillStyle = P.text;
+  ctx.font = `500 17px ${FONT}`;
+  ctx.fillText(fitText(ctx, t('promo.rNoteText'), 204), vx + 50, vy + 75);
+  drawSyntheticPhoto(ctx, vx + vw - 218, vy + 26, 184, 104, P, highContrast);
+
+  const cx = vx + vw * 0.51, cy = vy + 164;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 39, 0, Math.PI * 2);
+  ctx.fillStyle = rgba(P.panel, 0.88);
+  ctx.fill();
+  ctx.strokeStyle = P.accent;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(cx - 7, cy - 13);
+  ctx.lineTo(cx + 15, cy);
+  ctx.lineTo(cx - 7, cy + 13);
+  ctx.closePath();
+  ctx.fillStyle = P.accent;
+  ctx.fill();
+
+  const tlY = vy + 226;
+  ctx.strokeStyle = highContrast ? P.text : P.grid;
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(vx + 44, tlY);
+  ctx.lineTo(vx + vw - 44, tlY);
+  ctx.stroke();
+  ctx.strokeStyle = P.accent;
+  ctx.beginPath();
+  ctx.moveTo(vx + 44, tlY);
+  ctx.lineTo(vx + vw * 0.64, tlY);
+  ctx.stroke();
+  for (const [px, color] of [[vx + 44, P.accent], [vx + vw * 0.38, P.accent], [vx + vw * 0.64, P.amber], [vx + vw - 44, P.faint]] as const) {
+    ctx.beginPath();
+    ctx.arc(px, tlY, 6, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+  ctx.fillStyle = P.muted;
+  ctx.font = `600 15px ${MONO}`;
+  ctx.textAlign = 'right';
+  ctx.fillText('00:18 / 00:42', vx + vw - 44, vy + 252);
+  ctx.restore();
+
+  const items = [
+    ['01', t('promo.rNodes'), t('promo.rNodesDesc')],
+    ['02', t('promo.rNotes'), t('promo.rNotesDesc')],
+    ['03', t('promo.rPhotos'), t('promo.rPhotosDesc')]
+  ];
+  const iw = (w - 76) / 3;
+  items.forEach(([n, title, desc], i) => {
+    const ix = x + 38 + i * iw;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = P.accent;
+    ctx.font = `700 17px ${MONO}`;
+    ctx.fillText(n, ix, y + 396);
+    ctx.fillStyle = P.text;
+    ctx.font = `700 23px ${FONT}`;
+    ctx.fillText(title, ix + 38, y + 396);
+    ctx.fillStyle = highContrast ? P.faint : P.muted;
+    ctx.font = `500 18px ${FONT}`;
+    ctx.fillText(fitText(ctx, desc, iw - 48), ix + 38, y + 426);
+  });
+  ctx.fillStyle = highContrast ? P.faint : P.muted;
+  ctx.font = `500 18px ${FONT}`;
+  ctx.fillText(t('promo.rMusic'), x + 38, y + 466);
+}
+
+function drawRecoveryCard(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
+  const x = M, y = 566, w = W - M * 2, h = 500;
+  drawPanel(ctx, P, highContrast, x, y, w, h);
+  drawCardHeading(ctx, P, highContrast, x, y, w, t('promo.gTitle'), t('promo.gPill'));
+  drawChips(ctx, P, highContrast, [t('promo.gBackground'), t('promo.gRelocated'), t('promo.gSegment')], x + 38, y + 82, w - 76);
+
+  const mapY = y + 148, mapH = 184;
+  drawMapTexture(ctx, x + 24, mapY, w - 48, mapH, P, highContrast);
+  const gapLeft = x + 330, gapRight = x + 606;
+  ctx.fillStyle = rgba(P.amber, highContrast ? 0.12 : 0.08);
+  ctx.fillRect(gapLeft, mapY + 8, gapRight - gapLeft, mapH - 16);
+  ctx.save();
+  ctx.setLineDash([7, 8]);
+  ctx.strokeStyle = rgba(P.amber, 0.65);
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(gapLeft, mapY + 8);
+  ctx.lineTo(gapLeft, mapY + mapH - 8);
+  ctx.moveTo(gapRight, mapY + 8);
+  ctx.lineTo(gapRight, mapY + mapH - 8);
+  ctx.stroke();
+  ctx.restore();
+
+  const before = [[x + 86, mapY + 124], [x + 170, mapY + 90], [x + 254, mapY + 112], [gapLeft, mapY + 72]];
+  const after = [[gapRight, mapY + 118], [x + 704, mapY + 88], [x + 806, mapY + 54], [x + 884, mapY + 76]];
+  for (const segment of [before, after]) {
+    smoothPath(ctx, segment);
+    ctx.strokeStyle = rgba(P.accent, 0.18);
+    ctx.lineWidth = 16;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    smoothPath(ctx, segment);
+    ctx.strokeStyle = P.accent;
+    ctx.lineWidth = 4;
+    ctx.stroke();
+  }
+  for (const [px, py] of [before[0], before[before.length - 1], after[0], after[after.length - 1]]) {
+    ctx.beginPath();
+    ctx.arc(px, py, 9, 0, Math.PI * 2);
+    ctx.fillStyle = P.panel;
+    ctx.fill();
+    ctx.strokeStyle = P.accent;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
+  ctx.textAlign = 'center';
+  ctx.fillStyle = P.amber;
+  ctx.font = `700 21px ${FONT}`;
+  ctx.fillText(t('promo.gGap'), (gapLeft + gapRight) / 2, mapY + 80);
+  ctx.fillStyle = P.muted;
+  ctx.font = `500 17px ${FONT}`;
+  ctx.fillText(t('promo.gNoData'), (gapLeft + gapRight) / 2, mapY + 108);
+  ctx.fillStyle = P.accent;
+  ctx.font = `700 18px ${FONT}`;
+  ctx.fillText(t('promo.gRestored'), gapRight + 74, mapY + 158);
+  ctx.textAlign = 'left';
+
+  const ry = y + 352;
+  roundRectPath(ctx, x + 38, ry, w - 76, 62, 16);
+  ctx.fillStyle = highContrast ? rgba(P.accent, 0.1) : P.accentSoft;
+  ctx.fill();
+  ctx.strokeStyle = highContrast ? P.text : P.accentLine;
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  featureGlyph(ctx, 'route', x + 56, ry + 17, 28, P.accent);
+  ctx.fillStyle = P.text;
+  ctx.font = `700 21px ${FONT}`;
+  ctx.fillText(t('promo.gRepair'), x + 98, ry + 28);
+  ctx.fillStyle = P.muted;
+  ctx.font = `500 18px ${FONT}`;
+  ctx.fillText(t('promo.gRepairValue'), x + 98, ry + 51);
+
+  const sw = (w - 76) / 3;
+  drawStat(ctx, P, highContrast, '1,284', '', t('promo.gStatPoints'), x + 38, y + 446, sw - 18);
+  drawStat(ctx, P, highContrast, '3', '', t('promo.gStatSegments'), x + 38 + sw, y + 446, sw - 18);
+  drawStat(ctx, P, highContrast, '100%', '', t('promo.gStatLocal'), x + 38 + sw * 2, y + 446, sw - 18);
+}
+
+function drawCityCard(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
+  const x = M, y = 566, w = W - M * 2, h = 500;
+  drawPanel(ctx, P, highContrast, x, y, w, h);
+  drawCardHeading(ctx, P, highContrast, x, y, w, t('promo.cTitle'), t('promo.cPill'));
+
+  const mx = x + 18, my = y + 80, mw = w - 36, mh = 316;
+  ctx.save();
+  roundRectPath(ctx, mx, my, mw, mh, 20);
+  ctx.clip();
+  ctx.fillStyle = highContrast ? rgba(P.accent, 0.035) : P.cellBg;
+  ctx.fillRect(mx, my, mw, mh);
+  const roads = [
+    [[mx - 30, my + 58], [mx + mw + 20, my + 208]],
+    [[mx + 96, my - 20], [mx + 318, my + mh + 20]],
+    [[mx + 488, my - 20], [mx + 676, my + mh + 20]],
+    [[mx - 20, my + 244], [mx + mw + 20, my + 72]],
+    [[mx - 20, my + 282], [mx + mw + 20, my + 282]]
+  ];
+  roads.forEach((road, i) => {
+    smoothPath(ctx, road);
+    ctx.strokeStyle = highContrast ? rgba(P.text, 0.16) : P.grid;
+    ctx.lineWidth = i < 3 ? 13 : 8;
+    ctx.stroke();
+    smoothPath(ctx, road);
+    ctx.strokeStyle = highContrast ? rgba(P.text, 0.28) : rgba(P.muted, 0.18);
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+  });
+  const blocks = [
+    [mx + 42, my + 30, 94, 58], [mx + 172, my + 22, 104, 82], [mx + 364, my + 36, 86, 64],
+    [mx + 530, my + 28, 112, 74], [mx + 720, my + 30, 126, 62], [mx + 54, my + 132, 82, 68],
+    [mx + 348, my + 132, 104, 74], [mx + 548, my + 144, 90, 66], [mx + 734, my + 136, 108, 72],
+    [mx + 188, my + 224, 116, 54], [mx + 402, my + 236, 96, 48], [mx + 662, my + 224, 132, 44]
+  ];
+  blocks.forEach(([bx, by, bw, bh], i) => {
+    roundRectPath(ctx, bx, by, bw, bh, 8);
+    ctx.fillStyle = i % 3 === 0 ? P.accentSoft : (highContrast ? rgba(P.text, 0.05) : P.panel);
+    ctx.fill();
+    ctx.strokeStyle = highContrast ? rgba(P.text, 0.12) : P.grid;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  });
+  const cities = [[0.18, 0.35], [0.36, 0.68], [0.54, 0.3], [0.7, 0.58], [0.84, 0.25], [0.9, 0.74]];
+  const cityPts = cities.map(([px, py]) => [mx + mw * px, my + mh * py] as [number, number]);
+  smoothPath(ctx, cityPts);
+  ctx.strokeStyle = rgba(P.accent, 0.34);
+  ctx.lineWidth = 2.5;
+  ctx.setLineDash([7, 9]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  cityPts.forEach(([cx, cy], i) => {
+    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, 42);
+    glow.addColorStop(0, rgba(i % 2 ? P.amber : P.accent, 0.32));
+    glow.addColorStop(1, rgba(i % 2 ? P.amber : P.accent, 0));
+    ctx.fillStyle = glow;
+    ctx.fillRect(cx - 42, cy - 42, 84, 84);
+    ctx.beginPath();
+    ctx.arc(cx, cy, 12, 0, Math.PI * 2);
+    ctx.fillStyle = P.panel;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+    ctx.fillStyle = i % 2 ? P.amber : P.accent;
+    ctx.fill();
+    ctx.fillStyle = P.text;
+    ctx.font = `700 14px ${MONO}`;
+    ctx.textAlign = 'center';
+    ctx.fillText(String(i + 1).padStart(2, '0'), cx, cy + 30);
+  });
+  ctx.textAlign = 'left';
+  ctx.fillStyle = P.muted;
+  ctx.font = `600 17px ${FONT}`;
+  ctx.fillText(t('promo.cMapLabel'), mx + 24, my + 30);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = P.text;
+  ctx.font = `700 20px ${SPORT_FONT}`;
+  ctx.fillText(t('promo.cCities', { n: 12 }), mx + mw - 24, my + 30);
+  ctx.restore();
+
+  const musicY = y + 414;
+  roundRectPath(ctx, x + 38, musicY, 54, 54, 16);
+  ctx.fillStyle = highContrast ? P.accent : P.accentSoft;
+  ctx.fill();
+  featureGlyph(ctx, 'music', x + 50, musicY + 13, 30, highContrast ? P.panel : P.accent);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = P.text;
+  ctx.font = `700 22px ${FONT}`;
+  ctx.fillText(t('promo.cMusic'), x + 110, musicY + 23);
+  ctx.fillStyle = P.muted;
+  ctx.font = `500 17px ${FONT}`;
+  ctx.fillText(fitText(ctx, t('promo.cMusicDesc'), 540), x + 110, musicY + 48);
+  const bars = [14, 28, 20, 38, 26, 34, 18, 30];
+  bars.forEach((height, i) => {
+    const bx = x + w - 206 + i * 19;
+    roundRectPath(ctx, bx, musicY + 43 - height, 9, height, 4.5);
+    ctx.fillStyle = i % 2 ? P.amber : P.accent;
+    ctx.fill();
+  });
+}
+
+function drawPrivacyCard(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
+  const x = M, y = 566, w = W - M * 2, h = 500;
+  drawPanel(ctx, P, highContrast, x, y, w, h);
+  drawCardHeading(ctx, P, highContrast, x, y, w, t('promo.pTitle'), t('promo.pPill'));
+
+  const mx = x + 38, my = y + 94, mw = 500, mh = 292;
+  ctx.save();
+  roundRectPath(ctx, mx, my, mw, mh, 20);
+  ctx.clip();
+  ctx.fillStyle = highContrast ? rgba(P.accent, 0.04) : P.cellBg;
+  ctx.fillRect(mx, my, mw, mh);
+  drawMapTexture(ctx, mx, my, mw, mh, P, highContrast);
+  const route = [[mx + 64, my + 220], [mx + 152, my + 164], [mx + 244, my + 190], [mx + 336, my + 112], [mx + 438, my + 72]];
+  smoothPath(ctx, route);
+  ctx.strokeStyle = rgba(P.text, highContrast ? 0.16 : 0.1);
+  ctx.lineWidth = 5;
+  ctx.setLineDash([5, 9]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  const visible = [[mx + 148, my + 168], [mx + 244, my + 190], [mx + 336, my + 112], [mx + 356, my + 103]];
+  smoothPath(ctx, visible);
+  ctx.strokeStyle = P.accent;
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  ctx.stroke();
+  for (const [cx, cy] of [[mx + 64, my + 220], [mx + 438, my + 72]]) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, 72, 0, Math.PI * 2);
+    ctx.fillStyle = rgba(P.accent, highContrast ? 0.12 : 0.08);
+    ctx.fill();
+    ctx.strokeStyle = P.accent;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([7, 7]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    drawLock(ctx, cx - 12, cy - 12, 24, P.accent);
+  }
+  ctx.beginPath();
+  ctx.arc(mx + 244, my + 190, 12, 0, Math.PI * 2);
+  ctx.fillStyle = P.panel;
+  ctx.fill();
+  ctx.strokeStyle = P.amber;
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.fillStyle = P.amber;
+  ctx.font = `700 14px ${FONT}`;
+  ctx.textAlign = 'center';
+  ctx.fillText(t('promo.pSensitiveShort'), mx + 244, my + 224);
+  ctx.fillStyle = P.muted;
+  ctx.font = `600 16px ${FONT}`;
+  ctx.fillText(t('promo.pMapNote'), mx + mw / 2, my + mh - 20);
+  ctx.restore();
+
+  const items = [
+    t('promo.pCircle'), t('promo.pLocal'), t('promo.pBackup'), t('promo.pSensitive')
+  ];
+  ctx.textAlign = 'left';
+  ctx.fillStyle = P.text;
+  ctx.font = `700 22px ${FONT}`;
+  ctx.fillText(t('promo.pCheck'), x + 574, y + 116);
+  items.forEach((label, i) => {
+    const iy = y + 148 + i * 62;
+    ctx.beginPath();
+    ctx.arc(x + 590, iy - 7, 14, 0, Math.PI * 2);
+    ctx.fillStyle = highContrast ? P.accent : P.accentSoft;
+    ctx.fill();
+    ctx.strokeStyle = highContrast ? P.accent : P.accentLine;
+    ctx.lineWidth = 1.4;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x + 584, iy - 7);
+    ctx.lineTo(x + 589, iy - 2);
+    ctx.lineTo(x + 597, iy - 13);
+    ctx.strokeStyle = highContrast ? P.panel : P.accent;
+    ctx.lineWidth = 2.4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.fillStyle = P.text;
+    ctx.font = `600 20px ${FONT}`;
+    ctx.fillText(fitText(ctx, label, w - 612), x + 616, iy);
+  });
+
+  ctx.strokeStyle = highContrast ? P.text : P.grid;
+  ctx.lineWidth = highContrast ? 2 : 1;
+  ctx.beginPath();
+  ctx.moveTo(x + 38, y + 416);
+  ctx.lineTo(x + w - 38, y + 416);
+  ctx.stroke();
+  ctx.fillStyle = P.accent;
+  ctx.font = `700 21px ${FONT}`;
+  ctx.fillText(t('promo.pBottom'), x + 38, y + 456);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = P.muted;
+  ctx.font = `600 18px ${MONO}`;
+  ctx.fillText(t('promo.pNoAccount'), x + w - 38, y + 456);
+  ctx.textAlign = 'left';
+}
+
 function drawNoteLine(ctx: CanvasRenderingContext2D, P, text: string) {
   ctx.textAlign = 'center';
   ctx.fillStyle = P.muted;
@@ -710,7 +1291,8 @@ function drawNoteLine(ctx: CanvasRenderingContext2D, P, text: string) {
 }
 
 export function promoCaption(variant = 0): string {
-  const key = variant === 0 ? 'promo.caption' : `promo.caption${variant + 1}`;
+  const v = normalizeVariant(variant);
+  const key = v === 0 ? 'promo.caption' : `promo.caption${v + 1}`;
   return t(key, { url: SITE_URL });
 }
 
@@ -723,46 +1305,36 @@ export async function generatePromo(variant = pickPromoVariant()): Promise<{ blo
   canvas.height = H;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D unavailable');
-  const v = Math.max(0, Math.min(VARIANT_COUNT - 1, Math.trunc(variant) || 0));
+  const v = normalizeVariant(variant);
 
   drawBackground(ctx, P, highContrast);
   drawHeader(ctx, P, highContrast);
 
-  if (v === 1) {
-    drawHeroCopy(ctx, P, highContrast, {
-      eyebrow: t('promo.yEyebrow'),
-      l1: t('promo.yHeadline1'),
-      l2: t('promo.yHeadline2'),
-      s1: t('promo.ySub1'),
-      s2: t('promo.ySub2')
-    });
-    drawYearCard(ctx, P, highContrast);
-    drawNoteLine(ctx, P, t('promo.yNote'));
-  } else if (v === 2) {
-    drawHeroCopy(ctx, P, highContrast, {
-      eyebrow: t('promo.mEyebrow'),
-      l1: t('promo.mHeadline1'),
-      l2: t('promo.mHeadline2'),
-      s1: t('promo.mSub1'),
-      s2: t('promo.mSub2')
-    });
-    drawMeetCard(ctx, P, highContrast);
-    drawNoteLine(ctx, P, t('promo.mNote'));
-  } else {
-    drawHeroCopy(ctx, P, highContrast, {
-      eyebrow: t('promo.eyebrow'),
-      l1: t('promo.headline1'),
-      l2: t('promo.headline2'),
-      s1: t('promo.sub1'),
-      s2: t('promo.sub2')
-    });
-    drawRouteCard(ctx, P, highContrast);
-    drawFeatures(ctx, P, highContrast);
+  const heroKeys = [
+    ['eyebrow', 'headline1', 'headline2', 'sub1', 'sub2'],
+    ['yEyebrow', 'yHeadline1', 'yHeadline2', 'ySub1', 'ySub2'],
+    ['mEyebrow', 'mHeadline1', 'mHeadline2', 'mSub1', 'mSub2'],
+    ['aEyebrow', 'aHeadline1', 'aHeadline2', 'aSub1', 'aSub2'],
+    ['rEyebrow', 'rHeadline1', 'rHeadline2', 'rSub1', 'rSub2'],
+    ['gEyebrow', 'gHeadline1', 'gHeadline2', 'gSub1', 'gSub2'],
+    ['cEyebrow', 'cHeadline1', 'cHeadline2', 'cSub1', 'cSub2'],
+    ['pEyebrow', 'pHeadline1', 'pHeadline2', 'pSub1', 'pSub2']
+  ][v].map((key) => t(`promo.${key}`));
+  drawHeroCopy(ctx, P, highContrast, {
+    eyebrow: heroKeys[0], l1: heroKeys[1], l2: heroKeys[2], s1: heroKeys[3], s2: heroKeys[4]
+  });
+
+  const cards = [drawRouteCard, drawYearCard, drawMeetCard, drawActivityCard, drawRecapCard, drawRecoveryCard, drawCityCard, drawPrivacyCard];
+  cards[v](ctx, P, highContrast);
+  if (v === 0) drawFeatures(ctx, P, highContrast);
+  else {
+    const noteKeys = ['', 'yNote', 'mNote', 'aNote', 'rNote', 'gNote', 'cNote', 'pNote'];
+    drawNoteLine(ctx, P, t(`promo.${noteKeys[v]}`));
   }
   drawFooter(ctx, P, highContrast);
 
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png');
   });
-  return { blob, filename: `trackmint-promo-${v + 1}-${Date.now()}.png`, variant: v, caption: promoCaption(v) };
+  return { blob, filename: `roametch-promo-${v + 1}-${Date.now()}.png`, variant: v, caption: promoCaption(v) };
 }

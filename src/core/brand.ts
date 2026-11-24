@@ -2,7 +2,7 @@
 import qrcode from 'qrcode-generator';
 import { t } from './i18n';
 
-export const SITE_URL = 'https://peteliao.github.io/TrackMint/';
+export const SITE_URL = 'https://peteliao.github.io/RoamEtch/';
 export const SPORT_FONT = '"Barlow Condensed", "Bahnschrift", "DIN Alternate", system-ui, sans-serif';
 
 let fontsLoading: Promise<any> | null = null;

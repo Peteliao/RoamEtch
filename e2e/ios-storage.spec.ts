@@ -27,5 +27,5 @@ test('iOS browser shows a closable storage eviction warning', async ({ page }) =
   await expect(page.locator('#view-analysis.active')).toBeVisible({ timeout: 30_000 });
   await gotoTab(page, 'trips');
   await expect(page.locator('.ios-storage-nudge')).toBeHidden();
-  expect(await page.evaluate(() => localStorage.getItem('trackmint.iosStorageNudge.v1'))).toBeTruthy();
+  expect(await page.evaluate(() => localStorage.getItem('roametch.iosStorageNudge.v1'))).toBeTruthy();
 });

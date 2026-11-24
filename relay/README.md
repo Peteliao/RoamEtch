@@ -1,10 +1,10 @@
-# TrackMint blind relay / 极简盲中继
+# RoamEtch blind relay / 极简盲中继
 
-A ~120-line Node.js WebSocket relay for TrackMint live meetups. It forwards opaque
+A ~120-line Node.js WebSocket relay for RoamEtch live meetups. It forwards opaque
 AES-256-GCM envelopes between clients in the same room, keeps no history, and never
 sees the invite secret, plaintext positions, chat text, or photos.
 
-一个约 120 行的 Node.js WebSocket 中继，用于 TrackMint 实时组队。它只在同一
+一个约 120 行的 Node.js WebSocket 中继，用于 RoamEtch 实时组队。它只在同一
 房间内转发 AES-256-GCM 密文，不落盘、不记录消息内容，也拿不到邀请密钥、明文位置、
 聊天文字或图片。
 
@@ -20,22 +20,22 @@ npm start
 Docker:
 
 ```bash
-docker build -t trackmint-relay ./relay
-docker run --rm -p 8080:8080 trackmint-relay
+docker build -t roametch-relay ./relay
+docker run --rm -p 8080:8080 roametch-relay
 ```
 
-Then open TrackMint **Settings → Team relay → Custom WS relay**, choose WebSocket,
+Then open RoamEtch **Settings → Team relay → Custom WS relay**, choose WebSocket,
 and set:
 
 ```text
 wss://your-relay.example.com/room/{room}
 ```
 
-The `{room}` placeholder is required; TrackMint replaces it with the random 128-bit
+The `{room}` placeholder is required; RoamEtch replaces it with the random 128-bit
 public room id parsed from the invite, never with the invite secret. The relay must
 keep the URL path exactly as `/room/<id>`.
 
-在 TrackMint「设置 → 组队中继」中选择自建 WS 中继，并填入包含 `{room}` 的地址。
+在 RoamEtch「设置 → 组队中继」中选择自建 WS 中继，并填入包含 `{room}` 的地址。
 `{room}` 会替换为邀请中随机生成的 128 位公共房间标识，不会包含邀请密钥。
 
 ## Production notes / 部署提示

@@ -57,7 +57,7 @@ describe('meetup invites', () => {
   it('accepts canonical tokens, invite links and whitespace, but not v1 codes', () => {
     expect(normalizeMeetInvite(DEMO_INVITE)).toBe(DEMO_INVITE);
     expect(normalizeMeetInvite(`  ${DEMO_INVITE.slice(0, 20)}\n${DEMO_INVITE.slice(20)}  `)).toBe(DEMO_INVITE);
-    expect(normalizeMeetInvite(`https://example.com/TrackMint/#meet=${DEMO_INVITE}`)).toBe(DEMO_INVITE);
+    expect(normalizeMeetInvite(`https://example.com/RoamEtch/#meet=${DEMO_INVITE}`)).toBe(DEMO_INVITE);
     expect(normalizeMeetInvite(`#meet=${DEMO_INVITE}`)).toBe(DEMO_INVITE);
     expect(normalizeMeetInvite(DEMO_INVITE.toLowerCase())).toBe('');
     expect(normalizeMeetInvite('ABCD-EFGH-JKMN')).toBe('');
@@ -74,11 +74,11 @@ describe('meetup invites', () => {
   it('builds and parses fragment invites without lowering the secret', () => {
     vi.stubGlobal('location', {
       origin: 'https://example.com',
-      pathname: '/TrackMint/',
+      pathname: '/RoamEtch/',
       search: '?x=1'
     });
     const link = meetLinkFor(DEMO_INVITE);
-    expect(link).toBe(`https://example.com/TrackMint/?x=1#meet=${DEMO_INVITE}`);
+    expect(link).toBe(`https://example.com/RoamEtch/?x=1#meet=${DEMO_INVITE}`);
     expect(parseMeetFragment(`#meet=${DEMO_INVITE}`)).toBe(DEMO_INVITE);
     expect(parseMeetFragment(`#meet=${encodeURIComponent(DEMO_INVITE)}`)).toBe(DEMO_INVITE);
     expect(parseMeetFragment('#meet=ABCD-EFGH-JKMN')).toBe('');

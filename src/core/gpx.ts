@@ -73,7 +73,7 @@ const iso = (t) => (t ? new Date(t).toISOString() : '');
 
 export function buildGPX(full) {
   const { trip, segments, waypoints } = full;
-  let out = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="TrackMint" xmlns="http://www.topografix.com/GPX/1/1">\n`;
+  let out = `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="RoamEtch" xmlns="http://www.topografix.com/GPX/1/1">\n`;
   out += `  <metadata><name>${esc(trip.name)}</name><time>${iso(trip.createdAt)}</time></metadata>\n`;
   for (const w of waypoints) {
     if (w.hidden) continue;

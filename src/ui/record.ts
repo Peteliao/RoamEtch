@@ -2,7 +2,7 @@
 import { t, currentLang } from '../core/i18n';
 import { get, set } from '../core/settings';
 import { on, emit } from '../core/events';
-import { rec, startRecording, pauseRecording, resumeRecording, stopRecording, continueTrip, findRecoverableTrip, createManualTrip, retryGeolocation, setRecordingActivity, flushBuffer } from '../core/recorder';
+import { rec, startRecording, pauseRecording, resumeRecording, stopRecording, continueTrip, findRecoverableTrip, retryGeolocation, setRecordingActivity, flushBuffer } from '../core/recorder';
 import { armKeepAlive, disarmKeepAlive, isKeepAliveActive } from '../core/keepalive';
 import { requestWakeLock, releaseWakeLock } from '../core/wakelock';
 import { setThemeColorOverride, setThemeModeOverride } from '../core/theme';
@@ -636,8 +636,7 @@ export function createRecordView() {
       activitySel.className = 'rec-pill select';
       btnRow.append(
         activitySel,
-        el('button', { class: 'rec-pill start', onclick: onStart }, icon('play', 17), t('record.start')),
-        el('button', { class: 'rec-pill ghost', onclick: onManual }, icon('plus', 15), t('record.manualShort'))
+        el('button', { class: 'rec-pill start', onclick: onStart }, icon('play', 17), t('record.start'))
       );
     } else if (rec.status === 'recording') {
       renderAutoTag();
@@ -710,13 +709,6 @@ export function createRecordView() {
       return false;
     });
     if (!ok) disarmKeepAlive();
-  }
-  async function onManual() {
-    const trip = await createManualTrip();
-    await setActiveTrip(trip.id);
-    map.fitTrack();
-    toast(t('record.permissionDenied'), 'info', 4000);
-    renderButtons();
   }
   function suggestedTripName(full) {
     const tr = full?.trip;

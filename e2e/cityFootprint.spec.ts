@@ -43,7 +43,7 @@ test('city footprint asks for consent, lights the map and reaches the share imag
   await expect(card.locator('.city-footprint-marker')).toHaveCount(1);
   expect(geocodeRequests).toBeGreaterThan(beforeConsent);
   await expect(card.locator('.footprint-city-list')).toContainText('杭州');
-  expect(await page.evaluate(() => localStorage.getItem('trackmint.cityFootprintConsent.v1'))).toBe('yes');
+  expect(await page.evaluate(() => localStorage.getItem('roametch.cityFootprintConsent.v1'))).toBe('yes');
 
   await page.evaluate(() => {
     const probe: any = { cityLabels: 0, videoCityLabels: 0, audioContexts: 0, imageArcs: [] };
@@ -76,7 +76,7 @@ test('city footprint asks for consent, lights the map and reaches the share imag
   await expect(page.locator('.promo-preview-img')).toBeVisible({ timeout: 60_000 });
   await expect.poll(() => page.evaluate(() => (window as any).__footprintDrawProbe.cityLabels)).toBeGreaterThan(0);
   const marker = await page.evaluate(async () => {
-    const cached = JSON.parse(localStorage.getItem('trackmint.cities.v1') || '{}');
+    const cached = JSON.parse(localStorage.getItem('roametch.cities.v1') || '{}');
     const city = Object.values(cached)[0] as any;
     const coordsUrl = '/src/core/coords.ts';
     const mapUrl = '/src/core/mapPaint.ts';

@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        TrackMint deliberately stays a static, offline-first PWA with no account
+        RoamEtch deliberately stays a static, offline-first PWA with no account
         service, cloud trip library, telemetry, or framework. Proposals that keep
         that shape are easiest to accept.
   - type: textarea
@@ -50,7 +50,7 @@ body:
     attributes:
       label: Design fit
       options:
-        - label: This can work without a TrackMint backend or account system.
+        - label: This can work without a RoamEtch backend or account system.
           required: true
         - label: This does not add telemetry, remote fonts, or an opaque SDK.
           required: true

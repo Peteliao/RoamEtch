@@ -1,5 +1,5 @@
 /* ============================================================
-   TrackMint UI 2.0 — design tokens & components
+   RoamEtch UI 3.0 — design tokens & components
    OLED-black surfaces, brand green reserved for action/data.
    ============================================================ */
 :root {
@@ -508,7 +508,6 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 }
 .rec-pill:active { transform: scale(0.96); }
 .rec-pill.start { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); padding: 0 26px; }
-.rec-pill.ghost { background: var(--bg-elev); border-style: dashed; box-shadow: none; color: var(--text-dim); }
 .rec-pill.select {
   appearance: none; -webkit-appearance: none; max-width: 124px; padding-right: 28px;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);

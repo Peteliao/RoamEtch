@@ -1,4 +1,4 @@
-// TrackMint迹刻 bootstrap — pure frontend, offline-first, dual-region adaptive.
+// RoamEtch迹刻 bootstrap — pure frontend, offline-first, dual-region adaptive.
 import './styles/main.css';
 import '@fontsource/barlow-condensed/600.css';
 import '@fontsource/barlow-condensed/700.css';

@@ -11,7 +11,7 @@ import { exportDiagLog } from '../core/diag';
 import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
 import { startPlayback, stopPlayback, isPlaying } from '../core/simulator';
 import { setLanguage, currentLang } from '../core/i18n';
-import { generatePromo } from '../core/promo';
+import { generatePromo, nextVariant } from '../core/promo';
 import { setRewalkVoice } from '../core/rewalk';
 import { APP_VERSION } from '../core/version';
 import { exportImage } from '../core/shareEnv';
@@ -177,13 +177,13 @@ export function createSettingsView(navigate) {
         icon('refresh', 14), t('settings.meetBrokerReset'));
       resetBtn.onclick = () => {
         set('meetMqttUrl', '');
-        set('meetMqttPrefix', 'trackmint/v2/meet');
+        set('meetMqttPrefix', 'roametch/v2/meet');
         renderMeetRelayFields();
         toast(t('settings.meetBrokerResetDone'), 'ok', 2200);
       };
       meetRelayFields.append(
         textRow(t('settings.meetBroker'), t('settings.meetBrokerHint'), 'meetMqttUrl', t('settings.meetBrokerAuto')),
-        textRow(t('settings.meetPrefix'), t('settings.meetPrefixHint'), 'meetMqttPrefix', 'trackmint/v2/meet'),
+        textRow(t('settings.meetPrefix'), t('settings.meetPrefixHint'), 'meetMqttPrefix', 'roametch/v2/meet'),
         el('div', { class: 'row wrap', style: { marginTop: '-4px' } }, resetBtn)
       );
     }
@@ -291,7 +291,7 @@ export function createSettingsView(navigate) {
 
   const diagBtn = el('button', { class: 'btn sm' }, icon('download', 14), t('settings.diagLog'));
   diagBtn.onclick = () => {
-    triggerDownload(exportDiagLog(), `localtrace-diag-${Date.now()}.json`);
+    triggerDownload(exportDiagLog(), `roametch-diag-${Date.now()}.json`);
     toast(t('settings.diagLogOk'), 'ok');
   };
 
@@ -407,27 +407,66 @@ export function createSettingsView(navigate) {
     paste();
   }
   function openPromoPreview(blob, filename, caption, variant) {
-    const file = new File([blob], filename, { type: 'image/png' });
-    const canShare = !!navigator.share && !!navigator.canShare?.({ files: [file] });
-    const url = URL.createObjectURL(blob);
-    const img = el('img', { class: 'promo-preview-img', src: url, alt: t('settings.promoPreviewAlt') });
+    let current = { blob, filename, caption, variant };
+    let currentFile = new File([blob], filename, { type: 'image/png' });
+    const canShare = !!navigator.share && !!navigator.canShare?.({ files: [currentFile] });
+    let currentUrl = URL.createObjectURL(blob);
+    let closed = false;
+    const img = el('img', { class: 'promo-preview-img', src: currentUrl, alt: t('settings.promoPreviewAlt') });
     img.dataset.variant = String(variant);
     const copyBtn = el('button', { class: 'btn' }, icon('copy', 16), t('settings.promoCopy'));
+    const nextBtn = el('button', { class: 'btn' }, icon('refresh', 16), t('settings.promoNext'));
     const saveBtn = el('button', { class: `btn ${canShare ? '' : 'primary'}` }, icon('download', 16), t('settings.promoDownload'));
     const shareBtn = canShare
       ? el('button', { class: 'btn primary' }, icon('share', 16), t('settings.promoShare'))
       : null;
+    const setBusy = (busy: boolean) => {
+      nextBtn.disabled = busy;
+      saveBtn.disabled = busy;
+      if (shareBtn) shareBtn.disabled = busy;
+    };
+    const applyPromo = (result: typeof current) => {
+      const nextFile = new File([result.blob], result.filename, { type: 'image/png' });
+      const nextUrl = URL.createObjectURL(result.blob);
+      const previousUrl = currentUrl;
+      current = result;
+      currentFile = nextFile;
+      img.src = nextUrl;
+      img.dataset.variant = String(result.variant);
+      currentUrl = nextUrl;
+      URL.revokeObjectURL(previousUrl);
+    };
     const m = modal({
       title: t('settings.promoPreviewTitle'),
       body: el('div', {},
         el('div', { class: 'small muted promo-preview-note' }, t('settings.promoKeep')),
         img),
-      footer: [copyBtn, saveBtn, shareBtn].filter(Boolean),
-      onClose: () => URL.revokeObjectURL(url)
+      footer: [nextBtn, copyBtn, saveBtn, shareBtn].filter(Boolean),
+      onClose: () => {
+        if (closed) return;
+        closed = true;
+        URL.revokeObjectURL(currentUrl);
+      }
     });
-    copyBtn.onclick = () => copyPromoCaption(caption);
+    copyBtn.onclick = () => copyPromoCaption(current.caption);
+    nextBtn.onclick = async () => {
+      if (closed || nextBtn.disabled) return;
+      const requestedVariant = nextVariant(current.variant);
+      setBusy(true);
+      try {
+        const result = await generatePromo(requestedVariant);
+        if (!closed) applyPromo(result);
+      } catch (err) {
+        if (!closed) {
+          console.error(err);
+          toast(t('settings.promoFailed'), 'err');
+        }
+      } finally {
+        if (!closed) setBusy(false);
+      }
+    };
     saveBtn.onclick = async () => {
-      const res = await exportImage(blob, filename);
+      const res = await exportImage(current.blob, current.filename);
       if (res.mode === 'longpress') {
         img.src = res.dataUrl;
         toast(t('settings.promoLongPress'), 'warn');
@@ -438,7 +477,7 @@ export function createSettingsView(navigate) {
     if (shareBtn) {
       shareBtn.onclick = async () => {
         try {
-          await navigator.share({ title: t('promo.shareTitle'), text: caption, files: [file] });
+          await navigator.share({ title: t('promo.shareTitle'), text: current.caption, files: [currentFile] });
         } catch (e) {
           if (e?.name !== 'AbortError') saveBtn.click();
         }

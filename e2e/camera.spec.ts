@@ -280,7 +280,7 @@ test('quick camera keeps every burst shot and exports the original capture', asy
   await expect(page.getByRole('button', { name: '存原图', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '存原图', exact: true }).click();
   const download = await originalDownload;
-  expect(download.suggestedFilename()).toMatch(/^trackmint-\d{8}-\d{6}\.jpg$/);
+  expect(download.suggestedFilename()).toMatch(/^roametch-\d{8}-\d{6}\.jpg$/);
   const downloadPath = await download.path();
   expect(downloadPath).toBeTruthy();
   expect((await stat(downloadPath!)).size).toBeGreaterThan(0);

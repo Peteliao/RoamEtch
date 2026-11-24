@@ -1,8 +1,35 @@
 # Changelog
 
-All notable changes to TrackMint are documented here. The format follows
+All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
+
+## [3.0.0] - 2026-11-24
+
+### Added
+
+- Eight bilingual, data-free promo variants with preview cycling.
+- Recap videos with nodes, notes, and photos; city footprints, lit maps, and
+  random music.
+
+### Changed
+
+- Rebranded the app as **RoamEtch (迹刻)** and moved the hosted app to
+  `https://peteliao.github.io/RoamEtch/`. Roam means roaming, road trips, and
+  hiking exploration; Etch means etching journeys.
+- Release assets and GHCR images now use `roametch-dist.zip`,
+  `ghcr.io/peteliao/roametch`, and `ghcr.io/peteliao/roametch-relay`. Legacy
+  protocol identifiers remain for compatibility, and older `.trackmint.enc`
+  backups remain restorable alongside new `.roametch.enc` exports.
+
+### Fixed
+
+- Reliable WebRTC originals, offline thumbnail recovery, merged elevation/speed
+  charts, rewalk pronunciation, camera tap-to-focus, and background GPS recovery.
+
+### Removed
+
+- **Record:** manual-create button removed without affecting existing trips.
 
 ## [2.5.0] - 2026-11-24
 
@@ -479,7 +506,7 @@ All notable changes to TrackMint are documented here. The format follows
 
 ### Fixed
 
-- KML exports used an invalid `<color>` value with a space; the TrackMint accent
+- KML exports used an invalid `<color>` value with a space; the RoamEtch accent
   is now written as valid `AABBGGRR`.
 - Tracks beginning at timestamp `0` no longer lose their first interval from
   duration and moving-time calculations.

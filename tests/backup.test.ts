@@ -106,7 +106,7 @@ describe('backup integrity', () => {
   it('wraps an encrypted backup and requires the password to inspect it', async () => {
     const backup = await exportBackup({ password: 'correct horse battery' });
     expect(backup.encrypted).toBe(true);
-    expect(backup.filename).toMatch(/\.trackmint\.enc$/);
+    expect(backup.filename).toMatch(/^roametch-backup-\d{8}\.roametch\.enc$/);
     const bytes = new Uint8Array(await backup.blob.arrayBuffer());
     expect(new TextDecoder().decode(bytes.subarray(0, 8))).toBe('TRKMBKP1');
     await expect(inspectBackup(asFile(backup.blob))).rejects.toMatchObject({ code: 'backup-password-required' });

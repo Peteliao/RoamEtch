@@ -449,7 +449,7 @@ export async function generateFootprintImage(fp): Promise<{ blob: Blob; filename
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png');
   });
-  return { blob, filename: `trackmint-footprint-${fp.year}-${Date.now()}.png` };
+  return { blob, filename: `roametch-footprint-${fp.year}-${Date.now()}.png` };
 }
 
 function drawVideoScene(ctx, fp, P, highContrast, elapsedMs, cityMap) {

@@ -16,7 +16,7 @@ export function diag(category, message, data: any = {}) {
 
 export function exportDiagLog() {
   const payload = {
-    app: 'TrackMint', version: APP_VERSION, exportedAt: new Date().toISOString(),
+    app: 'RoamEtch', version: APP_VERSION, exportedAt: new Date().toISOString(),
     ua: navigator.userAgent, lang: navigator.language,
     tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
     online: navigator.onLine, entries

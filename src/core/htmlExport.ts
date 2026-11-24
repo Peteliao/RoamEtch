@@ -381,8 +381,8 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" id="tc" content="${initialPal.vectorBg}">
-<meta name="description" content="${esc(title)} · TrackMint">
-<title>${esc(title)} · TrackMint</title>
+<meta name="description" content="${esc(title)} · RoamEtch">
+<title>${esc(title)} · RoamEtch</title>
 <style>${VIEWER_CSS}</style>
 </head>
 <body>
@@ -391,7 +391,7 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
   <header class="trip-head">
     <div class="head-top">
       <span class="brandmark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M4 18c3.2-7 5.4 1 8.4-3S16 8 20 6"/><circle cx="4" cy="18" r="2" fill="currentColor" stroke="none"/><circle cx="20" cy="6" r="2" fill="currentColor" stroke="none"/></svg></span>
-      <span class="brandname">TrackMint</span>
+      <span class="brandname">RoamEtch</span>
       <span class="grow"></span>
       <button class="round sm" id="themeBtn" type="button" aria-label="${esc(t('export.htmlTheme'))}" title="${esc(t('export.htmlTheme'))}">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>

@@ -17,7 +17,7 @@ export async function exportTripsZip(ids, format = 'gpx') {
   const count = Object.keys(files).length;
   const zipped = zipSync(files, { level: 6 });
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  return { blob: new Blob([zipped], { type: 'application/zip' }), filename: `trackmint-trips-${stamp}.zip`, count };
+  return { blob: new Blob([zipped], { type: 'application/zip' }), filename: `roametch-trips-${stamp}.zip`, count };
 }
 
 /** Accepts loose .gpx/.xml files and ZIP archives containing them. */

@@ -9,6 +9,7 @@ import type { CachedOriginalImage, OriginalImageMeta } from './originalImageCach
 import { randomMeetId } from './meetLink';
 import type { RtcRejectReason, RtcSignalMessage, RtcSignalPayload, RtcSignalType } from './rtcSignal';
 
+// Keep the legacy label so upgraded peers can still exchange original images.
 export const RTC_DATA_CHANNEL_LABEL = 'trackmint-file';
 export const RTC_CHUNK_SIZE = 16 * 1024;
 export const RTC_HIGH_WATER_MARK = 256 * 1024;
@@ -567,7 +568,7 @@ export class P2PTransferManager {
       const meta: FileMeta = {
         type: 'file-meta',
         fileId: original.fileId,
-        name: `trackmint-${original.fileId}.${original.mime === 'image/png' ? 'png' : original.mime === 'image/webp' ? 'webp' : 'jpg'}`,
+        name: `roametch-${original.fileId}.${original.mime === 'image/png' ? 'png' : original.mime === 'image/webp' ? 'webp' : 'jpg'}`,
         mime: original.mime,
         size: original.size,
         width: original.width,

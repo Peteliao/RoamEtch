@@ -1,9 +1,9 @@
 {
-  "name": "trackmint-relay",
+  "name": "roametch-relay",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Minimal blind WebSocket relay for TrackMint live meetups",
+  "description": "Minimal blind WebSocket relay for RoamEtch live meetups",
   "license": "GPL-3.0-only",
   "scripts": {
     "start": "node server.mjs",

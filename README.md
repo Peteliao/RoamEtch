@@ -1,20 +1,20 @@
-# TrackMint迹刻：开源、本地优先的 GPS 轨迹记录与加密实时组队聊天 PWA
+# RoamEtch 迹刻：开源、本地优先的 GPS 轨迹记录与加密实时组队聊天 PWA
 
 简体中文 | [English](README.en.md)
 
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-2bcda7?style=flat-square)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-no%20framework-3178c6?style=flat-square)](https://www.typescriptlang.org/)
-[![PWA](https://img.shields.io/badge/PWA-offline--ready-5a67d8?style=flat-square)](https://peteliao.github.io/TrackMint/)
-[![Live demo](https://img.shields.io/badge/demo-peteliao.github.io%2FTrackMint-2bcda7?style=flat-square)](https://peteliao.github.io/TrackMint/)
+[![PWA](https://img.shields.io/badge/PWA-offline--ready-5a67d8?style=flat-square)](https://peteliao.github.io/RoamEtch/)
+[![Live demo](https://img.shields.io/badge/demo-peteliao.github.io%2FRoamEtch-2bcda7?style=flat-square)](https://peteliao.github.io/RoamEtch/)
 
-**TrackMint迹刻**（英文名 **TrackMint**，中文谐音“即刻”，读音 jìkè）是一款免费开源、无需注册的 GPS 轨迹记录 Web 应用。它把徒步、骑行、自驾、跑步和旅行轨迹记录、海拔与速度分析、GPX 导入导出、分享海报、轨迹视频、自包含网页，以及端到端加密的实时组队与临时聊天放在同一个页面里。数据默认只保存在本机浏览器，安装为 PWA 后可像原生应用一样从桌面启动。
+**RoamEtch 迹刻**（中文名“迹刻”，读音 jìkè）是一款免费开源、无需注册的 GPS 轨迹记录 Web 应用。**Roam** 代表漫游、公路旅行与徒步探索，**Etch** 代表将旅程刻印下来。它把徒步、骑行、自驾、跑步和旅行轨迹记录、海拔与速度分析、GPX 导入导出、分享海报、轨迹视频、自包含网页，以及端到端加密的实时组队与临时聊天放在同一个页面里。数据默认只保存在本机浏览器，安装为 PWA 后可像原生应用一样从桌面启动。
 
-**在线体验：[https://peteliao.github.io/TrackMint/](https://peteliao.github.io/TrackMint/)**<br>
+**在线体验：[https://peteliao.github.io/RoamEtch/](https://peteliao.github.io/RoamEtch/)**<br>
 手机浏览器可直接打开；iPhone / iPad 请使用 Safari，并从分享菜单添加到主屏幕。
 
 > **没有 GPS 也能体验**：进入「行程」页点击「加载示例行程」，或直接打开 `?demo=1`，即可查看分析、海报、视频与离线网页导出；贡献者可用 `?sim=1` 在桌面端模拟一段实时记录。
 
-> **快速了解**：如果你在寻找一款隐私优先的 GPX 轨迹记录器、可离线使用的徒步/骑行/自驾轨迹 App，或支持实时队友位置共享的户外 PWA，TrackMint 不需要账号、不上传行程库，打开网页即可开始记录。
+> **快速了解**：如果你在寻找一款隐私优先的 GPX 轨迹记录器、可离线使用的徒步/骑行/自驾轨迹 App，或支持实时队友位置共享的户外 PWA，RoamEtch 不需要账号、不上传行程库，打开网页即可开始记录。
 
 ## 界面预览
 
@@ -29,7 +29,7 @@
     <td align="center" width="50%"><img src="docs/screenshots/zh/meet.png" width="280" alt="实时组队：加密房间、队友位置、距离与方向"><br><sub><b>实时组队</b> · 队友位置、距离方向、加密临时聊天</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/zh/trips.png" width="280" alt="本地优先的 GPX 行程列表"><br><sub><b>行程管理</b> · 本地轨迹库、筛选、批量导入导出</sub></td>
+    <td align="center"><img src="docs/screenshots/zh/trips.png" width="280" alt="本地行程库、年度足迹与点亮城市地图"><br><sub><b>行程管理</b> · 本地轨迹库、年度统计、城市足迹与批量导入导出</sub></td>
     <td align="center"><img src="docs/screenshots/zh/analysis.png" width="390" alt="行程分析：高程、速度、坡度、热量与地图节点"><br><sub><b>行程分析</b> · 高程/速度曲线、坡度、评分与地图节点</sub></td>
   </tr>
   <tr>
@@ -42,7 +42,7 @@
   </tr>
 </table>
 
-## 为什么选择 TrackMint
+## 为什么选择 RoamEtch
 
 - **本地优先，数据主权归你**：行程、轨迹点、节点与照片保存在浏览器 IndexedDB 中，没有账号、没有云端行程库；可随时整库备份、恢复或导出。
 - **一个网页，完整闭环**：记录 → 分析 → 海报/视频/网页 → GPX/GeoJSON/KML，全流程在本地完成，不需要在多个工具之间搬运数据。
@@ -87,9 +87,9 @@
 - **轨迹视频**：10 / 15 / 30 秒地图回放，参数同步展示；内置 4 段设备端合成的循环纯音乐，默认随机、可手动选择，并随 MP4 / WebM 一起导出，可下载或调用系统分享。
 - **自包含网页**：导出一个可离线打开的单文件 HTML，内含完整统计、海拔曲线、可缩放地图、节点与照片，适合发给没有安装 App 的朋友。
 - **标准文件**：GPX（WGS-84，兼容两步路 / Garmin / Strava 等）、GeoJSON、KML；支持 GPX、XML 与 ZIP 批量导入，以及批量导出 ZIP。
-- **可验证备份**：整库 ZIP 写入 SHA-256 内容校验；恢复前显示导出时间、内容、重复行程与校验结果，可先导出当前数据库快照，校验失败会阻止恢复。恢复会先校验压缩包大小、路径、条目与数据关联，再在单个事务中写入，失败自动回滚。备份可选用密码加密（PBKDF2-SHA-256 60 万次 + AES-256-GCM，`.trackmint.enc`）；未加密的备份请存放在可信位置。
+- **可验证备份**：整库 ZIP 写入 SHA-256 内容校验；恢复前显示导出时间、内容、重复行程与校验结果，可先导出当前数据库快照，校验失败会阻止恢复。恢复会先校验压缩包大小、路径、条目与数据关联，再在单个事务中写入，失败自动回滚。备份可选用密码加密（PBKDF2-SHA-256 60 万次 + AES-256-GCM，新文件使用 `.roametch.enc`，旧 `.trackmint.enc` 备份仍可恢复）；未加密的备份请存放在可信位置。
 - **轻量分享链接**：把简化轨迹与节点压缩进 1.5 KB 以内的 URL `#` 片段，对方打开即可导入，不生成公开网页，也不包含照片。
-- **应用宣传图**：设置页一键生成 1080×1350 宣传图；每套主题内置“本机优先”“年度足迹”“加密组队”三款设计与对应文案，随机展示且不会连续重复。只含产品信息与二维码，不含任何个人数据。
+- **应用宣传图**：设置页一键生成 1080×1350 宣传图；每套主题内置 8 款设计与中英文对应文案，覆盖本机优先、年度足迹、加密组队、户外分析、旅程视频、后台续记、城市足迹与隐私受众，随机展示且不会连续重复，可在预览中逐张“换一张”。只含产品信息与二维码，不含任何个人数据。
 - **隐私检查**：起终点隐私圈、敏感节点隐藏、照片 EXIF 剥离、WGS-84 导出提示集中在同一页，导出前一眼确认。
 
 ### 实时组队：和同行者保持在一起
@@ -100,7 +100,7 @@
 - 组队成功后可与在线队友临时聊天，支持未读提示；消息只保存在本机内存，新加入的队友看不到历史消息，离线期间也不会补发，结束后即清除。
 - **加密图片聊天**：相机按钮直接打开网页取景器，可翻转、补光、从相册选择、添加说明并预览压缩后尺寸/大小；缩略图按弱网逐档压缩（长边 720 px，省流模式 480 px，上限 56 KB），端到端加密发送，5 秒发送冷却。收到图片显示加密标识，可放大查看；若拍摄时有定位，可一键在地图标记拍摄点。
 - **按需加载高清原图**：开启默认关闭的「原图点对点传输」后，队友主动点击「加载原图」才会建立一对一 WebRTC DataChannel；原图以 16 KiB 分片直传并校验 SHA-256，完成后空闲 30 秒自动断开。关闭、超时或校验失败只影响本次原图加载，定位、文字与缩略图照常使用。
-- 聊天缩略图只保留本次会话内存中最新 20 张，旧图片释放为占位提示；发送方原图缓存最多 10 张/50 MB，接收方最多 4 张/64 MB。聊天图片不写入 IndexedDB、不进入备份，也不上传到 TrackMint 服务器。
+- 聊天缩略图只保留本次会话内存中最新 20 张，旧图片释放为占位提示；发送方原图缓存最多 10 张/50 MB，接收方最多 4 张/64 MB。聊天图片不写入 IndexedDB、不进入备份，也不上传到 RoamEtch 服务器。
 - 支持暂停共享、恢复共享、发起人移除队友、重置邀请和主动结束；到期或关闭后清除本机会话。
 - 邀请、房间与聊天只存在于链接 `#` 片段和本机内存，不会写入云端；适合徒步队伍、自驾车队、露营与景区找人。
 
@@ -128,7 +128,7 @@
 
 ## 安装到手机桌面
 
-1. **iPhone / iPad**：使用 Safari 打开 [在线地址](https://peteliao.github.io/TrackMint/)，点击底部「分享」，选择「添加到主屏幕」，再点「添加」。iOS 只能通过 Safari 分享菜单安装。
+1. **iPhone / iPad**：使用 Safari 打开 [在线地址](https://peteliao.github.io/RoamEtch/)，点击底部「分享」，选择「添加到主屏幕」，再点「添加」。iOS 只能通过 Safari 分享菜单安装。
 2. **Android**：使用 Chrome 或 Edge 打开，打开浏览器菜单，选择「安装应用」或「添加到主屏幕」。
 3. **桌面浏览器**：Chrome / Edge 地址栏出现安装图标时点击即可；也可在应用内「设置 → 手机桌面图标」查看步骤。
 
@@ -138,7 +138,7 @@
 
 直接打开在线体验即可，无需安装：
 
-**<https://peteliao.github.io/TrackMint/>**
+**<https://peteliao.github.io/RoamEtch/>**
 
 本地开发或自行部署：
 
@@ -151,22 +151,22 @@ npm run build      # 类型检查 + 生产构建（dist/）
 npm run preview    # 预览生产构建
 ```
 
-`dist/` 是完全静态的，可部署到 GitHub Pages、Cloudflare Pages、Netlify、Vercel 或任意静态服务器。项目没有业务后端，不需要数据库。CI 会在每次 Push / PR 时运行类型检查、单元测试、Playwright 端到端冒烟测试和生产构建；推送 `v*` 标签时会自动生成 GitHub Release（附 `trackmint-dist.zip`）并推送容器镜像。
+`dist/` 是完全静态的，可部署到 GitHub Pages、Cloudflare Pages、Netlify、Vercel 或任意静态服务器。项目没有业务后端，不需要数据库。CI 会在每次 Push / PR 时运行类型检查、单元测试、Playwright 端到端冒烟测试和生产构建；推送 `v*` 标签时会自动生成 GitHub Release（附 `roametch-dist.zip`）并推送容器镜像。
 
 ### Docker 自托管
 
 仓库自带多阶段 `Dockerfile` 与 `nginx.conf`（已为 `sw.js`、`index.html` 设置正确的 PWA 缓存头）。发布标签会自动构建镜像到 GitHub Container Registry：
 
 ```bash
-docker run --rm -p 8080:80 ghcr.io/peteliao/trackmint:latest
+docker run --rm -p 8080:80 ghcr.io/peteliao/roametch:latest
 # 打开 http://localhost:8080
 ```
 
 也可以从源码构建：
 
 ```bash
-docker build -t trackmint .
-docker run --rm -p 8080:80 trackmint
+docker build -t roametch .
+docker run --rm -p 8080:80 roametch
 ```
 
 手机访问定位与安装 PWA 需要 HTTPS（`localhost` 除外），请在前面加一层 Caddy / Nginx / Cloudflare Tunnel 等 TLS 反向代理。国内 NAS、云服务器或内网机器可直接用这条命令运行，不依赖 GitHub Pages。
@@ -176,12 +176,12 @@ docker run --rm -p 8080:80 trackmint
 默认会自动并发使用多个公共 MQTT 节点，适合测试。需要更稳定或更私密的组队中继时，可使用 [`relay/`](relay/README.md) 中的极简 WebSocket 盲中继：
 
 ```bash
-docker run --rm -p 8080:8080 ghcr.io/peteliao/trackmint-relay:latest
+docker run --rm -p 8080:8080 ghcr.io/peteliao/roametch-relay:latest
 # 或从源码：
 cd relay && npm install && npm start
 # 或
-docker build -t trackmint-relay ./relay
-docker run --rm -p 8080:8080 trackmint-relay
+docker build -t roametch-relay ./relay
+docker run --rm -p 8080:8080 roametch-relay
 ```
 
 随后在「设置 → 组队中继」选择自建 WS，并填入 `wss://你的域名/room/{room}`。中继只转发密文，不落盘、不记录消息内容。
@@ -215,7 +215,7 @@ GPS / GPX / 照片
 
 ## 与常见方案对比
 
-| 能力 | 典型云端运动平台 | 通用 GPS 记录器 | TrackMint |
+| 能力 | 典型云端运动平台 | 通用 GPS 记录器 | RoamEtch |
 | --- | --- | --- | --- |
 | 账号与云端 | 通常需要账号 | 不一定 | 不需要账号，无云端行程库 |
 | 轨迹数据位置 | 平台云端 | 本机或文件 | 本机 IndexedDB，可整库备份 |
@@ -229,7 +229,7 @@ GPS / GPX / 照片
 
 ## 隐私与数据边界
 
-TrackMint 的设计原则是“数据默认留在设备上”，但这不等于所有网络请求都消失。实际边界如下：
+RoamEtch 的设计原则是“数据默认留在设备上”，但这不等于所有网络请求都消失。实际边界如下：
 
 - **本机保存**：行程、轨迹点、节点、照片缩略图与设置保存在 IndexedDB / localStorage；没有账号体系、业务后端或应用内统计上报。
 - **分享链接**：行程数据、组队邀请只放在 URL `#` 片段。浏览器不会把 `#` 后的内容发送给服务器；但收到链接的人可以读取其中的数据，请只分享给信任对象。
@@ -237,18 +237,18 @@ TrackMint 的设计原则是“数据默认留在设备上”，但这不等于�
 - **照片**：本地照片写入存储前剥离 EXIF 位置信息；聊天图片由网页相机/相册在内存中重绘压缩，不写入本机照片库或 IndexedDB，仅保留本次会话最新 20 张缩略图。高清原图仅在内存缓存，默认关闭点对点传输；开启并主动加载后，双方设备与所用 STUN/TURN 可能看见彼此的网络 IP 信息。导出的海报、视频与网页只使用本地处理后的图片。
 - **外部服务请求**：底图瓦片、海拔、地名与路网服务需要联网，并会收到渲染或计算所需的坐标/视口请求及常规网络信息（如 IP）。生成海报/视频时，抽样坐标可能用于 OpenStreetMap 系逆地理编码以生成路线地名，结果缓存在本机；断点补全和汇合路线规划只在你主动操作时发送必要的端点坐标。这些请求不会上传照片或整库数据。
 - **设备风险**：清除浏览器数据、卸载 PWA 或更换设备会丢失本地行程；请定期使用整库备份。设备本身被他人解锁时，浏览器中的数据也可能被读取。
-- **整库备份**：备份 ZIP 包含完整轨迹、节点与照片；默认未加密，任何拿到文件的人都能读取内容。导出时可设置密码加密为 `.trackmint.enc`（PBKDF2-SHA-256 60 万次 + AES-256-GCM），密码不会被保存，遗失后无法恢复。无论是否加密，请把备份存放在可信位置。
+- **整库备份**：备份 ZIP 包含完整轨迹、节点与照片；默认未加密，任何拿到文件的人都能读取内容。导出时可设置密码加密为 `.roametch.enc`（旧 `.trackmint.enc` 备份仍可恢复；PBKDF2-SHA-256 60 万次 + AES-256-GCM），密码不会被保存，遗失后无法恢复。无论是否加密，请把备份存放在可信位置。
 - **自制配乐**：轨迹视频的纯音乐由浏览器实时合成，不下载或打包任何外部音乐素材。
 
 ## 常见问题
 
-### TrackMint 是免费开源的吗？
+### RoamEtch 是免费开源的吗？
 
 是。项目以 GPL-3.0 开源，在线版免费使用，无账号、无付费墙；你也可以把 `dist/` 部署到自己的静态托管。
 
 ### 会不会上传我的轨迹？
 
-不会上传到 TrackMint 的业务服务器，因为项目没有业务后端和云端行程库。底图、海拔、地名与路网等第三方服务会收到完成对应功能所需的坐标请求；详见上面的“隐私与数据边界”。
+不会上传到 RoamEtch 的业务服务器，因为项目没有业务后端和云端行程库。底图、海拔、地名与路网等第三方服务会收到完成对应功能所需的坐标请求；详见上面的“隐私与数据边界”。
 
 ### 可以离线记录吗？
 
@@ -268,7 +268,7 @@ TrackMint 的设计原则是“数据默认留在设备上”，但这不等于�
 
 ### 为什么国内和海外看到的地图不一样？
 
-TrackMint 会根据网络环境选择服务栈：国内优先高德/天地图，海外使用 OpenStreetMap、OpenTopoMap、Esri 等。也可以手动切换图源；坐标在渲染层适配 GCJ-02，存储和导出始终为 WGS-84。
+RoamEtch 会根据网络环境选择服务栈：国内优先高德/天地图，海外使用 OpenStreetMap、OpenTopoMap、Esri 等。也可以手动切换图源；坐标在渲染层适配 GCJ-02，存储和导出始终为 WGS-84。
 
 ### 手机上如何安装？
 
@@ -280,7 +280,7 @@ iPhone/iPad 用 Safari 打开后「分享 → 添加到主屏幕」；Android �
 
 ### 为什么叫“迹刻”？
 
-Track（轨迹）+ Mint（铸造/焕新），中文名“迹刻”谐音“即刻”——打开网页就能即刻记录，并把旅程刻在地图上。
+Roam 代表漫游、公路旅行与徒步探索，Etch 代表将旅程刻印下来。中文名“迹刻”谐音“即刻”——打开网页就能即刻记录，并把旅程刻在地图上。
 
 ## 参与贡献
 

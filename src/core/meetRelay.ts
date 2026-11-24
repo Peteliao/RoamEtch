@@ -142,8 +142,8 @@ export function publicMqttUrls() {
 }
 
 function topicFor(roomId: string) {
-  const prefix = String(get('meetMqttPrefix') || 'trackmint/v2/meet').trim().replace(/^\/+|\/+$/g, '');
-  return `${prefix || 'trackmint/v2/meet'}/${roomId}`;
+  const prefix = String(get('meetMqttPrefix') || 'roametch/v2/meet').trim().replace(/^\/+|\/+$/g, '');
+  return `${prefix || 'roametch/v2/meet'}/${roomId}`;
 }
 
 class MqttRelay implements MeetRelay {

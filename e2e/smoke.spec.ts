@@ -2,6 +2,28 @@ import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 import { blockExternal, gotoTab, openDemo } from './utils';
 
+test('RoamEtch record view starts directly without manual creation', async ({ page }) => {
+  await blockExternal(page);
+  await page.goto('/');
+  await expect(page).toHaveTitle('RoamEtch迹刻 · 行程记录');
+  await gotoTab(page, 'record');
+  await expect(page.locator('#view-record .rec-pill.start')).toBeVisible();
+  await expect(page.locator('#view-record .rec-pill.ghost')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '手动', exact: true })).toHaveCount(0);
+});
+
+test('promo preview renders and advances to the next variant', async ({ page }) => {
+  await blockExternal(page);
+  await page.goto('/');
+  await gotoTab(page, 'settings');
+  await page.getByRole('button', { name: '生成宣传图', exact: true }).click();
+  const preview = page.locator('.promo-preview-img');
+  await expect(preview).toBeVisible({ timeout: 30_000 });
+  const first = Number(await preview.getAttribute('data-variant'));
+  await page.getByRole('button', { name: '换一张', exact: true }).click();
+  await expect.poll(async () => Number(await preview.getAttribute('data-variant'))).toBe((first + 1) % 8);
+});
+
 test('demo trip renders charts and privacy crop feedback', async ({ page }) => {
   await blockExternal(page);
   await openDemo(page);
@@ -73,14 +95,14 @@ test('encrypted backup export, wipe and restore round-trip', async ({ page }) =>
   const modal = page.locator('.modal-backdrop .modal');
   await expect(modal).toContainText('导出整库备份');
   const passwords = modal.locator('input[type="password"]');
-  await passwords.nth(0).fill('trackmint-e2e-1234');
-  await passwords.nth(1).fill('trackmint-e2e-1234');
+  await passwords.nth(0).fill('roametch-e2e-1234');
+  await passwords.nth(1).fill('roametch-e2e-1234');
 
   const [download] = await Promise.all([
     page.waitForEvent('download'),
     modal.getByRole('button', { name: '开始导出' }).click()
   ]);
-  expect(download.suggestedFilename()).toMatch(/\.trackmint\.enc$/);
+  expect(download.suggestedFilename()).toMatch(/\.roametch\.enc$/);
   const backupPath = await download.path();
   expect(backupPath).toBeTruthy();
 
@@ -94,7 +116,7 @@ test('encrypted backup export, wipe and restore round-trip', async ({ page }) =>
 
   const unlock = page.locator('.modal-backdrop .modal').filter({ hasText: '输入备份密码' });
   await expect(unlock).toBeVisible();
-  await unlock.locator('input[type="password"]').fill('trackmint-e2e-1234');
+  await unlock.locator('input[type="password"]').fill('roametch-e2e-1234');
   await unlock.getByRole('button', { name: '解锁' }).click();
 
   const preview = page.locator('.modal-backdrop .modal').filter({ hasText: '恢复备份' });

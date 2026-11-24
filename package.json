@@ -1,15 +1,15 @@
 {
-  "name": "trackmint",
+  "name": "roametch",
   "private": true,
-  "version": "2.5.0",
+  "version": "3.0.0",
   "type": "module",
   "license": "GPL-3.0-only",
   "description": "Pure-frontend trip recorder & analyzer with dual-region (CN/Global) adaptive service routing",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Peteliao/TrackMint.git"
+    "url": "git+https://github.com/Peteliao/RoamEtch.git"
   },
-  "homepage": "https://peteliao.github.io/TrackMint/",
+  "homepage": "https://peteliao.github.io/RoamEtch/",
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc --noEmit",

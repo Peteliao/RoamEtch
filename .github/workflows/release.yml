@@ -23,17 +23,17 @@ jobs:
       - run: npm test
       - run: npm run build
       - name: Package static build
-        run: cd dist && zip -qr ../trackmint-dist.zip .
+        run: cd dist && zip -qr ../roametch-dist.zip .
       - uses: actions/upload-artifact@v4
         with:
-          name: trackmint-dist
-          path: trackmint-dist.zip
+          name: roametch-dist
+          path: roametch-dist.zip
           retention-days: 14
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" trackmint-dist.zip --generate-notes --verify-tag
+        run: gh release create "${GITHUB_REF_NAME}" roametch-dist.zip --generate-notes --verify-tag
 
   images:
     needs: verify
@@ -41,9 +41,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - name: trackmint
+          - name: roametch
             context: .
-          - name: trackmint-relay
+          - name: roametch-relay
             context: ./relay
     steps:
       - uses: actions/checkout@v5

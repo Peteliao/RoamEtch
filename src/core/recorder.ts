@@ -11,6 +11,7 @@ import { acquireRecorderLock, releaseRecorderLock, broadcast, isHolding } from '
 import { requestWakeLock, releaseWakeLock } from './wakelock';
 import { armKeepAlive, disarmKeepAlive } from './keepalive';
 import { classifyActivity } from './activity';
+import { migrateLegacyKey } from './storageKeys';
 
 const GAP_TIME = 5 * 60_000;   // > 5 min → new segment
 const MOTION_HISTORY_MS = 120_000;
@@ -22,7 +23,8 @@ const BG_NOTICE_MS = 15_000;   // background absence worth notifying about
 const RESUME_BREAK_MS = 45_000;// long silence → start a fresh segment on return
 const STALE_FIX_MS = 5_000;    // ignore cached fixes older than this
 const SAVE_RETRY_MS = 5000;
-const SPILL_KEY = 'trackmint.pendingPoints.v1';
+const SPILL_KEY = 'roametch.pendingPoints.v1';
+migrateLegacyKey('trackmint.pendingPoints.v1', SPILL_KEY);
 
 export const rec = {
   status: 'idle',              // idle | recording | paused | finished
@@ -910,12 +912,6 @@ export async function continueTrip(tripId) {
 export async function findRecoverableTrip() {
   const all = await store.listTrips();
   return all.find((tr) => tr.status === 'recording' || tr.status === 'paused') || null;
-}
-
-export async function createManualTrip(name = '') {
-  const trip = await store.createTrip({ name: name || t('record.newTripName'), activity: get('activity'), status: 'paused' });
-  await store.addSegment(trip.id);
-  return trip;
 }
 
 // release lock if tab closes mid-recording (data already incrementally persisted)

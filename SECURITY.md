@@ -1,17 +1,17 @@
 # Security policy / 安全策略
 
-TrackMint is a local-first static PWA. There is no TrackMint account service, no
+RoamEtch is a local-first static PWA. There is no RoamEtch account service, no
 business backend, and no cloud trip library. This document describes the security
 model, the meetup encryption design, and how to report a vulnerability.
 
-TrackMint 是本地优先的静态 PWA，没有账号服务、业务后端或云端行程库。本文说明
+RoamEtch 是本地优先的静态 PWA，没有账号服务、业务后端或云端行程库。本文说明
 安全边界、组队加密设计以及漏洞反馈方式。
 
 ## Reporting a vulnerability / 漏洞反馈
 
 Please use GitHub private vulnerability reporting:
 
-**https://github.com/Peteliao/TrackMint/security/advisories/new**
+**https://github.com/Peteliao/RoamEtch/security/advisories/new**
 
 Do **not** open a public issue containing an exploit, a meetup invite, a shared
 trip link, a personal track, or other sensitive data. If private reporting is
@@ -32,7 +32,7 @@ hosted demo is served from GitHub Pages and is rebuilt on every push to `main`.
 ### Local-first data
 
 - Trips, track points, waypoints, photos, and preferences are stored in the
-  browser (IndexedDB / localStorage). They are not uploaded to a TrackMint
+  browser (IndexedDB / localStorage). They are not uploaded to a RoamEtch
   server because no such server exists.
 - Local data is **not encrypted at rest by the app**. It relies on the browser
   profile and OS disk protection. Anyone who can unlock the device and open the
@@ -87,8 +87,12 @@ Version 1 invites and packets are rejected rather than downgraded.
 | Chat dedupe | Random message ids plus a bounded seen-set, in addition to the sender sequence |
 | Transport limits | Client and relay cap packets at 128 KB. The bundled relay also enforces a per-socket token bucket (8 msg/s, 40 burst), 32 clients per room, 2,000 rooms, 10,000 clients, and a 12-hour idle-room sweep |
 | Public MQTT nodes | Concurrent subscriptions to `broker-cn.emqx.io:8084`, `broker.emqx.io:8084`, and `mqtt-dashboard.com:8884`; the fastest response starts the session immediately and every connected node also receives outgoing ciphertext as redundancy. A custom URL replaces this set unless it is the legacy default |
-| MQTT topic | `${prefix}/${roomId}` (default prefix `trackmint/v2/meet`) |
+| MQTT topic | `${prefix}/${roomId}` (new default prefix `roametch/v2/meet`; existing saved legacy prefixes remain valid) |
 | WS path | `/room/{room}` (the relay must preserve this path) |
+
+The `trackmint-meet-v2` salt/AAD are legacy wire identifiers retained for protocol
+compatibility; changing them would break existing rooms. New installs default to
+`roametch/v2/meet`, while saved custom or legacy topic prefixes remain valid.
 
 The room id is random and carries no key material. A party that observes the
 MQTT topic or WS path learns only that public id and cannot derive the AES key
@@ -104,7 +108,7 @@ and must be treated as a room member.
 - Files use JSON metadata and exact 16 KiB binary chunks with an explicit chunk count and EOF. The receiver rejects short, empty, extra, or out-of-budget chunks. SCTP buffered-byte thresholds are 256 KB/64 KB; a sender handles at most two simultaneous transfers and rejects additional requests as busy.
 - The connection must reach DataChannel-open within 10 seconds. Connected or stalled transfers close after 30 seconds without activity. Cancellation, abort, room teardown, timeout, checksum failure, and protocol errors close the session without interrupting location, text, or thumbnails.
 - The receiver verifies SHA-256 and the encoded JPEG/PNG/WebP header, declared dimensions, byte size, and pixel budget before exposing the blob to the UI. Album-derived originals are bounded to 32 MB and 40 MP. A wrong file id/hash/size cannot reopen or replace another transfer.
-- Sender memory is an LRU of at most 10 originals/50 MB; evicted files are expired. Receiver blob/object-URL state is bounded to 4 files/64 MB and keyed by peer + file id + SHA-256. Neither thumbnails nor originals are written to IndexedDB, backups, or a TrackMint server.
+- Sender memory is an LRU of at most 10 originals/50 MB; evicted files are expired. Receiver blob/object-URL state is bounded to 4 files/64 MB and keyed by peer + file id + SHA-256. Neither thumbnails nor originals are written to IndexedDB, backups, or a RoamEtch server.
 
 ### Ephemeral chat photos
 
@@ -128,7 +132,7 @@ and must be treated as a room member.
   kept; older payloads are nulled and show an expired placeholder. HD originals
   use the separate bounded P2P caches described above. Object URLs are bounded
   and revoked, and neither thumbnails nor originals are written to IndexedDB,
-  uploaded to a TrackMint server, or added to backup archives.
+  uploaded to a RoamEtch server, or added to backup archives.
 - Closing the camera stops only its media tracks and re-arms the iOS keepalive
   video. It does not stop geolocation or the meetup relay. Capture coordinates,
   when available, travel inside the encrypted image packet.
@@ -193,7 +197,7 @@ network observers.
 Map tiles, elevation, place names, and routing services receive the coordinates
 or viewport needed for the feature being used, plus ordinary network metadata.
 Photo EXIF location is stripped before storage. Meetup, sharing, and core
-recording/analysis do not send tracks to a TrackMint server. See the project
+recording/analysis do not send tracks to a RoamEtch server. See the project
 README for the full data-boundary description.
 
 ## Dependency and cache hygiene

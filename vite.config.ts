@@ -22,9 +22,9 @@ export default defineConfig({
       registerType: 'prompt',
       includeAssets: ['icons/*.svg', 'icons/*.png'],
       manifest: {
-        name: 'TrackMint迹刻 · 行程记录',
-        short_name: 'TrackMint',
-        description: 'Offline-first trip recorder with dual-region adaptive maps',
+        name: 'RoamEtch迹刻 · 行程记录',
+        short_name: 'RoamEtch',
+        description: 'Offline-first GPS recorder for road trips, hiking, cycling and travel',
         theme_color: '#000000',
         background_color: '#000000',
         display: 'standalone',

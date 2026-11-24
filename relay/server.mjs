@@ -1,4 +1,4 @@
-// Minimal blind WebSocket relay for TrackMint live meetups.
+// Minimal blind WebSocket relay for RoamEtch live meetups.
 // Rooms are keyed by the SHA-256-derived room id; the relay only forwards
 // opaque AES-GCM envelopes and never stores or logs message content.
 import { createServer } from 'node:http';

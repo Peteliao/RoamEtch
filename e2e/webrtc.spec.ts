@@ -158,7 +158,7 @@ test('WebRTC transfers an HD original on demand and privacy refusal leaves chat 
     const downloadEvent = peer.waitForEvent('download');
     await peer.getByRole('button', { name: '保存原图', exact: true }).click();
     const download = await downloadEvent;
-    expect(download.suggestedFilename()).toBe(`trackmint-${sent.fileId}.jpg`);
+    expect(download.suggestedFilename()).toBe(`roametch-${sent.fileId}.jpg`);
     const downloadPath = await download.path();
     expect(downloadPath).toBeTruthy();
     expect((await stat(downloadPath!)).size).toBe(sent.size);

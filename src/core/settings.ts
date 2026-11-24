@@ -34,7 +34,7 @@ const DEFAULTS = {
   meetExpiryMin: 120,          // self-destruct timer; host advertises it to the room
   meetRelayMode: 'mqtt',       // mqtt | ws (webrtc reserved)
   meetMqttUrl: '',             // blank = auto-select public WSS nodes
-  meetMqttPrefix: 'trackmint/v2/meet',
+  meetMqttPrefix: 'roametch/v2/meet',
   meetWsUrl: '',               // must contain {room}
   meetP2PEnabled: false,
   meetP2PNoticeVersion: 0,
@@ -69,7 +69,7 @@ function load() {
     }
     // meetup v2 uses a new default topic namespace; keep custom prefixes intact
     if (parsed && parsed.migrateMeetV2 !== 1) {
-      if (parsed.meetMqttPrefix === 'trackmint/v1/meet') parsed.meetMqttPrefix = 'trackmint/v2/meet';
+      if (parsed.meetMqttPrefix === 'trackmint/v1/meet') parsed.meetMqttPrefix = 'roametch/v2/meet';
       parsed.migrateMeetV2 = 1;
       localStorage.setItem(KEY, JSON.stringify(parsed));
     }

@@ -21,9 +21,9 @@ function makeFull() {
 
 describe('compact share links', () => {
   it('round-trips a simplified track and visible waypoints', () => {
-    vi.stubGlobal('location', { href: 'https://example.com/TrackMint/' });
+    vi.stubGlobal('location', { href: 'https://example.com/RoamEtch/' });
     const { url, size } = buildShareLink(makeFull(), { radius: 0, hideSensitive: true });
-    expect(url.startsWith('https://example.com/TrackMint/#t=')).toBe(true);
+    expect(url.startsWith('https://example.com/RoamEtch/#t=')).toBe(true);
     expect(size).toBeLessThanOrEqual(1500);
     expect(url.length).toBeLessThan(1800);
 
@@ -37,7 +37,7 @@ describe('compact share links', () => {
   });
 
   it('preserves segment breaks instead of drawing cross-segment jumps', () => {
-    vi.stubGlobal('location', { href: 'https://example.com/TrackMint/' });
+    vi.stubGlobal('location', { href: 'https://example.com/RoamEtch/' });
     const full = {
       trip: { name: 'Split drive', activity: 'drive' },
       segments: [
@@ -56,7 +56,7 @@ describe('compact share links', () => {
   });
 
   it('keeps every segment represented when many short tracks exceed the normal point cap', () => {
-    vi.stubGlobal('location', { href: 'https://example.com/TrackMint/' });
+    vi.stubGlobal('location', { href: 'https://example.com/RoamEtch/' });
     const segments = Array.from({ length: 131 }, (_, i) => ({
       id: `s${i}`,
       points: [{ lat: 30, lon: 120 + i * 0.001, t: 0 }, { lat: 30, lon: 120.0005 + i * 0.001, t: 10_000 }]

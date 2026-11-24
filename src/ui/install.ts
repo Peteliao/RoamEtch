@@ -2,6 +2,7 @@
 import { t } from '../core/i18n';
 import { rec } from '../core/recorder';
 import { isEmbeddedWebView } from '../core/shareEnv';
+import { migrateLegacyKey } from '../core/storageKeys';
 import { el, icon, modal, toast } from './helpers';
 
 interface InstallPromptEvent extends Event {
@@ -9,7 +10,8 @@ interface InstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
 }
 
-const NUDGE_KEY = 'trackmint.installNudge.v1';
+const NUDGE_KEY = 'roametch.installNudge.v1';
+migrateLegacyKey('trackmint.installNudge.v1', NUDGE_KEY);
 let deferredPrompt: InstallPromptEvent | null = null;
 let installed = false;
 

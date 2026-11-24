@@ -7,6 +7,7 @@ const ROOM_ID_BYTES = 16;
 const SECRET_BYTES = 32;
 const NONCE_PREFIX_BYTES = 8;
 const NONCE_MAX = 0xffffffff;
+// Legacy domain separation keeps existing encrypted meetup invites readable.
 const SALT = new TextEncoder().encode('trackmint-meet-v2');
 const INVITE_RE = /^TM2\.([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/;
 

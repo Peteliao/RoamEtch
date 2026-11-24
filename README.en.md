@@ -1,20 +1,20 @@
-# TrackMint: Open-source GPS tracker, GPX trip recorder, and encrypted live meetup chat PWA
+# RoamEtch: Open-source GPS tracker, GPX trip recorder, and encrypted live meetup chat PWA
 
 [简体中文](README.md) | English
 
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-2bcda7?style=flat-square)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-no%20framework-3178c6?style=flat-square)](https://www.typescriptlang.org/)
-[![PWA](https://img.shields.io/badge/PWA-offline--ready-5a67d8?style=flat-square)](https://peteliao.github.io/TrackMint/)
-[![Live demo](https://img.shields.io/badge/demo-peteliao.github.io%2FTrackMint-2bcda7?style=flat-square)](https://peteliao.github.io/TrackMint/)
+[![PWA](https://img.shields.io/badge/PWA-offline--ready-5a67d8?style=flat-square)](https://peteliao.github.io/RoamEtch/)
+[![Live demo](https://img.shields.io/badge/demo-peteliao.github.io%2FRoamEtch-2bcda7?style=flat-square)](https://peteliao.github.io/RoamEtch/)
 
-**TrackMint** (Chinese name **迹刻**, pronounced *jìkè*) is a free, open-source GPS tracker and trip recorder that runs in your browser. Record hikes, bike rides, runs, road trips, and travel; analyze elevation and speed; import and export GPX; mint shareable posters, replay videos, and self-contained trip pages; and stay together with end-to-end encrypted live meetups and ephemeral team chat. No account and no cloud trip library — your journeys stay in your own browser, and the installed PWA can open from your home screen like a native app.
+**RoamEtch** (Chinese name **迹刻**, pronounced *jìkè*) is a free, open-source GPS tracker and trip recorder that runs in your browser. **Roam** means roaming, road trips, and hiking exploration; **Etch** means etching journeys. Record hikes, bike rides, runs, road trips, and travel; analyze elevation and speed; import and export GPX; create shareable posters, replay videos, and self-contained trip pages; and stay together with end-to-end encrypted live meetups and ephemeral team chat. No account and no cloud trip library — your journeys stay in your own browser, and the installed PWA can open from your home screen like a native app.
 
-**Try it online: [https://peteliao.github.io/TrackMint/](https://peteliao.github.io/TrackMint/)**<br>
+**Try it online: [https://peteliao.github.io/RoamEtch/](https://peteliao.github.io/RoamEtch/)**<br>
 Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose “Add to Home Screen”.
 
 > **No GPS?** Open the Trips tab and press **Load demo trip**, or visit `?demo=1`, to explore analysis, posters, replay video, and self-contained HTML export immediately. Contributors can use `?sim=1` to replay the demo as live GPS on a desktop.
 
-> **TL;DR**: TrackMint is a privacy-first, local-first GPX recorder PWA for hiking, cycling, running, road trips, and outdoor teams. It combines trip recording, elevation and speed analysis, shareable posters and videos, WGS-84 file export, and encrypted real-time teammate locations in one page — without sign-up.
+> **TL;DR**: RoamEtch is a privacy-first, local-first GPX recorder PWA for hiking, cycling, running, road trips, and outdoor teams. It combines trip recording, elevation and speed analysis, shareable posters and videos, WGS-84 file export, and encrypted real-time teammate locations in one page — without sign-up.
 
 ## Screenshots
 
@@ -29,7 +29,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
     <td align="center" width="50%"><img src="docs/screenshots/en/meet.png" width="280" alt="Live meetup with an encrypted room, teammate positions, distance, and direction"><br><sub><b>Live meetup</b> · teammate positions, distance and bearing, encrypted chat</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/en/trips.png" width="280" alt="Local-first GPX trip library"><br><sub><b>Trip library</b> · local tracks, filters, batch import and export</sub></td>
+    <td align="center"><img src="docs/screenshots/en/trips.png" width="280" alt="Local trip library, yearly footprint, and illuminated city map"><br><sub><b>Trip library</b> · local tracks, yearly stats, city footprints, batch import and export</sub></td>
     <td align="center"><img src="docs/screenshots/en/analysis.png" width="390" alt="Trip analysis with elevation, speed, slope, calories, and map waypoints"><br><sub><b>Trip analysis</b> · elevation/speed charts, slope, score, map waypoints</sub></td>
   </tr>
   <tr>
@@ -42,7 +42,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
   </tr>
 </table>
 
-## Why TrackMint
+## Why RoamEtch
 
 - **Local-first, data ownership included**: trips, track points, waypoints, and photos live in your browser's IndexedDB. There is no account and no cloud trip library; back up, restore, or export whenever you want.
 - **One page, complete workflow**: record → analyze → poster/video/HTML → GPX/GeoJSON/KML. The whole pipeline runs locally, so you do not need to move files between several tools.
@@ -87,10 +87,10 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 - **Replay videos**: 10 / 15 / 30-second map replays with synchronized metrics and one of four original looping soundtracks, synthesized on-device, randomly chosen by default or selected manually, and muxed into the MP4 or WebM export.
 - **Self-contained HTML**: a single offline-capable page with full stats, elevation profile, zoomable map, waypoints, and photos — ideal for people who do not have the app.
 - **Standard files**: WGS-84 GPX (works with Garmin, Strava, TwoNav, and similar tools), GeoJSON, and KML. Import GPX, XML, and ZIP batches; batch-export ZIP.
-- **Verifiable backup**: the full-library ZIP carries SHA-256 content checksums. Restore shows the export time, contents, duplicate trips, and verification result, can download a snapshot of the current database first, and refuses corrupted archives. Before writing, restore validates archive size, paths, entries, and record relationships, then applies everything in one transaction that rolls back on failure. Backups can optionally be password-encrypted (PBKDF2-SHA-256 600,000 iterations + AES-256-GCM, `.trackmint.enc`); store unencrypted backups somewhere you trust.
+- **Verifiable backup**: the full-library ZIP carries SHA-256 content checksums. Restore shows the export time, contents, duplicate trips, and verification result, can download a snapshot of the current database first, and refuses corrupted archives. Before writing, restore validates archive size, paths, entries, and record relationships, then applies everything in one transaction that rolls back on failure. Backups can optionally be password-encrypted (PBKDF2-SHA-256 600,000 iterations + AES-256-GCM). New files use `.roametch.enc`; older `.trackmint.enc` backups remain restorable. Store unencrypted backups somewhere you trust.
 - **Compact import link**: pack a simplified track and waypoints into a URL `#` fragment under 1.5 KB. Opening it imports the trip; it is not a public page and contains no photos.
 - **Privacy review**: start/end privacy circles, sensitive-waypoint hiding, EXIF stripping, and WGS-84 export are shown together before you share or download.
-- **Promo artwork**: generate a 1080×1350 card from Settings. Each theme ships three designs — local-first, yearly footprint, and encrypted meetup — with matching captions, picked at random without immediate repeats. Product info and a QR code only; no personal data.
+- **Promo artwork**: generate a 1080×1350 card from Settings. Each theme ships eight designs with matching Chinese or English captions — local-first, yearly footprint, encrypted meetups, outdoor analysis, recap videos, background recovery, city footprints, and privacy — picked at random without immediate repeats and browsable with “Next”. Product info and a QR code only; no personal data.
 
 ### Live meetup: stay together in real time
 
@@ -100,7 +100,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 - Chat with online teammates after joining, with an unread badge. Messages live only in this tab's memory: late joiners see no history, messages are not replayed after disconnection, and everything is cleared when the session ends.
 - **Encrypted photo chat**: the camera button opens an in-app viewfinder with flip, torch where supported, album import, optional caption, and a preview showing compressed dimensions/size. Images step down for weak networks (720 px long edge, 480 px in low-data mode, 56 KB raw cap), are encrypted end-to-end, and have a 5-second sender cooldown. Received photos show an encryption badge, open in an enlarged viewer, and can pin their optional capture location on the map.
 - **On-demand HD originals**: with the default-off peer-to-peer original switch enabled, choosing **Load original** creates a one-to-one WebRTC DataChannel. The file holder is always the Offerer; the original travels in 16 KiB chunks and is checked against SHA-256. A failure, timeout, or checksum rejection affects only that original — location, text, and thumbnails keep working. The connection closes after 30 seconds idle.
-- Only the latest 20 chat thumbnails remain in session memory; older payloads become expired placeholders. The sender caches at most 10 originals/50 MB and the receiver at most 4 blobs/64 MB. Chat photos and originals are never written to IndexedDB, included in backups, or uploaded to a TrackMint server.
+- Only the latest 20 chat thumbnails remain in session memory; older payloads become expired placeholders. The sender caches at most 10 originals/50 MB and the receiver at most 4 blobs/64 MB. Chat photos and originals are never written to IndexedDB, included in backups, or uploaded to a RoamEtch server.
 - Pause or resume sharing, remove a teammate on the host device, reset the invite (new room and key), or end the session. Expiry and manual end clear the local session.
 - The invite, room, and chat exist only in the link `#` fragment and local memory; no cloud room is stored. Useful for hiking groups, convoys, camping, and crowded venues.
 
@@ -118,7 +118,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 ### Maps and coordinates
 
 - Mainland China network: AMap streets/satellite and Tianditu; global network: OpenStreetMap, OpenTopoMap, Esri imagery, and more. Choose automatically or override manually.
-- Custom raster tiles are supported. If a basemap is offline or CORS-restricted, TrackMint falls back to a vector-only drawing.
+- Custom raster tiles are supported. If a basemap is offline or CORS-restricted, RoamEtch falls back to a vector-only drawing.
 - Storage, analysis, GPX, GeoJSON, and KML always use WGS-84. GCJ-02 is applied only at render time for basemaps such as AMap, so source data is never polluted.
 
 ### Themes and languages
@@ -128,7 +128,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 
 ## Install on your phone or desktop
 
-1. **iPhone / iPad**: open the [live app](https://peteliao.github.io/TrackMint/) in Safari, tap **Share**, choose **Add to Home Screen**, then **Add**. iOS only exposes installation through the Safari share menu.
+1. **iPhone / iPad**: open the [live app](https://peteliao.github.io/RoamEtch/) in Safari, tap **Share**, choose **Add to Home Screen**, then **Add**. iOS only exposes installation through the Safari share menu.
 2. **Android**: open the app in Chrome or Edge, open the browser menu, and choose **Install app** or **Add to Home screen**.
 3. **Desktop**: click the install icon in the Chrome/Edge address bar when it appears, or open **Settings → Home-screen icon** inside the app for step-by-step guidance.
 
@@ -138,7 +138,7 @@ Installation never uploads your data. Tracks and photos remain on this device. E
 
 Use the hosted app — no installation required:
 
-**<https://peteliao.github.io/TrackMint/>**
+**<https://peteliao.github.io/RoamEtch/>**
 
 Local development or self-hosting:
 
@@ -151,22 +151,22 @@ npm run build      # type check + production build (dist/)
 npm run preview    # preview the production build
 ```
 
-`dist/` is fully static. Deploy it to GitHub Pages, Cloudflare Pages, Netlify, Vercel, or any static web server. There is no business backend and no database to provision. CI runs typecheck, unit tests, Playwright end-to-end smoke tests, and the production build on every push and pull request. Pushing a `v*` tag publishes a GitHub Release with `trackmint-dist.zip` and pushes the container images.
+`dist/` is fully static. Deploy it to GitHub Pages, Cloudflare Pages, Netlify, Vercel, or any static web server. There is no business backend and no database to provision. CI runs typecheck, unit tests, Playwright end-to-end smoke tests, and the production build on every push and pull request. Pushing a `v*` tag publishes a GitHub Release with `roametch-dist.zip` and pushes the container images.
 
 ### Docker self-hosting
 
 The repository includes a multi-stage `Dockerfile` and an `nginx.conf` with correct PWA cache headers for `sw.js` and `index.html`. Release tags publish images to GitHub Container Registry:
 
 ```bash
-docker run --rm -p 8080:80 ghcr.io/peteliao/trackmint:latest
+docker run --rm -p 8080:80 ghcr.io/peteliao/roametch:latest
 # open http://localhost:8080
 ```
 
 Or build from source:
 
 ```bash
-docker build -t trackmint .
-docker run --rm -p 8080:80 trackmint
+docker build -t roametch .
+docker run --rm -p 8080:80 roametch
 ```
 
 Geolocation and PWA installation on phones require HTTPS (except `localhost`), so put a TLS reverse proxy such as Caddy, Nginx, or Cloudflare Tunnel in front. This also works on a home NAS or a private server and does not depend on GitHub Pages.
@@ -176,12 +176,12 @@ Geolocation and PWA installation on phones require HTTPS (except `localhost`), s
 The default setup uses several public MQTT nodes concurrently and is suitable for testing. For a more stable or private relay, use the minimal blind WebSocket relay in [`relay/`](relay/README.md):
 
 ```bash
-docker run --rm -p 8080:8080 ghcr.io/peteliao/trackmint-relay:latest
+docker run --rm -p 8080:8080 ghcr.io/peteliao/roametch-relay:latest
 # or from source:
 cd relay && npm install && npm start
 # or
-docker build -t trackmint-relay ./relay
-docker run --rm -p 8080:8080 trackmint-relay
+docker build -t roametch-relay ./relay
+docker run --rm -p 8080:8080 roametch-relay
 ```
 
 Then choose **Settings → Team relay → Custom WS relay** and enter `wss://your-host/room/{room}`. The relay forwards ciphertext only and stores no messages.
@@ -219,7 +219,7 @@ GPS / GPX / photos
 
 ## How it compares
 
-| Capability | Typical cloud fitness platform | Generic GPS logger | TrackMint |
+| Capability | Typical cloud fitness platform | Generic GPS logger | RoamEtch |
 | --- | --- | --- | --- |
 | Account and cloud | Usually requires an account | Not always | No account, no cloud trip library |
 | Track storage | Vendor cloud | Local files or device | Local IndexedDB with full backup |
@@ -233,7 +233,7 @@ GPS / GPX / photos
 
 ## Privacy and data boundaries
 
-TrackMint is designed to keep data on your device, but “local-first” does not mean every network request disappears. Here is the precise boundary:
+RoamEtch is designed to keep data on your device, but “local-first” does not mean every network request disappears. Here is the precise boundary:
 
 - **Stored locally**: trips, track points, waypoints, photo thumbnails, and settings live in IndexedDB/localStorage. There is no account system, business backend, or in-app analytics reporting.
 - **Share links**: trip data and meetup invites are placed only in the URL `#` fragment. Browsers do not send the fragment to servers; anyone who receives the link can read the data inside, so share only with people you trust.
@@ -241,18 +241,18 @@ TrackMint is designed to keep data on your device, but “local-first” does no
 - **Photos and P2P originals**: EXIF location data is stripped before local storage. Chat thumbnails are redrawn/compressed in memory from the camera or album, never written to the device gallery or IndexedDB, and only the latest 20 remain in the session. HD originals are off by default and move only after an explicit request over a DTLS-encrypted WebRTC DataChannel, with SHA-256 and image validation. They bypass the meetup relay and remain in bounded memory caches, but both devices can observe each other’s network IP addresses; STUN/TURN servers receive connection metadata and a configured TURN server may relay encrypted bytes. Exported posters, videos, and HTML use the locally processed images only.
 - **External service requests**: basemap tiles, elevation, place-name, and routing services require network access and receive the coordinates/viewport needed to render or compute a result, plus normal network information such as your IP. When generating a poster or video, sampled coordinates may be sent to OpenStreetMap-based reverse geocoding to label the route, and the result is cached locally. Gap repair and meetup routing send endpoints only when you explicitly trigger them. These requests never upload photos or the full trip library.
 - **Device risk**: clearing browser data, uninstalling the PWA, or changing devices removes local trips — keep a full backup. Anyone who can unlock your device may be able to read browser storage.
-- **Full backups**: the backup ZIP contains complete tracks, waypoints, and photos. By default it is not encrypted, so anyone with the file can read it. You can set a password when exporting to produce an encrypted `.trackmint.enc` file (PBKDF2-SHA-256 600,000 iterations + AES-256-GCM); the password is never stored and cannot be recovered. Either way, keep backups somewhere you trust.
+- **Full backups**: the backup ZIP contains complete tracks, waypoints, and photos. By default it is not encrypted, so anyone with the file can read it. You can set a password when exporting to produce an encrypted `.roametch.enc` file; older `.trackmint.enc` backups remain restorable (PBKDF2-SHA-256 600,000 iterations + AES-256-GCM). The password is never stored and cannot be recovered. Either way, keep backups somewhere you trust.
 - **Original music**: replay-video soundtracks are synthesized in the browser; no external music files are downloaded or bundled.
 
 ## FAQ
 
-### Is TrackMint free and open source?
+### Is RoamEtch free and open source?
 
 Yes. It is released under GPL-3.0. The hosted version is free, with no account or paywall, and you can deploy `dist/` to your own static host.
 
 ### Does it upload my tracks?
 
-Not to a TrackMint business server: there is no business backend or cloud trip library. Third-party basemap, elevation, place-name, and routing services receive coordinates required for those specific features; see “Privacy and data boundaries” above.
+Not to a RoamEtch business server: there is no business backend or cloud trip library. Third-party basemap, elevation, place-name, and routing services receive coordinates required for those specific features; see “Privacy and data boundaries” above.
 
 ### Can I record offline?
 
@@ -264,15 +264,15 @@ Import: GPX, XML, and ZIP archives containing GPX/XML. Export: GPX, GeoJSON, KML
 
 ### Is live meetup secure?
 
-Positions, text, thumbnails, and WebRTC signaling use AES-256-GCM end-to-end encryption; the invite carries a 256-bit secret, and the public room id is independent of it. Public or custom relays only forward ciphertext; messages and thumbnails live only in memory and have no replay history. Thumbnails have a 5-second sender cooldown and only the latest 20 remain in memory. HD originals are disabled by default: after you explicitly enable P2P and load one, a one-to-one DTLS DataChannel verifies SHA-256 and transfers it without the meetup relay. This exposes the devices’ network IP addresses to each other and relevant metadata to STUN/TURN. Original bytes never enter IndexedDB or backups. Send invites through a trusted channel, not a public group. Old v1 12-character codes are retired and never silently downgraded. Sender identity authentication, key rotation after membership changes, and forward secrecy remain future protocol phases. TrackMint is not an SOS/rescue device and cannot stop someone who has received a position, message, or photo from saving it.
+Positions, text, thumbnails, and WebRTC signaling use AES-256-GCM end-to-end encryption; the invite carries a 256-bit secret, and the public room id is independent of it. Public or custom relays only forward ciphertext; messages and thumbnails live only in memory and have no replay history. Thumbnails have a 5-second sender cooldown and only the latest 20 remain in memory. HD originals are disabled by default: after you explicitly enable P2P and load one, a one-to-one DTLS DataChannel verifies SHA-256 and transfers it without the meetup relay. This exposes the devices’ network IP addresses to each other and relevant metadata to STUN/TURN. Original bytes never enter IndexedDB or backups. Send invites through a trusted channel, not a public group. Old v1 12-character codes are retired and never silently downgraded. Sender identity authentication, key rotation after membership changes, and forward secrecy remain future protocol phases. RoamEtch is not an SOS/rescue device and cannot stop someone who has received a position, message, or photo from saving it.
 
 ### Does recording continue with the screen off?
 
-TrackMint requests a screen wake lock while recording, and the OLED pocket lock keeps a true-black dashboard visible and awake without hiding the page. It cannot prevent system sleep: iOS and Android may still pause browser geolocation when the screen is locked with the power button or the app is backgrounded. TrackMint re-locates and resumes when you return. Drag the pocket-lock camera knob left by at least 120 px to shoot without unlocking; the camera closes after 20 seconds without interaction and returns to the black lock 3 seconds after a shot. Behavior depends on the OS and battery policy, so keep the app in the foreground for critical activities.
+RoamEtch requests a screen wake lock while recording, and the OLED pocket lock keeps a true-black dashboard visible and awake without hiding the page. It cannot prevent system sleep: iOS and Android may still pause browser geolocation when the screen is locked with the power button or the app is backgrounded. RoamEtch re-locates and resumes when you return. Drag the pocket-lock camera knob left by at least 120 px to shoot without unlocking; the camera closes after 20 seconds without interaction and returns to the black lock 3 seconds after a shot. Behavior depends on the OS and battery policy, so keep the app in the foreground for critical activities.
 
 ### Why do maps differ between regions?
 
-TrackMint selects a service stack by network region: AMap/Tianditu in mainland China and OpenStreetMap/OpenTopoMap/Esri elsewhere. You can override the basemap manually. GCJ-02 offsets are applied only at render time; storage and export remain WGS-84.
+RoamEtch selects a service stack by network region: AMap/Tianditu in mainland China and OpenStreetMap/OpenTopoMap/Esri elsewhere. You can override the basemap manually. GCJ-02 offsets are applied only at render time; storage and export remain WGS-84.
 
 ### How do I install it on my phone?
 
@@ -284,7 +284,7 @@ Delete a single trip from the trip library, or clear site data in the browser to
 
 ### Why the name “迹刻”?
 
-Track + Mint: recording a track and minting it into something worth sharing. The Chinese name 迹刻 sounds like 即刻 (“right now”) — open the page, record immediately, and carve the journey onto the map.
+Roam means roaming, road trips, and hiking exploration; Etch means etching journeys. The Chinese name 迹刻 sounds like 即刻 (“right now”) — open the page, record immediately, and carve the journey onto the map.
 
 ## Contributing
 

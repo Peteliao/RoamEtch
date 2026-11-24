@@ -83,8 +83,8 @@ export async function exportBackup({ password = '' }: { password?: string } = {}
     ? await encryptBackupBlob(new Blob([zipped], { type: 'application/zip' }), password)
     : new Blob([zipped], { type: 'application/zip' });
   const filename = encrypted
-    ? `trackmint-backup-${stamp}${ENCRYPTED_BACKUP_EXT}`
-    : `trackmint-backup-${stamp}.trip`;
+    ? `roametch-backup-${stamp}${ENCRYPTED_BACKUP_EXT}`
+    : `roametch-backup-${stamp}.trip`;
   return { blob, filename, tripCount: trips.length, exportedAt, counts: manifest.counts, encrypted };
 }
 
