@@ -187,7 +187,7 @@ export function createSettingsView(navigate) {
     el('div', { class: 'small muted', style: { margin: '-2px 0 10px' } }, t('settings.meetChannelNote')),
     segRow(t('settings.meetChannel'), [
       ['mqtt', t('settings.meetMqtt')], ['ws', t('settings.meetWs')]
-    ], meetRelayMode, (v) => { meetRelayMode = v; renderMeetRelayFields(); }, t('settings.meetSettingsNote')),
+    ], meetRelayMode, (v) => { meetRelayMode = v; set('meetRelayMode', v); renderMeetRelayFields(); }, t('settings.meetSettingsNote')),
     meetRelayFields
   );
   const meetCard = card('meet', t('settings.meetGroup'),

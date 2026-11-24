@@ -11,6 +11,15 @@ export async function gotoTab(page: Page, tab: string) {
   await expect(page.locator(`#view-${tab}.active`)).toBeVisible();
 }
 
+export async function configureWsRelay(page: Page, relayUrl: string) {
+  await gotoTab(page, 'settings');
+  const block = page.locator('.relay-settings-block');
+  await block.getByRole('button', { name: '自建 WS 中继', exact: true }).click();
+  const input = block.locator('input[type="text"]');
+  await input.fill(relayUrl);
+  await input.press('Tab');
+}
+
 /** Abort remote tile/geocode traffic so tests do not depend on third-party latency. */
 export async function blockExternal(page: Page) {
   await page.route('**/*', (route) => {

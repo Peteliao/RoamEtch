@@ -11,7 +11,7 @@ import { availableBasemaps } from '../core/providers';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine, bearing } from '../core/geo';
 import { estimateCalories } from '../core/calories';
 import { altSourceShortKey, altSourceTagClass } from '../core/elevation';
-import { loadTripFull, updateTrip, getTrip } from '../core/store';
+import { loadTripFull, updateTrip, getTrip, listWaypoints, addPhotoWaypoint, deletePhotoWaypoint } from '../core/store';
 import { onBroadcast } from '../core/locks';
 import { TrackMap } from './map';
 import { WP_ICONS } from '../core/waypointMeta';
@@ -20,6 +20,7 @@ import { appState, setActiveTrip } from './state';
 import { openWaypointModal, moveWaypoint, moveVertex, insertVertex, deleteVertex, undoEdit, redoEdit, histState } from './editor';
 import { el, icon, toast, modal, promptModal } from './helpers';
 import { confirmModal } from './helpers';
+import { openCamera } from './camera';
 
 export function createRecordView() {
   const view = el('div', { class: 'view', id: 'view-record' });
@@ -537,6 +538,93 @@ export function createRecordView() {
     });
   }
 
+  // ---------- embedded camera: quick photo waypoints ----------
+  const CAMERA_FIX_MAX_AGE_MS = 15_000;
+  let cameraFixRequest = null;
+  let cameraFixMissUntil = 0;
+
+  function liveCameraFix() {
+    const L = rec.live;
+    if (!L || L.lat == null || L.lon == null || Date.now() - rec.lastFixWall > CAMERA_FIX_MAX_AGE_MS) return null;
+    return { lat: L.lat, lon: L.lon, alt: L.alt ?? null, acc: L.acc ?? null };
+  }
+
+  function locateCameraFix() {
+    if (!navigator.geolocation) return Promise.resolve(null);
+    if (Date.now() < cameraFixMissUntil) return Promise.resolve(null);
+    if (cameraFixRequest) return cameraFixRequest;
+    cameraFixRequest = new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition((pos) => {
+        const c = pos.coords;
+        const fresh = Date.now() - (pos.timestamp || Date.now()) <= 20_000;
+        const valid = fresh && Number.isFinite(c.latitude) && Number.isFinite(c.longitude)
+          && Math.abs(c.latitude) <= 90 && Math.abs(c.longitude) <= 180
+          && (!Number.isFinite(c.accuracy) || c.accuracy <= 200);
+        resolve(valid ? { lat: c.latitude, lon: c.longitude, alt: c.altitude ?? null, acc: c.accuracy ?? null } : null);
+      }, () => resolve(null), { enableHighAccuracy: true, maximumAge: 0, timeout: 15_000 });
+    }).then((fix) => {
+      cameraFixRequest = null;
+      if (!fix) cameraFixMissUntil = Date.now() + 5_000;
+      return fix;
+    });
+    return cameraFixRequest;
+  }
+
+  function cameraFix() {
+    if (rec.simulated) return Promise.resolve(liveCameraFix());
+    if (rec.status === 'paused') return locateCameraFix();
+    const live = liveCameraFix();
+    return live ? Promise.resolve(live) : locateCameraFix();
+  }
+
+  function openQuickCamera() {
+    if (!rec.tripId || (rec.status !== 'recording' && rec.status !== 'paused')) {
+      toast(t('camera.noFix'), 'warn');
+      return;
+    }
+    armKeepAlive();
+    openCamera({ mode: 'quick', getFix: cameraFix, onQuickSave: saveCapturedPhoto });
+  }
+
+  async function saveCapturedPhoto(shot) {
+    const tripId = rec.tripId;
+    if (!tripId || !shot.fix) return { ok: false };
+    try {
+      const saved = await addPhotoWaypoint({
+        tripId,
+        photo: shot,
+        fix: shot.fix,
+        takenAt: shot.takenAt,
+        nameFor: (n) => t('record.photoNodeName', { n })
+      });
+      await refreshRecordingWaypoints();
+      const thumbUrl = URL.createObjectURL(shot.thumb);
+      return {
+        ok: true,
+        label: t('record.photoSaved', { n: saved.number }),
+        thumbUrl,
+        undo: async () => {
+          await deletePhotoWaypoint(saved.waypoint.id, tripId, saved.media.id);
+          await refreshRecordingWaypoints();
+        }
+      };
+    } catch (e) {
+      console.error(e);
+      return { ok: false };
+    }
+  }
+
+  function openOledCamera() {
+    if (psCamAct.hidden || !rec.tripId || (rec.status !== 'recording' && rec.status !== 'paused')) return;
+    armKeepAlive();
+    openCamera({
+      mode: 'oled',
+      idleCloseMs: 20_000,
+      getFix: cameraFix,
+      onQuickSave: saveCapturedPhoto
+    });
+  }
+
   function renderButtons() {
     btnRow.innerHTML = '';
     actRow.innerHTML = '';
@@ -556,7 +644,8 @@ export function createRecordView() {
       btnRow.append(
         el('button', { class: 'rec-btn node', onclick: openRecWaypoint }, icon('pin', 20), t('record.node')),
         el('button', { class: 'rec-btn pause', onclick: () => runRecAction(pauseRecording()) }, icon('pause', 22), t('record.pause')),
-        el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop'))
+        el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop')),
+        el('button', { class: 'rec-btn camera', onclick: openQuickCamera, title: t('camera.titleQuick') }, icon('camera', 22), t('record.photo'))
       );
     } else if (rec.status === 'paused') {
       renderAutoTag();
@@ -565,10 +654,12 @@ export function createRecordView() {
       btnRow.append(
         el('button', { class: 'rec-btn node', onclick: openRecWaypoint }, icon('pin', 20), t('record.node')),
         el('button', { class: 'rec-btn resume', onclick: () => { armKeepAlive(); runRecAction(resumeRecording()); } }, icon('play', 22), t('record.resume')),
-        el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop'))
+        el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop')),
+        el('button', { class: 'rec-btn camera', onclick: openQuickCamera, title: t('camera.titleQuick') }, icon('camera', 22), t('record.photo'))
       );
     }
     renderPsTop();
+    updatePsCamera();
   }
 
   // One-shot fix when the view opens idle: triggers the permission prompt on first
@@ -675,8 +766,12 @@ export function createRecordView() {
   }
   async function refreshRecordingWaypoints() {
     if (!rec.tripId) return;
-    const full = await loadTripFull(rec.tripId);
-    if (full && map && !psActive) map.setWaypoints(full.waypoints);
+    try {
+      const waypoints = await listWaypoints(rec.tripId);
+      if (map && !psActive) map.setWaypoints(waypoints);
+    } catch (e) {
+      console.warn('waypoint refresh failed', e);
+    }
   }
   function openRecWaypoint() {
     const L = rec.live;
@@ -780,6 +875,16 @@ export function createRecordView() {
       </div>
     </div>
     <div class="ps-sub">${t('record.lockSub')}</div>`;
+  const psCamAct = el('div', { class: 'ps-act ps-cam-act', hidden: true });
+  psCamAct.innerHTML = `
+    <div class="ps-cam-track" role="button" aria-label="${t('record.camSwipe')}" title="${t('record.camSwipeHint')}">
+      <span class="ps-cam-arrow">‹</span>
+      <span class="ps-cam-knob">
+        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4V8Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><circle cx="12" cy="13" r="3.4" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+      </span>
+    </div>
+    <div class="ps-hint">${t('record.camSwipe')}</div>`;
+  psBottom.querySelector('.ps-actions').append(psCamAct);
   ps.append(psTop, odGrid, psBottom);
   document.body.append(ps);
 
@@ -836,6 +941,47 @@ export function createRecordView() {
   bindHold(unlockRing, unlockFg, 1500, () => setPowerLock(false));
   ps.addEventListener('contextmenu', (e) => e.preventDefault());
 
+  function updatePsCamera() {
+    psCamAct.hidden = !(rec.status === 'recording' || rec.status === 'paused');
+  }
+
+  const psCamTrack = psCamAct.querySelector('.ps-cam-track') as HTMLElement;
+  const psCamKnob = psCamAct.querySelector('.ps-cam-knob') as HTMLElement;
+  let camGesture: { startX: number; startY: number; ready: boolean; invalid: boolean } | null = null;
+  const resetCamGesture = () => {
+    camGesture = null;
+    psCamKnob.style.transition = '';
+    psCamKnob.style.transform = '';
+    psCamTrack.classList.remove('ready');
+  };
+  psCamTrack.addEventListener('pointerdown', (e) => {
+    if (!psActive || psCamAct.hidden) return;
+    e.preventDefault();
+    e.stopPropagation();
+    try { psCamTrack.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+    psCamKnob.style.transition = 'none';
+    psCamTrack.classList.remove('ready');
+    camGesture = { startX: e.clientX, startY: e.clientY, ready: false, invalid: false };
+  });
+  psCamTrack.addEventListener('pointermove', (e) => {
+    if (!camGesture) return;
+    e.preventDefault();
+    const dx = e.clientX - camGesture.startX;
+    const dy = e.clientY - camGesture.startY;
+    if (Math.abs(dy) > Math.abs(dx) + 18) camGesture.invalid = true;
+    camGesture.ready = dx <= -120 && Math.abs(dy) <= 90 && !camGesture.invalid;
+    psCamKnob.style.transform = `translateX(${camGesture.ready ? -55 : Math.max(-55, Math.min(0, dx))}px)`;
+    psCamTrack.classList.toggle('ready', camGesture.ready);
+  });
+  const endCamGesture = (e) => {
+    if (!camGesture) return;
+    const fire = e.type === 'pointerup' && camGesture.ready;
+    resetCamGesture();
+    if (fire) openOledCamera();
+  };
+  psCamTrack.addEventListener('pointerup', endCamGesture);
+  psCamTrack.addEventListener('pointercancel', resetCamGesture);
+
   function renderOled(L) {
     if (!L || !psActive) return;
     const units = get('units');
@@ -876,6 +1022,7 @@ export function createRecordView() {
       ps.classList.add('active');
       requestWakeLock();
       renderPsTop();
+      updatePsCamera();
       renderOled(rec.live);
       updatePsSub();
       setTimeout(() => { if (psActive) updatePsSub(); }, 1200);

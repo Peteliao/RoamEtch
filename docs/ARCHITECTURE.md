@@ -61,6 +61,8 @@ Key principles:
 | `src/core/footprint.ts` | Year/month aggregation over `statsCache` for the footprint card. |
 | `src/core/gpsQuality.ts` | Accuracy, poor fixes, time gaps, altitude jumps, and 0–100 quality score. |
 | `src/core/meet*.ts` | Meetup invitations, HKDF/AES-256-GCM envelopes, nonce and replay guards, MQTT/WS transport, session state. |
+| `src/core/chatImage.ts` | Shared weak-network image ladder, byte/base64 caps, MIME/dimension/coordinate validation, cooldown and retention constants. |
+| `src/ui/camera.ts` | Embedded `getUserMedia` viewfinder, chat compression/preview, local photo encoding, OLED idle/lock timers, track and object-URL cleanup. |
 | `src/core/privacy.ts` | Start/end privacy cropping, sensitive waypoint hiding, EXIF stripping. |
 | `src/core/gpx.ts`, `batch.ts`, `shareLink.ts`, `htmlExport.ts` | File, batch, compact-link, and standalone HTML formats. |
 | `src/core/region.ts`, `providers.ts`, `coords.ts` | Service routing and China/global map adaptation. |
@@ -135,6 +137,13 @@ Backups serialize every table plus binary media into a `.trip` ZIP:
    without geolocation.
 7. Finishing writes `statsCache` through the statistics worker so the trip list and
    footprint can render without recomputing every track.
+8. The record view can open the embedded camera while recording or paused. A
+   shot is encoded locally as a 1600 px JPEG plus thumbnail and saved with a
+   fresh-enough WGS-84 fix as a `photo` waypoint linked to `media` in one
+   transaction; paused or stale captures request a one-shot position without
+   creating a track point. Undo atomically removes the waypoint and only deletes
+   media no other waypoint references. The OLED pocket lock destroys the live
+   map, so its camera uses the recorder's in-memory fix or the same one-shot path.
 
 ## Statistics and charts
 
@@ -157,6 +166,29 @@ override, a short tile probe, or timezone/language. It does not transform stored
 coordinates. China basemaps that expect GCJ-02 receive a render-time conversion in
 `ui/map.ts`; picking converts back to WGS-84 before anything is stored. Map tile
 caches are bounded per provider and evicted on quota errors.
+
+## Embedded camera
+
+`ui/camera.ts` owns one active full-screen viewfinder. `getUserMedia` is invoked
+synchronously from the opening click or OLED pointer-up so iOS treats it as a
+user gesture; the page is not handed off to the system camera. Video dimensions
+are read dynamically, frames are drawn to canvas, and every close/retake path
+stops only camera tracks, revokes owned object URLs, clears timers, and re-arms
+the 1 px iOS keepalive video. GPS watches and meetup relays are never stopped by
+the camera.
+
+Three modes share the viewfinder:
+
+- `chat`: adaptive WebP/JPEG compression, immediate frozen preview, final size
+  readout, optional caption, and encrypted send with coordinates refreshed at
+  shutter time. Preview jobs are generation-scoped so a discarded capture cannot
+  overwrite a newer one. Album inputs are bounded to 32 MB and 40 MP, and their
+  JPEG/PNG/WebP headers are checked before object URL creation or canvas decode.
+- `quick`: 1600 px JPEG plus a 300 px thumbnail, saved as a local photo waypoint.
+- `oled`: opened by a predominantly horizontal left drag of at least 120 px from
+  the bottom-right knob; taps and short drags are ignored. It auto-closes after
+  20 seconds without interaction, and after a shot releases the camera and shows
+  a 3-second return-to-lock card.
 
 ## Sharing and export
 
@@ -191,13 +223,19 @@ WSS broker (`trackmint/v2/meet/<roomId>`) or a custom WebSocket relay. Each
 device uses a random nonce prefix plus a monotonic counter, and every packet type
 passes a per-sender strictly increasing sequence guard before it is accepted;
 timestamps and chat ids are additional checks. Messages live in memory only: no
-history, no late-joiner backfill, no persistence after the session ends. Version
+history, no late-joiner backfill, no persistence after the session ends. Chat
+photos add MIME/base64/byte/dimension/coordinate validation, a 5-second sender
+cooldown, a 4.25-second receiver gap, a 56 KB raw-image cap, and a latest-20
+in-memory payload limit; encoded WebP/JPEG headers must match the declared size
+and stay within a 720 px edge / 518,400 pixel budget before decoding. The
+encrypted transport cap is 128 KB. Version
 1 invitations and packets are rejected explicitly, so an upgraded client cannot
 silently fall back to the old 60-bit protocol. Location publishing adapts to
 movement: roughly every 5 seconds while the device is moving and a 25-second
 heartbeat while stationary, so idle teammates stop consuming airtime. `relay/`
-is a minimal blind-forwarding template with frame-size, rate, room/client, and
-idle-TTL limits; it is not required by the static app.
+is a minimal blind-forwarding template with frame-size, message-rate, byte-rate,
+per-peer send-buffer, room/client, and idle-TTL limits; it preserves text framing
+and rate-limits rejected binary frames. It is not required by the static app.
 
 ## Offline and updates
 
@@ -212,12 +250,15 @@ if an old build appears.
 ## Tests and CI
 
 Vitest covers pure modules: coordinates, geo math, statistics, privacy cropping,
-GPX/KML/GeoJSON, compact links, demo data, meetup crypto and cadence, backup
-integrity and encryption, footprint aggregation and recap summaries, GPS
-quality, and procedural video-music composition. Playwright smoke tests run the
-demo and simulator flows in Chromium: analysis chart switching and privacy
-cropping, poster canvas rendering, text-only HTML export, encrypted backup
-export → wipe → restore, and the iOS storage nudge. GitHub Actions
+GPX/KML/GeoJSON, compact links, demo data, meetup crypto and cadence, chat-image
+compression/validation, backup integrity and encryption, footprint aggregation
+and recap summaries, GPS quality, and procedural video-music composition.
+Playwright smoke tests run the demo and simulator flows in Chromium: analysis
+chart switching and privacy cropping, poster canvas rendering, text-only HTML
+export, encrypted backup export → wipe → restore, the iOS storage nudge, and
+fake-camera coverage for quick photo save/undo, two-client encrypted photo chat
+and map locate, OLED anti-mistouch, 3-second auto-lock, and 20-second idle close.
+GitHub Actions
 runs typecheck, the full test suite, the production build, the Playwright suite,
 and a separate relay test job. The Pages workflow runs the same tests before
 publishing `dist/`. Pushing a `v*` tag triggers the release workflow, which

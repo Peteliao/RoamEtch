@@ -12,12 +12,19 @@ import {
   meetLinkFor,
   randomMeetId,
   roomLabelFor,
-  MEET_PROTOCOL_VERSION
+  MEET_PROTOCOL_VERSION,
+  MEET_MAX_PACKET_CHARS
 } from './meetLink';
 import { acceptMeetSequence, pruneMeetReplay } from './meetReplay';
 import { createMeetRelay } from './meetRelay';
 import { shouldPublishFix } from './meetCadence';
 import { routeOverRoads } from './gapRepair';
+import {
+  CHAT_IMAGE_COOLDOWN_MS,
+  CHAT_IMAGE_KEEP,
+  CHAT_IMAGE_MAX_BASE64,
+  sanitizeChatImagePacket
+} from './chatImage';
 
 const STALE_MS = 45_000;
 const REMOVE_MS = 10 * 60_000;
@@ -28,6 +35,7 @@ const MAX_CHAT_MESSAGES = 120;
 const CHAT_SEEN_LIMIT = 240;
 const CHAT_RATE_WINDOW_MS = 3_000;
 const CHAT_RATE_LIMIT = 6;
+const IMAGE_RECEIVE_GAP_MS = CHAT_IMAGE_COOLDOWN_MS - 750;
 const PEER_COLORS = ['#5aa7f0', '#f5b942', '#f26d6d', '#b07cf7', '#f28ac6', '#7ed957', '#ff9e5e', '#45d1c8'];
 
 type MeetSession = any;
@@ -66,6 +74,12 @@ function rememberChatId(s: MeetSession, id: string) {
 function pushChatMessage(s: MeetSession, message: any) {
   s.messages.push(message);
   if (s.messages.length > MAX_CHAT_MESSAGES) s.messages.splice(0, s.messages.length - MAX_CHAT_MESSAGES);
+  const images = s.messages.filter((m: any) => m.img);
+  for (let i = 0; i < images.length - CHAT_IMAGE_KEEP; i++) {
+    const old = images[i];
+    if (old.img?.data) old.img = { ...old.img, data: null };
+    old.imgExpired = true;
+  }
 }
 
 function chatRateOk(s: MeetSession, peerId: string, now: number) {
@@ -76,6 +90,13 @@ function chatRateOk(s: MeetSession, peerId: string, now: number) {
   }
   recent.push(now);
   s.chatRate.set(peerId, recent);
+  return true;
+}
+
+function imageRateOk(s: MeetSession, peerId: string, now: number) {
+  const last = s.chatImageRate.get(peerId) || 0;
+  if (last && now - last < IMAGE_RECEIVE_GAP_MS) return false;
+  s.chatImageRate.set(peerId, now);
   return true;
 }
 
@@ -347,6 +368,7 @@ function publishPacket(body: any) {
       if (!Number.isSafeInteger(seq)) return false;
       const packet = { ...body, v: MEET_PROTOCOL_VERSION, sq: seq, ts: Date.now() };
       const text = await encryptMeetPacket(packet, s.room);
+      if (text.length > MEET_MAX_PACKET_CHARS) return false;
       if (session !== s || s.epoch !== epoch || s.relay !== relay) return false;
       return relay.send(text);
     } catch {
@@ -463,9 +485,12 @@ async function handleIncoming(text: string) {
   if (msg.k === 'msg') {
     const mid = String(msg.mid || '');
     if (!/^[A-Za-z0-9_-]{8,32}$/.test(mid) || s.chatSeen.has(mid)) return;
+    const image = msg.im != null ? sanitizeChatImagePacket(msg) : null;
+    if (msg.im != null && !image) return;
     const text = cleanChatText(msg.tx);
-    if (!text) return;
+    if (!image && !text) return;
     if (!chatRateOk(s, senderId, now)) return;
+    if (image && !imageRateOk(s, senderId, now)) return;
     const touched = touchPeer(msg, now);
     if (!touched) return;
     if (touched.isNew) {
@@ -484,7 +509,16 @@ async function handleIncoming(text: string) {
       color: touched.peer.color,
       text,
       ts,
-      self: false
+      self: false,
+      img: image ? {
+        data: image.base64,
+        mime: image.mime,
+        width: image.width,
+        height: image.height
+      } : null,
+      lat: image?.lat ?? null,
+      lon: image?.lon ?? null,
+      acc: image?.acc ?? null
     });
     s.chatUnread = Math.min(999, s.chatUnread + 1);
     emit('meet:chat', { unread: s.chatUnread });
@@ -626,6 +660,8 @@ async function beginSession({ invite, name, host, expiryMin }: { invite: string;
     chatUnread: 0,
     chatSeen: new Set(),
     chatRate: new Map(),
+    chatImageRate: new Map(),
+    lastImageAt: 0,
     replay: new Map(),
     relay: null,
     relayState: 'connecting',
@@ -700,6 +736,8 @@ function cleanupSession(s: MeetSession) {
   s.chatUnread = 0;
   s.chatSeen.clear();
   s.chatRate.clear();
+  s.chatImageRate.clear();
+  s.lastImageAt = 0;
   s.replay.clear();
 }
 
@@ -715,6 +753,8 @@ export async function resetMeetCode() {
   s.chatUnread = 0;
   s.chatSeen.clear();
   s.chatRate.clear();
+  s.chatImageRate.clear();
+  s.lastImageAt = 0;
   s.replay.clear();
   s.routeAbort?.abort();
   s.route = null;
@@ -783,6 +823,69 @@ export function markMeetChatRead() {
   if (!s || !s.chatUnread) return;
   s.chatUnread = 0;
   emit('meet:chat', { unread: 0 });
+}
+
+export function meetImageCooldownLeft(now = Date.now()) {
+  const s = session;
+  if (!s?.lastImageAt) return 0;
+  return Math.max(0, CHAT_IMAGE_COOLDOWN_MS - (now - s.lastImageAt));
+}
+
+export async function sendMeetImage({ base64, mime, width, height, caption = '', lat = null, lon = null, acc = null }: any) {
+  const s = session;
+  if (!s) return false;
+  const image = sanitizeChatImagePacket({
+    im: base64,
+    imt: mime,
+    imw: width,
+    imh: height,
+    la: lat,
+    lo: lon,
+    ac: acc
+  });
+  if (!image) return false;
+  const now = Date.now();
+  if (meetImageCooldownLeft(now) > 0) return false;
+  s.lastImageAt = now;
+  const text = cleanChatText(caption);
+  const mid = randomMeetId();
+  const body: any = {
+    k: 'msg', id: s.self.id, name: s.self.name, c: s.self.color,
+    mid, im: image.base64, imt: image.mime, imw: image.width, imh: image.height
+  };
+  if (text) body.tx = text;
+  if (image.lat != null && image.lon != null) {
+    body.la = image.lat;
+    body.lo = image.lon;
+    if (image.acc != null) body.ac = image.acc;
+  }
+  const ok = await publishPacket(body);
+  if (session !== s) return false;
+  if (!ok) {
+    if (s.lastImageAt === now) s.lastImageAt = 0;
+    return false;
+  }
+  rememberChatId(s, mid);
+  pushChatMessage(s, {
+    id: mid,
+    fromId: s.self.id,
+    name: s.self.name,
+    color: s.self.color,
+    text,
+    ts: now,
+    self: true,
+    img: {
+      data: image.base64,
+      mime: image.mime,
+      width: image.width,
+      height: image.height
+    },
+    lat: image.lat,
+    lon: image.lon,
+    acc: image.acc
+  });
+  emit('meet:chat', { unread: s.chatUnread });
+  return true;
 }
 
 export async function sendMeetNow() {
@@ -872,6 +975,8 @@ export const meet = {
   reset: resetMeetCode,
   setSharing: setMeetSharing,
   sendMessage: sendMeetMessage,
+  sendImage: sendMeetImage,
+  imageCooldownLeft: meetImageCooldownLeft,
   markChatRead: markMeetChatRead,
   sendNow: sendMeetNow,
   retryGeo: retryMeetGeolocation,

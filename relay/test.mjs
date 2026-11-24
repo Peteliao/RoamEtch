@@ -17,8 +17,12 @@ function connect(url) {
 function nextMessage(ws) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('message timeout')), 2000);
-    ws.once('message', (data) => {
+    ws.once('message', (data, isBinary) => {
       clearTimeout(timer);
+      if (isBinary) {
+        reject(new Error('unexpected binary frame'));
+        return;
+      }
       resolve(data.toString());
     });
   });
@@ -89,6 +93,18 @@ test('rejects malformed room paths and binary frames', async (t) => {
   assert.equal(leaked, false);
 });
 
+test('rate limits binary frames before rejecting them', async (t) => {
+  const relay = createRelayServer({
+    port: 0, host: '127.0.0.1', messageRate: 1, messageBurst: 2
+  });
+  const address = await relay.listen();
+  const ws = await connect(`ws://127.0.0.1:${address.port}/room/${ROOM_A}`);
+  t.after(() => { ws.terminate(); return relay.close(); });
+  const closed = closeCode(ws);
+  for (let i = 0; i < 4; i++) ws.send(Buffer.from(`binary-${i}`));
+  assert.equal(await closed, 1008);
+});
+
 test('closes abusive sockets and caps rooms', async (t) => {
   const relay = createRelayServer({
     port: 0,
@@ -137,6 +153,55 @@ test('closes oversized frames', async (t) => {
   await new Promise((resolve) => ws.once('open', resolve));
   ws.send('x'.repeat(512));
   assert.equal(await closed, 1009);
+});
+
+test('relays image-sized frames within the 128 KB limit', async (t) => {
+  const relay = createRelayServer({ port: 0, host: '127.0.0.1' });
+  const address = await relay.listen();
+  const base = `ws://127.0.0.1:${address.port}/room/`;
+  t.after(() => relay.close());
+  const a = await connect(base + ROOM_A);
+  const b = await connect(base + ROOM_A);
+  t.after(() => { a.close(); b.close(); });
+
+  const received = nextMessage(b);
+  const imageFrame = 'A'.repeat(100 * 1024);
+  a.send(imageFrame);
+  assert.equal(await received, imageFrame);
+
+  const closed = closeCode(a);
+  a.send('B'.repeat(129 * 1024));
+  assert.equal(await closed, 1009);
+});
+
+test('enforces a byte budget in addition to frame rate', async (t) => {
+  const relay = createRelayServer({
+    port: 0, host: '127.0.0.1', maxMessageBytes: 2048,
+    messageByteRate: 0, messageByteBurst: 1200
+  });
+  const address = await relay.listen();
+  const ws = await connect(`ws://127.0.0.1:${address.port}/room/${ROOM_A}`);
+  t.after(() => { ws.terminate(); return relay.close(); });
+  const closed = closeCode(ws);
+  ws.send('x'.repeat(1300));
+  await delay(50);
+  ws.send('y'.repeat(1300));
+  assert.equal(await closed, 1008);
+});
+
+test('closes slow consumers before queuing oversized fan-out buffers', async (t) => {
+  const relay = createRelayServer({
+    port: 0, host: '127.0.0.1', maxMessageBytes: 2048,
+    maxSendBufferBytes: 1024
+  });
+  const address = await relay.listen();
+  const base = `ws://127.0.0.1:${address.port}/room/${ROOM_A}`;
+  const a = await connect(base);
+  const b = await connect(base);
+  t.after(() => { a.close(); b.close(); return relay.close(); });
+  const closed = closeCode(b);
+  a.send('x'.repeat(1500));
+  assert.equal(await closed, 1013);
 });
 
 test('sweeps idle rooms and releases their sockets', async (t) => {

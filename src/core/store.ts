@@ -124,6 +124,39 @@ export async function addWaypoint(wp) {
 export const updateWaypoint = (id, patch) => db.waypoints.update(id, patch);
 export const deleteWaypoint = (id) => db.waypoints.delete(id);
 export const getWaypoint = (id) => db.waypoints.get(id);
+export const listWaypoints = (tripId) => db.waypoints.where('tripId').equals(tripId).toArray();
+
+export async function addPhotoWaypoint({ tripId, photo, fix, takenAt, nameFor = () => '' }: any) {
+  return db.transaction('rw', [db.media, db.waypoints, db.trips], async () => {
+    const photos = await db.waypoints.where('tripId').equals(tripId).filter((w) => w.type === 'photo').toArray();
+    const n = photos.length + 1;
+    const media = {
+      id: uuid(), tripId, blob: photo.blob, thumb: photo.thumb,
+      width: photo.width, height: photo.height, createdAt: Date.now()
+    };
+    const waypoint = {
+      id: uuid(), tripId, lat: fix.lat, lon: fix.lon,
+      alt: fix.alt ?? null, acc: fix.acc ?? null,
+      type: 'photo', name: nameFor(n), time: takenAt,
+      mediaIds: [media.id], hidden: false
+    };
+    await db.media.add(media);
+    await db.waypoints.add(waypoint);
+    await db.trips.update(tripId, { updatedAt: Date.now() });
+    return { media, waypoint, number: n };
+  });
+}
+
+export async function deletePhotoWaypoint(waypointId, tripId, mediaId) {
+  return db.transaction('rw', [db.media, db.waypoints, db.trips], async () => {
+    await db.waypoints.delete(waypointId);
+    const references = mediaId
+      ? await db.waypoints.where('tripId').equals(tripId).filter((w) => w.mediaIds?.includes(mediaId)).toArray()
+      : [];
+    if (mediaId && !references.length) await db.media.delete(mediaId);
+    await db.trips.update(tripId, { updatedAt: Date.now() });
+  });
+}
 
 // ---------- media ----------
 export async function addMedia({ tripId, blob, thumb, width, height }) {

@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-const MAX_MESSAGE_BYTES = 8 * 1024;
+const MAX_MESSAGE_BYTES = 128 * 1024;
 const MAX_CLIENTS_PER_ROOM = 32;
 const MAX_ROOMS = 2_000;
 const MAX_CLIENTS = 10_000;
@@ -13,6 +13,9 @@ const ROOM_IDLE_MS = 12 * 60 * 60_000;
 const SWEEP_MS = 60_000;
 const MESSAGE_RATE = 8;
 const MESSAGE_BURST = 40;
+const MESSAGE_BYTE_RATE = 512 * 1024;
+const MESSAGE_BYTE_BURST = 2 * 1024 * 1024;
+const MAX_SEND_BUFFER_BYTES = 512 * 1024;
 const HEARTBEAT_MS = 30_000;
 
 function takeToken(ws, now, rate, burst) {
@@ -27,6 +30,18 @@ function takeToken(ws, now, rate, burst) {
   return true;
 }
 
+function takeByteTokens(ws, bytes, now, rate, burst) {
+  if (ws.byteTokens == null) {
+    ws.byteTokens = burst;
+    ws.byteTokenAt = now;
+  }
+  ws.byteTokens = Math.min(burst, ws.byteTokens + ((now - ws.byteTokenAt) / 1000) * rate);
+  ws.byteTokenAt = now;
+  if (ws.byteTokens < bytes) return false;
+  ws.byteTokens -= bytes;
+  return true;
+}
+
 export function createRelayServer({
   port = process.env.PORT || 8080,
   host = process.env.HOST || '0.0.0.0',
@@ -38,7 +53,10 @@ export function createRelayServer({
   roomIdleMs = ROOM_IDLE_MS,
   sweepMs = SWEEP_MS,
   messageRate = MESSAGE_RATE,
-  messageBurst = MESSAGE_BURST
+  messageBurst = MESSAGE_BURST,
+  messageByteRate = MESSAGE_BYTE_RATE,
+  messageByteBurst = MESSAGE_BYTE_BURST,
+  maxSendBufferBytes = MAX_SEND_BUFFER_BYTES
 } = {}) {
   const rooms = new Map();
   let clientCount = 0;
@@ -87,19 +105,21 @@ export function createRelayServer({
 
       ws.on('pong', () => { ws.isAlive = true; });
       ws.on('message', (data, isBinary) => {
-        if (isBinary) return;
         const now = Date.now();
-        if (!takeToken(ws, now, messageRate, messageBurst)) {
+        if (!takeToken(ws, now, messageRate, messageBurst)
+          || !takeByteTokens(ws, data.length, now, messageByteRate, messageByteBurst)) {
           ws.close(1008, 'rate limit');
           return;
         }
-        const text = data.toString();
-        if (!text) return;
+        if (isBinary || !data.length) return;
         state.lastActivity = now;
         for (const peer of state.peers) {
-          if (peer !== ws && peer.readyState === 1) {
-            try { peer.send(text); } catch { /* peer close handles cleanup */ }
+          if (peer === ws || peer.readyState !== 1) continue;
+          if (peer.bufferedAmount + data.length > maxSendBufferBytes) {
+            peer.close(1013, 'slow consumer');
+            continue;
           }
+          try { peer.send(data.toString('utf8'), { binary: false }); } catch { /* peer close handles cleanup */ }
         }
       });
       ws.on('close', () => {
@@ -108,7 +128,11 @@ export function createRelayServer({
         if (!state.peers.size && rooms.get(room) === state) rooms.delete(room);
         log(`leave ${room.slice(0, 8)} (${state.peers.size})`);
       });
-      ws.on('error', () => {
+      ws.on('error', (err) => {
+        if (/max payload/i.test(String(err?.message || ''))) {
+          try { ws.close(1009, 'payload too large'); } catch { ws.terminate(); }
+          return;
+        }
         try { ws.terminate(); } catch { /* already closed */ }
       });
     });

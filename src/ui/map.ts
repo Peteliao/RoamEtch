@@ -35,6 +35,7 @@ export class TrackMap {
   declare posMarker: any;
   declare hoverMarker: any;
   declare navMarker: any;
+  declare photoRefMarker: any;
   declare meetMarkers: Map<string, any>;
   declare meetSelf: any;
   declare meetPeers: any[];
@@ -68,6 +69,7 @@ export class TrackMap {
     this.posMarker = null;
     this.hoverMarker = null;
     this.navMarker = null;
+    this.photoRefMarker = null;
     this.meetMarkers = new Map();
     this.meetSelf = null;
     this.meetPeers = [];
@@ -576,6 +578,23 @@ export class TrackMap {
     this.map?.getSource('nav')?.setData({ type: 'FeatureCollection', features: [] });
   }
 
+  setPhotoRef(lat, lon, label = '') {
+    if (!this.map || this.destroyed) return;
+    this.clearPhotoRef();
+    const [dLon, dLat] = toDisplay(lon, lat, this.coordSystem);
+    const node = document.createElement('div');
+    node.className = 'photo-ref-marker';
+    node.innerHTML = '<span class="photo-ref-dot"></span><span class="photo-ref-label"></span>';
+    const lb = node.querySelector('.photo-ref-label');
+    if (lb) lb.textContent = label;
+    this.photoRefMarker = new maplibregl.Marker({ element: node, anchor: 'center' }).setLngLat([dLon, dLat]).addTo(this.map);
+  }
+
+  clearPhotoRef() {
+    this.photoRefMarker?.remove();
+    this.photoRefMarker = null;
+  }
+
   // ---------- editing ----------
   setEditMode(on) {
     this.editMode = on;
@@ -712,6 +731,7 @@ export class TrackMap {
     this.posMarker?.remove();
     this.hoverMarker?.remove();
     this.navMarker?.remove();
+    this.photoRefMarker?.remove();
     this.map?.remove();
   }
 }

@@ -4,6 +4,70 @@ All notable changes to TrackMint are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-11-24
+
+### Added
+
+- Embedded in-PWA camera for encrypted meetup chat photos. It uses
+  `getUserMedia`, an inline viewfinder, album/shutter/flip controls, torch where
+  supported, a quick preview with compressed dimensions/size, and an optional
+  caption. The PWA stays in the foreground instead of handing off to the system
+  camera, reducing iOS Safari background pauses.
+- Weak-network chat image encoding: WebP where supported with JPEG fallback,
+  quality and dimension stepping, a 720 px long edge (480 px in low-data mode),
+  and a 56 KB raw-image cap before encryption/base64 expansion.
+- Incoming chat photos show an encryption badge, open in an enlarged viewer,
+  and can pin their optional WGS-84 capture point on the map.
+- One-tap photo capture while recording or paused. Each shot becomes a local
+  photo waypoint linked to a fresh-enough WGS-84 position and altitude, with
+  flash, vibration, thumbnail, undo, burst capture, and a saved-shot counter.
+  Media, waypoint, and trip timestamps commit atomically; paused or stale
+  captures request a one-shot fix without adding a track point.
+- OLED pocket-lock camera rail: drag the bottom-right knob left by at least
+  120 px to open the camera without unlocking. A tap or short drag does nothing;
+  the camera closes after 20 seconds without interaction, and a saved shot
+  offers “shoot again” or a 3-second automatic return to the black pocket lock.
+
+### Changed
+
+- Meetup relay frame limits are now 128 KB on the client, bundled relay, and
+  custom WebSocket receiver so compressed encrypted photos fit after base64
+  expansion. Oversized frames are rejected deterministically with close code
+  `1009`. The relay also bounds message bytes and queued outbound bytes, closing
+  abusive or slow peers with `1008` or `1013`; malformed MQTT frames terminate
+  with `1002` and do not reconnect.
+- Chat photos use a 5-second sender cooldown and a 4.25-second receiver gap.
+  Only the latest 20 image payloads remain in session memory; object URLs are
+  bounded and revoked, and chat photos are never written to IndexedDB.
+- Camera streams and the iOS 1 px keepalive video are coordinated so closing a
+  camera or finishing an OLED shot re-arms keepalive without stopping GPS or the
+  meetup relay.
+
+### Security
+
+- Untrusted image packets validate base64 shape and decoded size, MIME, integer
+  dimensions, coordinate/accuracy ranges, and encoded WebP/JPEG headers before
+  entering chat state or decoding pixels; declared dimensions must match the
+  header and stay within the edge/pixel budget.
+- Image memory and URL caches are bounded; pruned payloads render an explicit
+  expired placeholder instead of retaining old photos.
+- Chat captures refresh coordinates at shutter time, and paused photo captures
+  request a fresh one-shot fix both when opening and when saving. Local album
+  inputs are bounded to 32 MB and 40 MP, with JPEG/PNG/WebP headers checked before
+  object URL creation or pixel decode. Discarded preview jobs cannot replace a
+  newer capture, and late save results release their thumbnails after camera close.
+- MQTT control flags and body lengths are validated; malformed or unsupported
+  packets terminate with `1002`. Relay binary frames count against rate/byte
+  budgets before rejection, and forwarded ciphertext remains a text frame.
+
+### Tests
+
+- Added image compression/validation unit tests, a 100 KB relay pass / 129 KB
+  relay reject boundary test, and Playwright fake-camera coverage for quick
+  photo save/undo, pending-save thumbnail cleanup, oversized-album rejection,
+  stale-preview isolation, two-client encrypted image delivery and map locate,
+  OLED anti-mistouch, 3-second auto-lock, and 20-second idle close.
+
 ## [2.1.0] - 2026-11-23
 
 ### Added

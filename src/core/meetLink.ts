@@ -11,6 +11,7 @@ const SALT = new TextEncoder().encode('trackmint-meet-v2');
 const INVITE_RE = /^TM2\.([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/;
 
 export const MEET_PROTOCOL_VERSION = VERSION;
+export const MEET_MAX_PACKET_CHARS = 128 * 1024;
 
 export type MeetInviteParts = { invite: string; roomId: string; secret: Uint8Array<ArrayBuffer> };
 
@@ -161,7 +162,7 @@ export async function encryptMeetPacket(packet: unknown, room: MeetRoomKey) {
 }
 
 export async function decryptMeetPacket(text: string, room: MeetRoomKey): Promise<any | null> {
-  if (!crypto?.subtle || typeof text !== 'string' || text.length > 8192 || text.length < 32) return null;
+  if (!crypto?.subtle || typeof text !== 'string' || text.length > MEET_MAX_PACKET_CHARS || text.length < 32) return null;
   try {
     const bytes = b64urlDecode(text);
     if (bytes[0] !== VERSION || bytes.length < 29) return null;

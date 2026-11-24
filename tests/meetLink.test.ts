@@ -6,6 +6,7 @@ import {
   generateMeetInvite,
   isLegacyMeetCode,
   meetLinkFor,
+  MEET_MAX_PACKET_CHARS,
   normalizeMeetInvite,
   parseMeetFragment,
   parseMeetInvite,
@@ -131,6 +132,19 @@ describe('AES-256-GCM meetup packets', () => {
     expect(await decryptMeetPacket(reencode(v1), room)).toBeNull();
     expect(await decryptMeetPacket(cipher, other)).toBeNull();
     expect(await decryptMeetPacket('short', room)).toBeNull();
+  });
+
+  it('round-trips a full 56 KB chat image above the retired 8 KB limit', async () => {
+    const room = await deriveMeetRoom(DEMO_INVITE);
+    const bytes = new Uint8Array(56 * 1024).fill(0x5a);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    const packet = { v: 2, k: 'msg', id: 'peer-a', sq: 1, im: btoa(binary), imt: 'image/webp', imw: 720, imh: 480 };
+    const cipher = await encryptMeetPacket(packet, room);
+    expect(cipher.length).toBeGreaterThan(8192);
+    expect(cipher.length).toBeLessThanOrEqual(MEET_MAX_PACKET_CHARS);
+    expect(await decryptMeetPacket(cipher, room)).toEqual(packet);
+    expect(await decryptMeetPacket('A'.repeat(MEET_MAX_PACKET_CHARS + 1), room)).toBeNull();
   });
 
   it('uses a unique per-device nonce prefix and monotonic counter', async () => {

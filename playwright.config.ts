@@ -20,7 +20,17 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure'
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [{
+    name: 'chromium',
+    use: {
+      ...devices['Desktop Chrome'],
+      viewport: { width: 430, height: 932 },
+      permissions: ['camera'],
+      launchOptions: {
+        args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream']
+      }
+    }
+  }],
   webServer: {
     command: `npm run dev -- --host 127.0.0.1 --port ${PORT} --strictPort`,
     url: BASE_URL,

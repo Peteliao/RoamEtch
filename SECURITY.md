@@ -75,7 +75,7 @@ Version 1 invites and packets are rejected rather than downgraded.
 | Envelope | `0x02` version byte + 12-byte nonce + ciphertext/tag, base64url-encoded |
 | Replay protection | Every packet carries a per-sender, strictly increasing sequence number. All packet types pass the same per-sender guard; repeated or older sequences are dropped. Timestamps are a secondary ±5-minute sanity check, and locations also enforce newer sequence ordering. |
 | Chat dedupe | Random message ids plus a bounded seen-set, in addition to the sender sequence |
-| Transport limits | Client and relay cap packets at ~8 KB. The bundled relay also enforces a per-socket token bucket (8 msg/s, 40 burst), 32 clients per room, 2,000 rooms, 10,000 clients, and a 12-hour idle-room sweep |
+| Transport limits | Client and relay cap packets at 128 KB. The bundled relay also enforces a per-socket token bucket (8 msg/s, 40 burst), 32 clients per room, 2,000 rooms, 10,000 clients, and a 12-hour idle-room sweep |
 | MQTT topic | `${prefix}/${roomId}` (default prefix `trackmint/v2/meet`) |
 | WS path | `/room/{room}` (the relay must preserve this path) |
 
@@ -85,12 +85,39 @@ from it. The 256-bit invite secret never appears in a topic, URL query, HTTP
 path, or relay log. Anyone who obtains the full invite can decrypt the session
 and must be treated as a room member.
 
+### Ephemeral chat photos
+
+- Chat photos are captured by an in-PWA `getUserMedia` viewfinder so the page
+  normally stays in the foreground; there is no system-camera handoff. Optional
+  album import briefly opens the system picker, then the camera, GPS and relay
+  resume without being stopped by the app.
+- Images use WebP where supported, otherwise JPEG, with quality and dimension
+  stepping. The long edge starts at 720 px (480 px in low-data mode) and the raw
+  image is capped at 56 KB before encryption and base64 expansion. The encrypted
+  transport envelope is capped at 128 KB.
+- A sender may send one image every 5 seconds; receivers enforce a 4.25-second
+  per-sender image gap in addition to the existing text-rate limit. Packets are
+  checked for base64 shape/size, allowed MIME, integer dimensions, and valid
+  optional WGS-84 coordinates/accuracy before entering session state. Before any
+  pixel decode or object URL creation, the encoded WebP/JPEG header must be valid,
+  match those declared dimensions, and stay within the 720 px edge and 518,400
+  pixel budget. Local album inputs are separately bounded to 32 MB and 40 MP,
+  with JPEG/PNG/WebP headers checked before object URL creation or pixel decode.
+- Photos exist only in session memory. The latest 20 image payloads are kept;
+  older payloads are nulled and show an expired placeholder. Object URLs are
+  bounded and revoked, and chat photos are never written to IndexedDB, uploaded
+  to a TrackMint server, or added to backup archives.
+- Closing the camera stops only its media tracks and re-arms the iOS keepalive
+  video. It does not stop geolocation or the meetup relay. Capture coordinates,
+  when available, travel inside the encrypted image packet.
+
 ### What a relay can see / 中继可见信息
 
 A public MQTT broker or a self-hosted relay can observe the random room id,
 connection timestamps, packet sizes and timing, and the client's IP address. It
-cannot see positions, names, chat text, or the invite secret. Neither transport
-stores messages or provides history replay.
+cannot see positions, names, chat text, photos, or the invite secret. Larger
+ciphertext frames can reveal that a chat photo is being transmitted, but not its
+contents. Neither transport stores messages or provides history replay.
 
 ### Known limitations / 已知局限
 
@@ -119,7 +146,7 @@ stores messages or provides history replay.
   channel.
 - **Client-side enforcement only.** A malicious client can keep or re-share data
   it has already decrypted. The app cannot force another device to delete
-  positions or messages.
+  positions, messages, or photos.
 - **Not an emergency tool.** Meetup is not SOS, rescue, or safety-critical
   communication. GPS pauses when the OS suspends the browser.
 
@@ -151,4 +178,5 @@ README for the full data-boundary description.
 - 房间标识与密钥相互独立，主题/路径不包含邀请密钥；每个会话使用独立 nonce 前缀与单调计数器，并对所有包类型执行按发送者严格递增的防重放检查。
 - 旧版 12 位组队码与 v1 数据包会被明确拒绝，不会静默降级；升级后需重新生成邀请。
 - 组队端到端加密目前仍没有发送者身份认证，也没有前向保密；邀请泄露等同于房间内容泄露。设备身份签名、发起人认证、成员变动后的密钥轮换与 MLS/前向保密属于下一阶段。
+- 聊天图片在网页内存中压缩后加密发送，原始图片上限 56 KB，加密传输包上限 128 KB；发送冷却 5 秒，接收按发送者限流，仅保留最新 20 张，不写入 IndexedDB 或备份。中继可看到密文大小与时间，但看不到图片内容或可选拍摄坐标。
 - 本机数据不加密，依赖设备解锁；整库备份 ZIP 同样未加密，请妥善保管。请定期导出整库备份。恢复时会把压缩包视为不可信输入：限制大小、条目数、压缩比与点数，拒绝异常路径，并在单个事务中写入。漏洞请走私密报告入口。

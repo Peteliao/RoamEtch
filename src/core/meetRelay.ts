@@ -2,6 +2,7 @@
 // AES-256-GCM envelopes; it never receives the invite secret or plaintext
 // positions. The topic/path contains only the public random room id.
 import { get } from './settings';
+import { MEET_MAX_PACKET_CHARS } from './meetLink';
 
 export type RelayState = 'connecting' | 'connected' | 'reconnecting' | 'closed' | 'error';
 export type RelayHandlers = {
@@ -17,6 +18,7 @@ export type MeetRelay = {
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
+const MAX_FRAME_CHARS = MEET_MAX_PACKET_CHARS;
 
 function concat(parts: Uint8Array[]) {
   const total = parts.reduce((n, p) => n + p.length, 0);
@@ -45,6 +47,47 @@ function varint(n: number) {
     out.push(b);
   } while (n > 0);
   return Uint8Array.from(out);
+}
+
+export function parseMqttFrameHeader(buf: Uint8Array) {
+  if (buf.length < 2) return null;
+  let mult = 1;
+  let len = 0;
+  let i = 1;
+  while (i < buf.length && i <= 4) {
+    const b = buf[i++];
+    len += (b & 0x7f) * mult;
+    if (!(b & 0x80)) {
+      const total = i + len;
+      return total > MAX_FRAME_CHARS ? { error: 'mqtt-frame-too-large' } : { headerLen: i, total };
+    }
+    mult *= 128;
+  }
+  return i >= 5 ? { error: 'mqtt-length' } : null;
+}
+
+export function validateMqttPacket(raw: Uint8Array, headerLen: number): string | null {
+  if (headerLen < 1 || headerLen > raw.length) return 'mqtt-frame';
+  const type = raw[0] >> 4;
+  const flags = raw[0] & 0x0f;
+  const body = raw.slice(headerLen);
+  if (type === 2) return flags === 0 && body.length === 2 ? null : 'mqtt-connack';
+  if (type === 3) {
+    if (body.length < 2) return 'mqtt-publish';
+    const topicLen = (body[0] << 8) | body[1];
+    if (!topicLen || body.length < 2 + topicLen) return 'mqtt-publish';
+    const qos = (flags >> 1) & 3;
+    if (qos > 1) return 'mqtt-qos';
+    if (qos === 1) {
+      const at = 2 + topicLen;
+      if (body.length < at + 2 || !((body[at] << 8) | body[at + 1])) return 'mqtt-publish';
+    }
+    return null;
+  }
+  if ([4, 5, 7, 9].includes(type)) return flags === 0 && body.length === 2 ? null : 'mqtt-control';
+  if (type === 6) return flags === 2 && body.length === 2 ? null : 'mqtt-control';
+  if ([13, 14].includes(type)) return flags === 0 && body.length === 0 ? null : 'mqtt-control';
+  return 'mqtt-packet-type';
 }
 
 function packet(type: number, flags: number, payload: Uint8Array) {
@@ -161,34 +204,49 @@ class MqttRelay implements MeetRelay {
   }
 
   feed(chunk: Uint8Array) {
+    if (this.closed) return;
+    if (this.buf.length + chunk.length > MAX_FRAME_CHARS) {
+      this.failProtocol('mqtt-frame-too-large');
+      return;
+    }
     this.buf = concat([this.buf, chunk]);
     for (;;) {
-      if (this.buf.length < 2) return;
-      let mult = 1;
-      let len = 0;
-      let i = 1;
-      let complete = false;
-      while (i < this.buf.length && i <= 4) {
-        const b = this.buf[i++];
-        len += (b & 0x7f) * mult;
-        if (!(b & 0x80)) { complete = true; break; }
-        mult *= 128;
+      const header = parseMqttFrameHeader(this.buf);
+      if (!header) return;
+      if ('error' in header) {
+        this.failProtocol(header.error);
+        return;
       }
-      if (!complete) return;
-      const total = i + len;
-      if (this.buf.length < total) return;
-      const raw = this.buf.slice(0, total);
-      this.buf = this.buf.slice(total);
-      this.handlePacket(raw, i);
+      if (this.buf.length < header.total) return;
+      const raw = this.buf.slice(0, header.total);
+      this.buf = this.buf.slice(header.total);
+      this.handlePacket(raw, header.headerLen);
+      if (this.closed) return;
     }
   }
 
+  failProtocol(reason: string) {
+    if (this.closed) return;
+    this.closed = true;
+    this.connected = false;
+    this.buf = new Uint8Array(0);
+    clearTimeout(this.reconnectTimer);
+    clearTimeout(this.connectTimer);
+    clearInterval(this.keepAliveTimer);
+    const ws = this.ws;
+    this.ws = null;
+    try { ws?.close?.(1002, reason); } catch { try { ws?.terminate?.(); } catch { /* already closed */ } }
+    this.handlers.onState('error', { reason });
+  }
+
   handlePacket(raw: Uint8Array, headerLen: number) {
+    const protocolError = validateMqttPacket(raw, headerLen);
+    if (protocolError) { this.failProtocol(protocolError); return; }
     const type = raw[0] >> 4;
     const flags = raw[0] & 0x0f;
     const body = raw.slice(headerLen);
     if (type === 2) {
-      const rc = body[1] ?? 1;
+      const rc = body[1];
       if (rc !== 0) {
         this.handlers.onState('error', { reason: 'connack', code: rc });
         try { this.ws?.close(); } catch { /* ignore */ }
@@ -205,25 +263,30 @@ class MqttRelay implements MeetRelay {
     }
     if (type === 3) {
       let at = 0;
-      if (body.length < 2) return;
+      if (body.length < 2) { this.failProtocol('mqtt-publish'); return; }
       const topicLen = (body[at] << 8) | body[at + 1];
       at += 2;
-      if (body.length < at + topicLen) return;
+      if (!topicLen || body.length < at + topicLen) { this.failProtocol('mqtt-publish'); return; }
       const topic = dec.decode(body.slice(at, at + topicLen));
       at += topicLen;
       const qos = (flags >> 1) & 3;
+      if (qos === 3) { this.failProtocol('mqtt-qos'); return; }
       let pid = 0;
       if (qos > 0) {
-        if (body.length < at + 2) return;
+        if (body.length < at + 2) { this.failProtocol('mqtt-publish'); return; }
         pid = (body[at] << 8) | body[at + 1];
         at += 2;
       }
-      if (topic === this.topic) {
-        const text = dec.decode(body.slice(at));
-        if (text) this.handlers.onMessage(text);
+      const text = dec.decode(body.slice(at));
+      if (topic === this.topic && text.length > MAX_FRAME_CHARS) {
+        this.failProtocol('mqtt-payload-too-large');
+        return;
       }
+      if (topic === this.topic && text) this.handlers.onMessage(text);
       if (qos === 1 && pid) this.ws?.send(mqttPubAck(pid));
+      return;
     }
+    if (![4, 5, 6, 7, 9, 11, 13, 14].includes(type)) this.failProtocol('mqtt-packet-type');
   }
 
   nextPacketId() {
@@ -255,7 +318,9 @@ class MqttRelay implements MeetRelay {
   send(text: string) {
     if (!this.connected || !this.ws || this.ws.readyState !== 1) return false;
     try {
-      this.ws.send(mqttPublishPacket(this.topic, text));
+      const frame = mqttPublishPacket(this.topic, text);
+      if (frame.length > MAX_FRAME_CHARS) return false;
+      this.ws.send(frame);
       return true;
     } catch {
       return false;
@@ -324,10 +389,10 @@ class WebSocketRelay implements MeetRelay {
       if (this.ws !== ws) return;
       const data = ev.data;
       if (typeof data === 'string') {
-        if (data.length && data.length < 8192) this.handlers.onMessage(data);
+        if (data.length && data.length <= MAX_FRAME_CHARS) this.handlers.onMessage(data);
       } else if (data instanceof ArrayBuffer) {
-        this.handlers.onMessage(dec.decode(new Uint8Array(data)));
-      } else if (data instanceof Blob && data.size < 8192) {
+        if (data.byteLength && data.byteLength <= MAX_FRAME_CHARS) this.handlers.onMessage(dec.decode(new Uint8Array(data)));
+      } else if (data instanceof Blob && data.size <= MAX_FRAME_CHARS) {
         data.text().then((text) => {
           if (this.ws === ws && text) this.handlers.onMessage(text);
         }).catch(() => { /* ignore malformed frame */ });
@@ -352,7 +417,7 @@ class WebSocketRelay implements MeetRelay {
   }
 
   send(text: string) {
-    if (!this.ws || this.ws.readyState !== 1) return false;
+    if (!this.ws || this.ws.readyState !== 1 || text.length > MAX_FRAME_CHARS) return false;
     try { this.ws.send(text); return true; } catch { return false; }
   }
 

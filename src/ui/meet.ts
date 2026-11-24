@@ -10,6 +10,8 @@ import { regionState } from '../core/region';
 import { drawQr } from '../core/brand';
 import { TrackMap } from './map';
 import { el, icon, toast, modal, confirmModal } from './helpers';
+import { openCamera } from './camera';
+import { CHAT_IMAGE_KEEP, readChatImageHeader } from '../core/chatImage';
 
 export function createMeetView(navigate) {
   const view = el('div', { class: 'view', id: 'view-meet' });
@@ -69,6 +71,10 @@ export function createMeetView(navigate) {
   let lastTickRender = 0;
   let chatModal = null;
   let chatRefresh: (() => void) | null = null;
+  let chatImageViewer = null;
+  let photoRefTimer = 0;
+  const chatImageUrls = new Map<string, string>();
+  const chatImagePending = new Map<string, Promise<string>>();
 
   function initialCenter() {
     if (snap.active && snap.self?.hasFix) return [snap.self.lon, snap.self.lat] as any;
@@ -121,10 +127,65 @@ export function createMeetView(navigate) {
     chatBtn.disabled = !s?.active;
   }
 
+  function base64ImageBlob(data: string, mime: string) {
+    const bin = atob(data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+
+  async function chatImageUrl(msg) {
+    if (!msg?.img?.data) return '';
+    const cached = chatImageUrls.get(msg.id);
+    if (cached) return cached;
+    const pending = chatImagePending.get(msg.id);
+    if (pending) return pending;
+    const job = (async () => {
+      try {
+        const blob = base64ImageBlob(msg.img.data, msg.img.mime);
+        const header = await readChatImageHeader(blob, msg.img.mime);
+        if (!chatModal || !header || header.width !== msg.img.width || header.height !== msg.img.height) return '';
+        if (!getMeetSnapshot().messages.some((m) => m.id === msg.id && m.img?.data)) return '';
+        const url = URL.createObjectURL(blob);
+        chatImageUrls.set(msg.id, url);
+        while (chatImageUrls.size > CHAT_IMAGE_KEEP + 8) {
+          const oldest = chatImageUrls.keys().next().value;
+          if (!oldest) break;
+          URL.revokeObjectURL(chatImageUrls.get(oldest));
+          chatImageUrls.delete(oldest);
+        }
+        return url;
+      } catch {
+        return '';
+      }
+    })().finally(() => chatImagePending.delete(msg.id));
+    chatImagePending.set(msg.id, job);
+    return job;
+  }
+
+  function syncChatImageUrls(messages) {
+    const live = new Set(messages.filter((m) => m.img?.data).map((m) => m.id));
+    for (const [id, url] of chatImageUrls) {
+      if (live.has(id)) continue;
+      URL.revokeObjectURL(url);
+      chatImageUrls.delete(id);
+    }
+  }
+
+  function clearChatImageUrls() {
+    for (const url of chatImageUrls.values()) {
+      try { URL.revokeObjectURL(url); } catch { /* already revoked */ }
+    }
+    chatImageUrls.clear();
+  }
+
   function closeChat() {
     const m = chatModal;
     chatModal = null;
     chatRefresh = null;
+    chatImageViewer?.close();
+    chatImageViewer = null;
+    clearChatImageUrls();
     m?.close();
   }
 
@@ -135,12 +196,74 @@ export function createMeetView(navigate) {
       el('div', { class: 'mce-d' }, t('meet.chatEmptyHint')));
   }
 
+  function locateChatPhoto(msg) {
+    closeChat();
+    const target = ensureMap();
+    const pin = () => {
+      target.flyTo(msg.lat, msg.lon, 16);
+      target.setPhotoRef(msg.lat, msg.lon, t('meet.chatImagePin'));
+    };
+    if (target.map.loaded()) pin();
+    else target.map.once('load', pin);
+    clearTimeout(photoRefTimer);
+    photoRefTimer = window.setTimeout(() => map?.clearPhotoRef(), 60_000);
+    toast(t('meet.chatImageMapHint'), 'ok');
+  }
+
+  async function openChatImage(msg) {
+    const url = await chatImageUrl(msg);
+    if (!url) return;
+    const time = new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const coords = msg.lat != null && msg.lon != null
+      ? `${msg.lat.toFixed(5)}, ${msg.lon.toFixed(5)} (WGS-84)`
+      : t('meet.chatImageNoFix');
+    const body = el('div', { class: 'chat-image-viewer' },
+      el('img', { src: url, alt: t('meet.chatImageView') }),
+      msg.text ? el('div', { class: 'iv-caption' }, msg.text) : null,
+      el('div', { class: 'iv-meta' }, `${msg.name} · ${time} · ${coords}`));
+    chatImageViewer = modal({
+      title: t('meet.chatImageView'),
+      body,
+      wide: true,
+      footer: msg.lat != null && msg.lon != null
+        ? el('button', {
+          class: 'btn primary block', type: 'button',
+          onclick: () => { chatImageViewer?.close(); chatImageViewer = null; locateChatPhoto(msg); }
+        }, icon('map', 16), t('meet.chatImageLocate'))
+        : null,
+      onClose: () => { chatImageViewer = null; }
+    });
+  }
+
   function chatRow(s, msg) {
     const own = !!msg.self || msg.fromId === s.self?.id;
     const time = new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    let bubble;
+    if (msg.img) {
+      const img = el('img', { alt: t('meet.chatImageView') });
+      const lock = el('span', { class: 'mc-image-lock' }, icon('shield', 12));
+      bubble = el('button', {
+        class: 'mc-image', type: 'button', disabled: true,
+        'aria-label': t('meet.chatImageView')
+      }, img, lock);
+      bubble.addEventListener('click', () => { void openChatImage(msg); });
+      void chatImageUrl(msg).then((url) => {
+        if (!bubble.isConnected) return;
+        if (!url) {
+          bubble.className = 'mc-image-expired';
+          bubble.replaceChildren(icon('photo', 18), t('meet.chatImageExpired'));
+          return;
+        }
+        img.src = url;
+        bubble.disabled = false;
+      });
+    } else {
+      bubble = el('div', { class: 'mc-bubble' }, msg.text);
+    }
     const main = el('div', { class: 'mc-main' },
       own ? null : el('div', { class: 'mc-name' }, msg.name),
-      el('div', { class: 'mc-bubble' }, msg.text),
+      bubble,
+      msg.img && msg.text ? el('div', { class: 'mc-caption' }, msg.text) : null,
       el('div', { class: 'mc-time' }, time));
     const row = el('div', { class: 'meet-chat-row' + (own ? ' self' : '') });
     if (!own) {
@@ -168,7 +291,45 @@ export function createMeetView(navigate) {
       class: 'meet-chat-send', type: 'button', title: t('meet.chatSend'),
       'aria-label': t('meet.chatSend'), disabled: true
     }, icon('send', 18));
-    const composer = el('div', { class: 'meet-chat-compose' }, input, sendBtn);
+    const camBtn = el('button', {
+      class: 'meet-chat-cam', type: 'button', title: t('meet.chatPhoto'),
+      'aria-label': t('meet.chatPhoto')
+    }, icon('camera', 19));
+    camBtn.addEventListener('click', () => {
+      const cooldown = meet.imageCooldownLeft();
+      if (cooldown > 0) {
+        toast(t('meet.chatImageCooldown', { s: Math.ceil(cooldown / 1000) }), 'warn', 2200);
+        return;
+      }
+      openCamera({
+        mode: 'chat',
+        getFix: () => {
+          const self = getMeetSnapshot().self;
+          return self?.hasFix && self.lat != null && self.lon != null
+            ? { lat: self.lat, lon: self.lon, acc: self.acc }
+            : null;
+        },
+        onChatSend: async (shot) => {
+          const ok = await meet.sendImage({
+            base64: shot.base64,
+            mime: shot.mime,
+            width: shot.width,
+            height: shot.height,
+            caption: shot.caption,
+            lat: shot.fix?.lat ?? null,
+            lon: shot.fix?.lon ?? null,
+            acc: shot.fix?.acc ?? null
+          });
+          if (ok) {
+            render(true);
+            meet.markChatRead();
+            toast(t('meet.chatImageSent'), 'ok', 2200);
+          }
+          return ok;
+        }
+      });
+    });
+    const composer = el('div', { class: 'meet-chat-compose' }, camBtn, input, sendBtn);
     const body = el('div', { class: 'meet-chat' }, note, list, composer);
     let sending = false;
 
@@ -180,6 +341,7 @@ export function createMeetView(navigate) {
     const render = (jump = false) => {
       const s = getMeetSnapshot();
       const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+      syncChatImageUrls(s.messages);
       list.innerHTML = '';
       if (!s.messages.length) list.append(chatEmptyState());
       else for (const msg of s.messages) list.append(chatRow(s, msg));
@@ -222,6 +384,9 @@ export function createMeetView(navigate) {
       onClose: () => {
         chatModal = null;
         chatRefresh = null;
+        chatImageViewer?.close();
+        chatImageViewer = null;
+        clearChatImageUrls();
       }
     });
     m.box.classList.add('meet-chat-modal');
@@ -747,6 +912,12 @@ export function createMeetView(navigate) {
     resize: () => { ensureMap(); map.resize(); },
     refresh: () => applySnapshot(getMeetSnapshot()),
     getMap: () => map,
-    destroy: () => { closeChat(); map?.destroy(); map = null; }
+    destroy: () => {
+      closeChat();
+      clearTimeout(photoRefTimer);
+      map?.clearPhotoRef();
+      map?.destroy();
+      map = null;
+    }
   };
 }

@@ -45,6 +45,7 @@ export function icon(name, size = 20) {
     undo: '<path d="M8 5 3 10l5 5M3 10h11a7 7 0 0 1 0 14h-3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     redo: '<path d="m16 5 5 5-5 5m5-5H10a7 7 0 0 0 0 14h3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     camera: '<path d="M4 8h3l2-3h6l2 3h3v11H4V8Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><circle cx="12" cy="13" r="3.4" stroke="currentColor" stroke-width="2" fill="none"/>',
+    flash: '<path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12l1-8.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',
     warn: '<path d="M12 3 2 21h20L12 3Zm0 7v5m0 3v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     check: '<path d="m4 12 5 5L20 6" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     info: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 11v6m0-9v.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
