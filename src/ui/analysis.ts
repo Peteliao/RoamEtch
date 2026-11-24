@@ -8,7 +8,8 @@ import { on } from '../core/events';
 import { listTrips } from '../core/store';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude } from '../core/geo';
 import { findTrackGaps, repairTrackGaps } from '../core/gapRepair';
-import { assessGpsQuality } from '../core/gpsQuality';
+import { assessGpsQuality, cleanTrackSegments } from '../core/gpsQuality';
+import { cleanGpsTrack } from '../core/trackCleanup';
 import { TrackMap } from './map';
 import { WP_ICONS } from '../core/waypointMeta';
 import { canvasPalette } from '../core/palette';
@@ -87,14 +88,40 @@ export function createAnalysisView() {
 
   function renderQuality() {
     qualityBox.innerHTML = '';
-    const points = appState.activeTripFull?.segments.flatMap((s) => s.points) || [];
-    const q = assessGpsQuality(points);
+    const full = appState.activeTripFull;
+    const points = full?.segments.flatMap((s) => s.points) || [];
+    const activity = full?.trip?.activity || 'hike';
+    const q = assessGpsQuality(points, { activity });
     if (q.score == null) return;
     const tone = q.rating === 'excellent' || q.rating === 'good'
       ? 'var(--accent)' : q.rating === 'fair' ? 'var(--warn)' : 'var(--danger)';
     const rating = t(`analysis.quality${q.rating[0].toUpperCase()}${q.rating.slice(1)}`);
     const metric = (label, value) => el('div', { class: 'quality-metric' },
       el('div', { class: 'v' }, value), el('div', { class: 'k' }, label));
+    const preview = full && full.trip.status !== 'recording' ? cleanTrackSegments(full.segments, activity) : { removed: 0 };
+    const clean = el('div', { class: 'quality-clean', style: { display: 'none', marginTop: '10px' } });
+    if (preview.removed) {
+      const btn = el('button', { class: 'btn primary sm' }, icon('shield', 15), t('analysis.qualityClean'));
+      btn.onclick = async () => {
+        const ok = await confirmModal({
+          title: t('analysis.qualityCleanTitle'),
+          message: t('analysis.qualityCleanConfirm', { n: preview.removed }),
+          confirmText: t('analysis.qualityClean')
+        });
+        if (!ok) return;
+        btn.disabled = true;
+        try {
+          const result = await cleanGpsTrack(full.trip.id, { activity });
+          await refreshActiveTrip();
+          if (result.removed) toast(t('analysis.qualityCleanDone', { n: result.removed }), 'ok', 4500);
+        } catch (e) {
+          console.error(e);
+          toast(t('analysis.qualityCleanFail'), 'err');
+        }
+      };
+      clean.style.display = '';
+      clean.append(btn, el('div', { class: 'small faint', style: { marginTop: '6px' } }, t('analysis.qualityCleanHint')));
+    }
     qualityBox.append(el('div', { class: 'card quality-card' },
       el('div', { class: 'quality-head' },
         el('h3', {}, icon('shield', 18), t('analysis.qualityTitle')),
@@ -107,10 +134,12 @@ export function createAnalysisView() {
         metric(t('analysis.qualityAvgAcc'), q.avgAcc == null ? '—' : `±${q.avgAcc.toFixed(1)} m`),
         metric(t('analysis.qualityPoorFixes'), q.poorRatio == null ? '—' : `${q.poorFixes} (${Math.round(q.poorRatio * 100)}%)`),
         metric(t('analysis.qualityGaps'), q.gaps ? `${q.gaps} · ${fmtDuration(q.gapMs, { compact: true })}` : '0'),
-        metric(t('analysis.qualityAltJumps'), String(q.altJumps))),
+        metric(t('analysis.qualityAltJumps'), String(q.altJumps)),
+        metric(t('analysis.qualityReversals'), String(q.reversals))),
       q.avgAcc == null ? el('div', { class: 'small faint', style: { marginTop: '8px' } }, t('analysis.qualityNoAcc')) : null,
       el('div', { class: 'small faint quality-note' },
-        `${q.fixes} ${t('analysis.qualityFixes')} · ${t('analysis.qualityNote')}`)));
+        `${q.fixes} ${t('analysis.qualityFixes')} · ${t('analysis.qualityNote')}`),
+      clean));
   }
 
   function renderStats(stats) {

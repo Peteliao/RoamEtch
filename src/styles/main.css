@@ -884,11 +884,12 @@ html.oled-lock { color-scheme: dark; }
 .quality-score small { font-size: 11px; color: var(--text-faint); }
 .quality-meter { flex: 1; height: 8px; border-radius: 99px; background: var(--bg-input); overflow: hidden; }
 .quality-fill { height: 100%; border-radius: 99px; }
-.quality-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.quality-metrics { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
 .quality-metric { min-width: 0; background: var(--bg-input); border-radius: var(--radius-sm); padding: 7px 9px; }
 .quality-metric .v { font-family: var(--font-num); font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .quality-metric .k { font-size: 9.5px; color: var(--text-faint); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .quality-note { margin-top: 9px; }
+@media (max-width: 600px) { .quality-metrics { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 420px) { .quality-metrics { grid-template-columns: repeat(2, 1fr); } }
 
 .chart-card { padding: 14px 12px 8px; }

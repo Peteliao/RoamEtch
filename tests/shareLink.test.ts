@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildShareLink, parseShareFragment } from '../src/core/shareLink';
+import { computeStats } from '../src/core/stats';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -33,6 +34,37 @@ describe('compact share links', () => {
     expect(parsed.points.length).toBeGreaterThan(1);
     expect(parsed.points.length).toBeLessThanOrEqual(60);
     expect(parsed.waypoints).toEqual([{ name: 'Viewpoint', type: 'view', lat: 30.002, lon: 120.01 }]);
+  });
+
+  it('preserves segment breaks instead of drawing cross-segment jumps', () => {
+    vi.stubGlobal('location', { href: 'https://example.com/TrackMint/' });
+    const full = {
+      trip: { name: 'Split drive', activity: 'drive' },
+      segments: [
+        { id: 'a', points: [{ lat: 30, lon: 120, t: 0 }, { lat: 30, lon: 120.001, t: 10_000 }] },
+        { id: 'b', points: [{ lat: 30, lon: 120.05, t: 20_000 }, { lat: 30, lon: 120.051, t: 30_000 }] }
+      ],
+      waypoints: []
+    };
+    const stats = computeStats(full.segments, { activity: 'drive' });
+    const { url } = buildShareLink(full, { radius: 0, hideSensitive: true });
+    const parsed = parseShareFragment(url.slice(url.indexOf('#')));
+    expect(parsed.segments).toHaveLength(2);
+    expect(parsed.reportedDistance).toBe(Math.round(stats.distance));
+    expect(parsed.distance).toBeLessThan(250);
+    expect(parsed.distance).toBeGreaterThan(150);
+  });
+
+  it('keeps every segment represented when many short tracks exceed the normal point cap', () => {
+    vi.stubGlobal('location', { href: 'https://example.com/TrackMint/' });
+    const segments = Array.from({ length: 131 }, (_, i) => ({
+      id: `s${i}`,
+      points: [{ lat: 30, lon: 120 + i * 0.001, t: 0 }, { lat: 30, lon: 120.0005 + i * 0.001, t: 10_000 }]
+    }));
+    const { url } = buildShareLink({ trip: { name: 'Many segments', activity: 'drive' }, segments, waypoints: [] }, { radius: 0, hideSensitive: true });
+    const parsed = parseShareFragment(url.slice(url.indexOf('#')));
+    expect(parsed.segments).toHaveLength(131);
+    expect(parsed.points).toHaveLength(262);
   });
 
   it('rejects malformed fragments instead of throwing', () => {

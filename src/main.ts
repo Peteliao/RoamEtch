@@ -77,9 +77,13 @@ async function boot() {
     // shared-link import (#t=…) — fragment never reaches a server
     try {
       const trip = await createTrip({ name: shared.name, activity: shared.activity, status: 'finished' });
-      const seg = await addSegment(trip.id);
-      await appendPoints(seg.id, trip.id, shared.points.map((p) => ({ ...p, t: null, alt: null, altSrc: null, acc: null, speed: null })));
+      const sharedSegments = shared.segments?.length ? shared.segments : [shared.points];
+      for (const points of sharedSegments) {
+        const seg = await addSegment(trip.id);
+        await appendPoints(seg.id, trip.id, points.map((p) => ({ ...p, t: null, alt: null, altSrc: null, acc: null, speed: null })));
+      }
       for (const w of shared.waypoints) await addWaypoint({ ...w, tripId: trip.id, desc: '', time: null, hidden: false, mediaIds: [] });
+      if (shared.reportedDistance != null) await storeCore.updateTrip(trip.id, { reportedDistance: shared.reportedDistance });
       history.replaceState(null, '', location.pathname + location.search);
       await setActiveTrip(trip.id);
       shell.navigate('analysis');

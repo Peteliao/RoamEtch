@@ -1,7 +1,7 @@
 // Lightweight share links: simplified polyline + text nodes in URL fragment.
 // Fragment never hits a server. Size-capped for QR compatibility (<= 1.5 KB).
 import { deflateSync, inflateSync } from 'fflate';
-import { simplify } from './geo';
+import { simplify, measureTrackStep, trackDistance } from './geo';
 import { applyPrivacy } from './privacy';
 
 const LIMIT = 1500;
@@ -50,15 +50,57 @@ function b64urlDecode(s) {
   return u8;
 }
 
+function buildTracks(segments, activity) {
+  const tracks = [];
+  for (const seg of segments) {
+    let run = [];
+    for (const point of seg.points || []) {
+      if (run.length && !measureTrackStep(run[run.length - 1], point, activity).valid) {
+        if (run.length >= 2) tracks.push(run);
+        run = [point];
+      } else {
+        run.push(point);
+      }
+    }
+    if (run.length >= 2) tracks.push(run);
+  }
+  return tracks;
+}
+
+function capTracks(tracks) {
+  const maxPoints = Math.max(260, tracks.length * 2);
+  let tolerance = 20;
+  let simplified = tracks.map((points) => simplify(points, tolerance));
+  while (simplified.flat().length > maxPoints && tolerance < 1280) {
+    tolerance *= 2;
+    simplified = tracks.map((points) => simplify(points, tolerance));
+  }
+  if (simplified.flat().length <= maxPoints) return simplified;
+  const capped = [];
+  let remaining = maxPoints;
+  for (const points of simplified) {
+    capped.push(points.length <= remaining ? points : [points[0], points[points.length - 1]]);
+    remaining -= capped[capped.length - 1].length;
+  }
+  return capped;
+}
+
 export function buildShareLink(full, privacy) {
   const cropped = applyPrivacy(full, privacy);
-  const pts = simplify(cropped.segments.flatMap((s) => s.points), 20).slice(0, 260);
+  const activity = full.trip.activity || 'hike';
+  const tracks = capTracks(buildTracks(cropped.segments, activity));
+  const pts = tracks.flat();
   if (pts.length < 2) throw new Error('no track');
+  const breaks = [];
+  let offset = 0;
+  for (const track of tracks) { breaks.push(offset); offset += track.length; }
   const payload = {
-    v: 1,
+    v: 2,
     n: (full.trip.name || '').slice(0, 40),
-    a: full.trip.activity,
+    a: activity,
     p: encPolyline(pts),
+    b: breaks,
+    d: Math.round(trackDistance(cropped.segments, activity)),
     w: cropped.waypoints.slice(0, 8).map((w) => ({ n: (w.name || '').slice(0, 24), t: w.type, la: Math.round(w.lat * 1e5) / 1e5, lo: Math.round(w.lon * 1e5) / 1e5 }))
   };
   const json = JSON.stringify(payload);
@@ -85,11 +127,28 @@ export function parseShareFragment(hash) {
       ? new TextDecoder().decode(inflateSync(data))
       : new TextDecoder().decode(data);
     const payload = JSON.parse(json);
-    if (payload.v !== 1 || !payload.p) return null;
+    if ((payload.v !== 1 && payload.v !== 2) || !payload.p) return null;
+    const points = decPolyline(payload.p);
+    let segments = [points];
+    if (payload.v === 2) {
+      if (!Array.isArray(payload.b) || payload.b[0] !== 0) return null;
+      segments = [];
+      let start = 0;
+      for (const end of [...payload.b.slice(1), points.length]) {
+        if (!Number.isInteger(end) || end <= start || end > points.length) return null;
+        segments.push(points.slice(start, end));
+        start = end;
+      }
+      if (start !== points.length) return null;
+    }
+    const activity = payload.a || 'travel';
     return {
       name: payload.n || 'Shared trip',
-      activity: payload.a || 'travel',
-      points: decPolyline(payload.p),
+      activity,
+      points,
+      segments,
+      distance: trackDistance(segments.map((points) => ({ points })), activity),
+      reportedDistance: payload.v === 2 && isFinite(payload.d) ? payload.d : null,
       waypoints: (payload.w || []).map((w) => ({ name: w.n, type: w.t, lat: w.la, lon: w.lo }))
     };
   } catch {

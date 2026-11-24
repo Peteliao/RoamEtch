@@ -3,6 +3,44 @@
 const R = 6371008.8; // mean earth radius (m)
 const rad = (d) => (d * Math.PI) / 180;
 
+export const SPEED_TOLERANCE = 1.3;
+export const MISSING_KINEMATICS_TOLERANCE = 1.15;
+
+export const ACTIVITY_PHYSICS = {
+  hike:   { vmax: 4.5, cruiseMin: 1.2, maxAccel: 3.0, minRevDist: 20 },
+  run:    { vmax: 8.5, cruiseMin: 2.2, maxAccel: 4.5, minRevDist: 25 },
+  bike:   { vmax: 20,  cruiseMin: 3.5, maxAccel: 6.0, minRevDist: 30 },
+  drive:  { vmax: 45,  cruiseMin: 5.0, maxAccel: 9.0, minRevDist: 40 },
+  travel: { vmax: 98,  cruiseMin: 6.0, maxAccel: 6.0, minRevDist: 50 },
+  auto:   { vmax: 25,  cruiseMin: 2.0, maxAccel: 7.0, minRevDist: 30 }
+} as const;
+
+export function physicsFor(activity) {
+  return ACTIVITY_PHYSICS[activity] || ACTIVITY_PHYSICS.hike;
+}
+
+export function measureTrackStep(prev, point, activity = 'hike') {
+  const dist = haversine(prev.lat, prev.lon, point.lat, point.lon);
+  const dt = Number(point.t) - Number(prev.t);
+  const implied = dt > 0 ? dist / (dt / 1000) : null;
+  const prevAcc = Number(prev.acc);
+  const pointAcc = Number(point.acc);
+  const avgAcc = ((isFinite(prevAcc) && prevAcc > 0 ? prevAcc : 15) + (isFinite(pointAcc) && pointAcc > 0 ? pointAcc : 15)) / 2;
+  const jumpFloor = Math.max(10, avgAcc * 1.2);
+  const tolerance = point.speed == null && point.heading == null ? MISSING_KINEMATICS_TOLERANCE : SPEED_TOLERANCE;
+  const valid = !(implied != null && implied > physicsFor(activity).vmax * tolerance && dist > jumpFloor);
+  return { dist: valid ? dist : 0, rawDist: dist, dt, implied, valid };
+}
+
+export function trackDistance(segments, activity = 'hike') {
+  let total = 0;
+  for (const seg of segments || []) {
+    const points = seg.points || [];
+    for (let i = 1; i < points.length; i++) total += measureTrackStep(points[i - 1], points[i], activity).dist;
+  }
+  return total;
+}
+
 export function haversine(lat1, lon1, lat2, lon2) {
   const dLat = rad(lat2 - lat1);
   const dLon = rad(lon2 - lon1);

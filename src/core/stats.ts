@@ -1,5 +1,5 @@
 // Pure trip statistics. Shared by the Web Worker and main-thread fallback.
-import { haversine, emaSeries, ascentDescent, slopeAt } from './geo';
+import { emaSeries, ascentDescent, slopeAt, measureTrackStep, physicsFor, SPEED_TOLERANCE } from './geo';
 import { estimateCalories } from './calories';
 
 const MOVING_SPEED = 0.5;   // m/s
@@ -11,6 +11,8 @@ const MAX_DT = 60_000;      // cap per-step time contribution (gap protection)
  */
 export function computeStats(segments, opts: any = {}) {
   const threshold = opts.ascentThreshold ?? 4;
+  const activity = opts.activity || 'hike';
+  const speedLimit = physicsFor(activity).vmax * SPEED_TOLERANCE;
   const all = [];
   const segStats = [];
   let distance = 0, activeMs = 0, movingMs = 0, maxSpeed = 0;
@@ -34,20 +36,19 @@ export function computeStats(segments, opts: any = {}) {
         if (segMaxT == null || p.t > segMaxT) segMaxT = p.t;
       }
       let stepD = 0, speed = null;
-      if (prev) {
-        stepD = haversine(prev.lat, prev.lon, p.lat, p.lon);
-        const dt = Number.isFinite(p.t) && Number.isFinite(prev.t) ? p.t - prev.t : 0;
-        if (dt > 0 && dt <= MAX_DT) {
-          speed = stepD / (dt / 1000);
-          activeMs += dt;
-          segActiveMs += dt;
-          if (speed > MOVING_SPEED) movingMs += dt;
-        } else if (p.speed != null) {
-          speed = p.speed;
+      const step = prev ? measureTrackStep(prev, p, activity) : null;
+      if (step) {
+        stepD = step.dist;
+        if (step.dt > 0 && step.dt <= MAX_DT) {
+          activeMs += step.dt;
+          segActiveMs += step.dt;
+          if (step.valid && step.implied > MOVING_SPEED) movingMs += step.dt;
         }
       }
-      if (p.speed != null && isFinite(p.speed)) speed = speed == null ? p.speed : Math.max(speed, 0);
-      if (speed != null && speed > maxSpeed && speed < 80) maxSpeed = speed;
+      const reported = p.speed != null && isFinite(p.speed) && p.speed >= 0 && p.speed <= speedLimit ? p.speed : null;
+      if (step?.valid === false) speed = null;
+      else speed = step?.implied ?? reported;
+      if (speed != null && speed > maxSpeed && speed <= speedLimit) maxSpeed = speed;
       segDist += stepD;
       cumD += stepD;
       if (p.acc != null && isFinite(p.acc) && p.acc > 0) { accSum += p.acc; accN++; }

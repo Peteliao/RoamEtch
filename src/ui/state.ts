@@ -53,10 +53,14 @@ export async function recalcNow() {
     full.segments.map((s) => ({ id: s.id, points: s.points })),
     { ascentThreshold: get('ascentThreshold'), activity: full.trip.activity, weightKg: get('weightKg') }
   );
-  appState.stats = stats;
-  await updateTrip(full.trip.id, { statsCache: { ...stats, series: undefined, segments: stats.segments } });
-  emit('trip:stats', stats);
-  return stats;
+  const reportedDistance = full.trip.reportedDistance != null ? Number(full.trip.reportedDistance) : null;
+  const resolvedStats = reportedDistance != null && isFinite(reportedDistance) && reportedDistance >= 0
+    ? { ...stats, distance: reportedDistance }
+    : stats;
+  appState.stats = resolvedStats;
+  await updateTrip(full.trip.id, { statsCache: { ...resolvedStats, series: undefined, segments: resolvedStats.segments } });
+  emit('trip:stats', resolvedStats);
+  return resolvedStats;
 }
 
 /** After edits that null-out altitudes, refill from service when online. */

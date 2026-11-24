@@ -3,7 +3,8 @@
 import { get } from './settings';
 import { emit } from './events';
 import { t } from './i18n';
-import { haversine, uuid } from './geo';
+import { haversine, physicsFor, uuid } from './geo';
+import { createJumpGate, speedLimitFor } from './trackFilter';
 import * as store from './store';
 import { resolveAltitude } from './elevation';
 import { acquireRecorderLock, releaseRecorderLock, broadcast, isHolding } from './locks';
@@ -12,19 +13,16 @@ import { armKeepAlive, disarmKeepAlive } from './keepalive';
 import { classifyActivity } from './activity';
 
 const GAP_TIME = 5 * 60_000;   // > 5 min → new segment
-const GAP_DIST = 500;          // > 500 m jump → new segment
+const MOTION_HISTORY_MS = 120_000;
 const MOVING_SPEED = 0.5;      // m/s
 const FLUSH_POINTS = 10;
 const FLUSH_MS = 5000;
 const SILENT_MS = 20_000;      // no fix callback at all → location likely switched off
 const BG_NOTICE_MS = 15_000;   // background absence worth notifying about
 const RESUME_BREAK_MS = 45_000;// long silence → start a fresh segment on return
-const STALE_FIX_MS = 20_000;   // ignore cached fixes older than this
-const JUMP_CONFIRM_MS = 60_000;// how long to wait for a relocated fix to confirm
+const STALE_FIX_MS = 5_000;    // ignore cached fixes older than this
 const SAVE_RETRY_MS = 5000;
 const SPILL_KEY = 'trackmint.pendingPoints.v1';
-
-const MAX_SPEED = { hike: 7, run: 12.5, bike: 22, drive: 70, travel: 70 }; // m/s
 
 export const rec = {
   status: 'idle',              // idle | recording | paused | finished
@@ -59,7 +57,8 @@ let hiddenAt = 0;
 let speedSamples = [];
 let watchEpoch = 0;
 let anchorT = 0;               // last valid fix time, including stationary ones
-let pendingJump = null;        // candidate relocation awaiting a consistent next fix
+let motionHistory = [];
+const jumpGate = createJumpGate();
 let breakOnNextFix = false;    // background silence → split before accepting again
 let forceAccLimit = 0;         // stricter gate for the first fix after a break
 let lastWatchRestart = 0;
@@ -94,8 +93,8 @@ function resetSaveState() {
 function watchOptions() {
   const q = get('recordQuality');
   if (q === 'high') return { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 };
-  if (q === 'low') return { enableHighAccuracy: false, maximumAge: 10000, timeout: 30000 };
-  return { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 };
+  if (q === 'low') return { enableHighAccuracy: false, maximumAge: 0, timeout: 30000 };
+  return { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 };
 }
 
 export async function startRecording({ tripId = null, name = '', activity = null, simulated = false } = {}) {
@@ -147,7 +146,7 @@ export async function startRecording({ tripId = null, name = '', activity = null
     altSmooth = null; altRef = null;
     buffer = [];
     inflight = null;
-    anchorT = 0; pendingJump = null; breakOnNextFix = false; forceAccLimit = 0;
+    anchorT = 0; resetMotionFilter(); breakOnNextFix = false; forceAccLimit = 0;
     suspendFixIngest = false;
     resetSaveState();
 
@@ -249,8 +248,9 @@ function startWatch() {
 /** One immediate high-accuracy fix, mainly to wake iOS after a lock/suspension. */
 function locateNow() {
   if (rec.simulated || rec.status !== 'recording' || !navigator.geolocation) return;
+  const epoch = watchEpoch;
   navigator.geolocation.getCurrentPosition(
-    (pos) => onGeoPosition(pos),
+    (pos) => { if (epoch === watchEpoch) onGeoPosition(pos); },
     () => { /* watchPosition error path owns the UI state */ },
     { ...watchOptions(), maximumAge: 0 }
   );
@@ -295,7 +295,10 @@ function armResumeBreak() {
 }
 
 export function setRecordingActivity(activity) {
-  if (rec.status === 'recording' || rec.status === 'paused') rec.tripActivity = activity;
+  if (rec.status === 'recording' || rec.status === 'paused') {
+    rec.tripActivity = activity;
+    resetMotionFilter();
+  }
 }
 
 
@@ -313,148 +316,44 @@ async function beginNewSegment(now, info, reasonKey) {
   rec.live.segCount++;
   rec.lastPoint = null;
   anchorT = 0;
-  pendingJump = null;
+  resetMotionFilter();
   emit('recorder:gap', { ...info, reasonKey });
   emit('toast', { type: 'warn', msg: t(reasonKey) });
   return true;
 }
 
-async function processFix(fix) {
-  if (rec.status !== 'recording' || suspendFixIngest) return;
-  const arrival = Date.now();
-  const rawT = Number(fix?.t);
-  const now = Number.isFinite(rawT) && rawT > 0 ? rawT : arrival;
-  const lat = Number(fix?.lat), lon = Number(fix?.lon);
-  if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
+function resetMotionFilter() {
+  motionHistory = [];
+  jumpGate.reset();
+}
 
-  // Cached/queued fixes from before a suspension must never rewind the track.
-  if ((rec.lastFixT && now <= rec.lastFixT) || arrival - now > STALE_FIX_MS) {
-    return;
-  }
+function rememberMotion(point) {
+  const cutoff = point.t - MOTION_HISTORY_MS;
+  motionHistory = motionHistory.filter((p) => p.t >= cutoff);
+  motionHistory.push(point);
+  if (motionHistory.length > 400) motionHistory.splice(0, motionHistory.length - 400);
+}
 
-  rec.lastFixWall = arrival;
-  if (rec.geoError && rec.geoError !== 'denied') {
-    rec.geoError = null;
-    emit('recorder:geoerror', { code: null });
-  }
-
-  const accLimit = forceAccLimit || get('accuracyLimit');
-  if (fix.acc != null && (!isFinite(fix.acc) || fix.acc > accLimit)) {
-    rec.filteredCount++;
-    emit('recorder:filtered', { reason: 'accuracy', count: rec.filteredCount });
-    return;
-  }
-  if (!rec.firstFixT) rec.firstFixT = now;
-  rec.lastFixT = now;
-
-  const acc = fix.acc != null && isFinite(fix.acc) ? fix.acc : null;
-  const fixSpeed = fix.speed != null && isFinite(fix.speed) && fix.speed >= 0 ? fix.speed : null;
-  const tripActivity = rec.tripActivity || get('activity');
-  // auto: stay permissive (travel envelope) until the classifier converges
-  const activity = tripActivity === 'auto' ? (rec.activityGuess || 'travel') : tripActivity;
-  const vmax = MAX_SPEED[activity] ?? 7;
-
-  let dist = 0, dt = 0, implied = null;
-  if (rec.lastPoint) {
-    dist = haversine(rec.lastPoint.lat, rec.lastPoint.lon, lat, lon);
-    const refT = anchorT || rec.lastPoint.t;
-    dt = now - refT;
-    if (dt > 0) implied = dist / (dt / 1000);
-    // feed the auto-activity classifier even with fixes the filters reject
-    if (dt > 0 && dt <= 60000) {
-      const s = fixSpeed ?? implied;
-      if (s != null && s > MOVING_SPEED) {
-        speedSamples.push(s);
-        if (speedSamples.length > 400) speedSamples.shift();
-        if (tripActivity === 'auto' && speedSamples.length >= 6 && (!rec.activityGuess || speedSamples.length % 5 === 0)) {
-          const guess = classifyActivity(speedSamples);
-          if (guess && guess !== rec.activityGuess) {
-            rec.activityGuess = guess;
-            emit('activity:guess', { activity: guess });
-          }
-        }
-      }
+function feedAutoActivity(speed, dt, tripActivity) {
+  if (tripActivity !== 'auto' || speed == null || speed <= MOVING_SPEED) return;
+  if (dt !== 0 && !(dt > 0 && dt <= 60_000)) return;
+  speedSamples.push(speed);
+  if (speedSamples.length > 400) speedSamples.shift();
+  if (speedSamples.length >= 6 && (!rec.activityGuess || speedSamples.length % 5 === 0)) {
+    const guess = classifyActivity(speedSamples);
+    if (guess && guess !== rec.activityGuess) {
+      rec.activityGuess = guess;
+      emit('activity:guess', { activity: guess });
     }
   }
+}
 
-  const jumpFloor = Math.max(10, (acc ?? 15) * 1.2);
-  const impossibleJump = !!rec.lastPoint && implied != null && implied > vmax * 1.4 && dist > jumpFloor;
+function acceptPoint(fix, now, acc, fixSpeed, activity, dist = 0, dt = 0, implied = null) {
+  const lat = Number(fix.lat), lon = Number(fix.lon);
+  const absoluteLimit = physicsFor('travel').vmax * 1.3;
+  const reported = fixSpeed != null && fixSpeed <= absoluteLimit ? fixSpeed : null;
+  const speed = implied != null && dt > 0 && dt <= 60_000 ? implied : reported;
 
-  let relocated = false;
-  // A long suspension starts a fresh segment instead of bridging the gap.
-  if (breakOnNextFix && rec.lastPoint) {
-    if (!(await beginNewSegment(now, { dist: Math.round(dist), dt: Math.round(dt), auto: true }, 'record.bgResumed'))) return;
-    breakOnNextFix = false;
-    forceAccLimit = 0;
-    relocated = true;
-    dist = 0; dt = 0; implied = null;
-  } else if (breakOnNextFix) {
-    breakOnNextFix = false;
-    forceAccLimit = 0;
-  }
-
-  if (pendingJump && rec.lastPoint) {
-    const candDt = (now - pendingJump.t) / 1000;
-    const candDist = haversine(pendingJump.lat, pendingJump.lon, lat, lon);
-    const consistent = now > pendingJump.t && now - pendingJump.t <= JUMP_CONFIRM_MS
-      && candDist <= Math.max(70, vmax * candDt * 1.5 + 30);
-    const nearOld = dist <= Math.max(50, ((acc ?? 15) + (rec.lastPoint.acc ?? 15)) * 2)
-      && (implied == null || implied <= vmax * 1.4);
-    if (consistent) {
-      // Two mutually consistent fixes far from the old anchor: relocate honestly
-      // in a new segment instead of dropping every subsequent point forever.
-      if (!(await beginNewSegment(now, { dist: Math.round(candDist), dt: Math.round(candDt * 1000), auto: true }, 'record.geoRelocated'))) return;
-      relocated = true;
-      forceAccLimit = 0;
-      dist = 0; dt = 0; implied = null;
-    } else if (nearOld) {
-      pendingJump = null;
-    } else {
-      pendingJump = { lat, lon, t: now, acc };
-      rec.filteredCount++;
-      emit('recorder:filtered', { reason: 'jump', count: rec.filteredCount });
-      return;
-    }
-  }
-
-  // ---- filter: unconfirmed teleport jump ----
-  if (!relocated && impossibleJump) {
-    pendingJump = { lat, lon, t: now, acc };
-    rec.filteredCount++;
-    emit('recorder:filtered', { reason: 'jump', count: rec.filteredCount });
-    return;
-  }
-
-  if (rec.lastPoint) {
-    // ---- accuracy-scaled deadband: stop resting fixes from drawing drifts ----
-    const avgAcc = acc != null && rec.lastPoint.acc != null ? (acc + rec.lastPoint.acc) / 2 : (acc ?? rec.lastPoint.acc ?? 15);
-    const deadband = Math.max(4, Math.min(20, avgAcc * 1.2));
-    if (dist < deadband) {
-      if (dt > 0 && dt <= 60000) {
-        rec.live.activeMs += dt;
-        if (fixSpeed != null && fixSpeed > MOVING_SPEED) rec.live.movingMs += dt;
-        else rec.live.stillMs += dt;
-      }
-      // Keep the gap clock alive: a long rest is not a GPS outage.
-      anchorT = now;
-      rec.live.speed = fixSpeed != null && fixSpeed > MOVING_SPEED ? fixSpeed : 0;
-      rec.live.acc = acc;
-      rec.live.lat = lat; rec.live.lon = lon;
-      rec.live.heading = fix.heading != null && isFinite(fix.heading) ? fix.heading : null;
-      emit('recorder:tick', { live: rec.live });
-      return;
-    }
-    // ---- gap → new segment ----
-    if (dt > GAP_TIME || dist > GAP_DIST) {
-      if (!(await beginNewSegment(now, { dist: Math.round(dist), dt: Math.round(dt) }, 'record.gapNewSegment'))) return;
-      dist = 0; dt = 0; implied = null;
-    }
-  }
-
-  const speed = fixSpeed ?? (implied != null && dt <= 60000 ? implied : null);
-
-  // GPS altitude is trusted immediately; network/cache lookup fills the point
-  // asynchronously so a slow elevation service never stalls the fix queue.
   let alt = null, altSrc = null, altPromise = null;
   if (fix.alt != null && isFinite(fix.alt) && fix.altAcc != null && fix.altAcc <= 30) {
     alt = fix.alt; altSrc = 'gps';
@@ -468,10 +367,9 @@ async function processFix(fix) {
     speed: speed != null ? Math.round(speed * 100) / 100 : null
   };
 
-  // ---- incremental live stats ----
   const L = rec.live;
   L.distance += dist;
-  if (dt > 0 && dt <= 60000) {
+  if (dt > 0 && dt <= 60_000) {
     L.activeMs += dt;
     if (speed != null && speed > MOVING_SPEED) L.movingMs += dt;
     else L.stillMs += dt;
@@ -481,7 +379,7 @@ async function processFix(fix) {
   L.lat = lat; L.lon = lon;
   L.heading = fix.heading != null && isFinite(fix.heading) ? fix.heading : null;
   L.pointCount++;
-  if (speed != null && speed > L.maxSpeed && speed < vmax * 1.5) L.maxSpeed = speed;
+  if (speed != null && speed > L.maxSpeed && speed <= speedLimitFor(activity, fix)) L.maxSpeed = speed;
   if (alt != null) {
     altSmooth = altSmooth == null ? alt : 0.35 * alt + 0.65 * altSmooth;
     if (altRef == null) altRef = altSmooth;
@@ -491,7 +389,6 @@ async function processFix(fix) {
     else if (d <= -th) { L.descent += -d; altRef = altSmooth; }
     L.alt = alt; L.altSrc = altSrc;
   }
-  // slope from recent buffer window
   const recent = [...buffer.slice(-6), point];
   if (recent.length > 1 && alt != null) {
     let j = recent.length - 2, dd = 0;
@@ -502,10 +399,11 @@ async function processFix(fix) {
 
   rec.lastPoint = point;
   anchorT = now;
-  pendingJump = null;
   forceAccLimit = 0;
   breakOnNextFix = false;
+  rememberMotion(point);
   buffer.push(point);
+  feedAutoActivity(speed, dt, rec.tripActivity);
   emitPersistence();
   if (altPromise) {
     altPromise.then((res) => {
@@ -519,10 +417,109 @@ async function processFix(fix) {
       }
     });
   }
-  if (buffer.length >= FLUSH_POINTS) flushBuffer();
+  if (buffer.length >= FLUSH_POINTS) void flushBuffer();
   else if (!flushTimer) flushTimer = setTimeout(flushBuffer, FLUSH_MS);
-
   emit('recorder:point', { point, live: L });
+}
+
+async function processFix(fix) {
+  if (rec.status !== 'recording' || suspendFixIngest) return;
+  const arrival = Date.now();
+  const rawT = Number(fix?.t);
+  const now = Number.isFinite(rawT) && rawT > 0 ? rawT : arrival;
+  const lat = Number(fix?.lat), lon = Number(fix?.lon);
+  if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
+
+  // Cached/queued fixes from before a suspension must never rewind the track.
+  if ((rec.lastFixT && now <= rec.lastFixT) || arrival - now > STALE_FIX_MS) return;
+
+  rec.lastFixWall = arrival;
+  if (rec.geoError && rec.geoError !== 'denied') {
+    rec.geoError = null;
+    emit('recorder:geoerror', { code: null });
+  }
+
+  const accLimit = forceAccLimit || get('accuracyLimit');
+  if (fix.acc != null && (!isFinite(fix.acc) || fix.acc <= 0 || fix.acc > accLimit)) {
+    rec.filteredCount++;
+    emit('recorder:filtered', { reason: 'accuracy', count: rec.filteredCount });
+    return;
+  }
+  if (!rec.firstFixT) rec.firstFixT = now;
+  rec.lastFixT = now;
+
+  const acc = fix.acc != null && isFinite(fix.acc) ? fix.acc : null;
+  const fixSpeed = fix.speed != null && isFinite(fix.speed) && fix.speed >= 0 ? fix.speed : null;
+  const tripActivity = rec.tripActivity || get('activity');
+  const activity = tripActivity === 'auto' ? (rec.activityGuess || 'auto') : tripActivity;
+
+  let dist = 0, dt = 0, implied = null;
+  if (rec.lastPoint) {
+    dist = haversine(rec.lastPoint.lat, rec.lastPoint.lon, lat, lon);
+    const refT = anchorT || rec.lastPoint.t;
+    dt = now - refT;
+    if (dt > 0) implied = dist / (dt / 1000);
+  }
+
+  if (breakOnNextFix && rec.lastPoint) {
+    if (!(await beginNewSegment(now, { dist: Math.round(dist), dt: Math.round(dt), auto: true }, 'record.bgResumed'))) return;
+    dist = 0; dt = 0; implied = null;
+  } else if (breakOnNextFix) {
+    breakOnNextFix = false;
+    forceAccLimit = 0;
+  }
+
+  const decision = jumpGate.evaluate({ fix, anchor: rec.lastPoint, history: motionHistory, activity });
+  if (decision.action === 'pending') {
+    rec.filteredCount++;
+    emit('recorder:filtered', { reason: 'jump', count: rec.filteredCount });
+    return;
+  }
+  if (decision.action === 'confirm') {
+    const first = decision.points[0];
+    const jumpDist = haversine(rec.lastPoint.lat, rec.lastPoint.lon, first.lat, first.lon);
+    const jumpDt = first.t - (anchorT || rec.lastPoint.t);
+    if (!(await beginNewSegment(first.t, { dist: Math.round(jumpDist), dt: Math.round(jumpDt), auto: true }, 'record.geoRelocated'))) return;
+    rec.filteredCount = Math.max(0, rec.filteredCount - (decision.points.length - 1));
+    let previous = null;
+    for (const candidate of decision.points) {
+      let cDist = 0, cDt = 0, cImplied = null;
+      if (previous) {
+        cDist = haversine(previous.lat, previous.lon, candidate.lat, candidate.lon);
+        cDt = candidate.t - previous.t;
+        if (cDt > 0) cImplied = cDist / (cDt / 1000);
+      }
+      const candidateActivity = rec.tripActivity === 'auto' ? (rec.activityGuess || 'auto') : rec.tripActivity;
+      acceptPoint(candidate, candidate.t, candidate.acc ?? null, candidate.speed ?? null, candidateActivity, cDist, cDt, cImplied);
+      previous = rec.lastPoint;
+    }
+    return;
+  }
+
+  if (rec.lastPoint) {
+    const avgAcc = acc != null && rec.lastPoint.acc != null ? (acc + rec.lastPoint.acc) / 2 : (acc ?? rec.lastPoint.acc ?? 15);
+    const deadband = Math.max(4, Math.min(20, avgAcc * 1.2));
+    if (dist < deadband) {
+      if (dt > 0 && dt <= 60_000) {
+        rec.live.activeMs += dt;
+        if (fixSpeed != null && fixSpeed > MOVING_SPEED && fixSpeed <= physicsFor('travel').vmax * 1.3) rec.live.movingMs += dt;
+        else rec.live.stillMs += dt;
+      }
+      anchorT = now;
+      rec.live.speed = fixSpeed != null && fixSpeed > MOVING_SPEED && fixSpeed <= physicsFor('travel').vmax * 1.3 ? fixSpeed : 0;
+      rec.live.acc = acc;
+      rec.live.lat = lat; rec.live.lon = lon;
+      rec.live.heading = fix.heading != null && isFinite(fix.heading) ? fix.heading : null;
+      emit('recorder:tick', { live: rec.live });
+      return;
+    }
+    if (dt > GAP_TIME) {
+      if (!(await beginNewSegment(now, { dist: Math.round(dist), dt: Math.round(dt) }, 'record.gapNewSegment'))) return;
+      dist = 0; dt = 0; implied = null;
+    }
+  }
+
+  acceptPoint(fix, now, acc, fixSpeed, activity, dist, dt, implied);
 }
 
 
@@ -712,7 +709,7 @@ export async function pauseRecording() {
   rec.status = 'paused';
   suspendFixIngest = false;
   pausedAt = Date.now();
-  pendingJump = null; breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
+  resetMotionFilter(); breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
   await store.updateTrip(rec.tripId, { status: 'paused' }).catch((e) => console.error('trip status update failed', e));
   rec.saveState.pending = 0;
   emitPersistence();
@@ -761,7 +758,7 @@ export async function resumeRecording() {
     rec.permissionDenied = false;
     rec.geoError = null;
     rec.lastFixWall = Date.now();
-    pendingJump = null; breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
+    resetMotionFilter(); breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
     suspendFixIngest = false;
     await store.updateTrip(rec.tripId, { status: 'recording' }).catch((e) => console.error('trip status update failed', e));
     if (!rec.simulated && !startWatch()) {
@@ -863,7 +860,11 @@ export async function continueTrip(tripId) {
     // rebuild live counters from stored data
     const full = await store.loadTripFull(tripId);
     const { computeStats } = await import('./stats');
-    const st = computeStats(full.segments, { ascentThreshold: get('ascentThreshold') });
+    const st = computeStats(full.segments, {
+      ascentThreshold: get('ascentThreshold'),
+      activity: rec.tripActivity,
+      weightKg: get('weightKg')
+    });
     Object.assign(rec.live, {
       distance: st.distance, ascent: st.ascent, descent: st.descent,
       activeMs: st.activeMs, movingMs: st.movingMs, stillMs: st.stillMs, duration: st.duration,

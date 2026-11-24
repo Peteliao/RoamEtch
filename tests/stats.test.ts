@@ -116,6 +116,36 @@ describe('trip statistics', () => {
     expect(over.breakMs).toBe(60_001);
   });
 
+  it('excludes an impossible within-segment edge from distance and speed', () => {
+    const stats = computeStats(track([
+      { lat: 30, lon: 120, t: 0 },
+      { lat: 30, lon: 120.01, t: 1_000, speed: 3 }
+    ]), { activity: 'hike' });
+    expect(stats.distance).toBe(0);
+    expect(stats.maxSpeed).toBe(0);
+    expect(stats.activeMs).toBe(1_000);
+    expect(stats.movingMs).toBe(0);
+  });
+
+  it('uses the stricter distance envelope when speed and heading are both missing', () => {
+    const points = [
+      { lat: 30, lon: 120, t: 0 },
+      { lat: 30, lon: 120.000575, t: 10_000 }
+    ];
+    expect(computeStats(track(points), { activity: 'hike' }).distance).toBe(0);
+    expect(computeStats(track([points[0], { ...points[1], speed: 0 }]), { activity: 'hike' }).distance).toBeGreaterThan(50);
+  });
+
+  it('allows genuine high-speed travel above the old 80 m/s stats cap', () => {
+    const stats = computeStats(track([
+      { lat: 30, lon: 120, t: 0 },
+      { lat: 30, lon: 120.0094, t: 10_000 }
+    ]), { activity: 'travel' });
+    expect(stats.distance).toBeGreaterThan(850);
+    expect(stats.maxSpeed).toBeGreaterThan(80);
+    expect(stats.maxSpeed).toBeLessThan(100);
+  });
+
   it('ignores duplicate and backwards timestamps without corrupting duration', () => {
     const stats = computeStats(track([
       { lat: 30, lon: 120, t: 0 },

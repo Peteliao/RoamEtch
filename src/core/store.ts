@@ -30,7 +30,13 @@ export async function createTrip({ name, activity = 'hike', status = 'recording'
 export const getTrip = (id) => db.trips.get(id);
 export const listTrips = () => db.trips.orderBy('updatedAt').reverse().toArray();
 export async function updateTrip(id, patch) {
-  await db.trips.update(id, { ...patch, updatedAt: Date.now() });
+  const current = patch.activity != null ? await db.trips.get(id) : null;
+  const clearReported = current?.reportedDistance != null && current.activity !== patch.activity;
+  await db.trips.update(id, {
+    ...patch,
+    ...(clearReported ? { reportedDistance: null } : {}),
+    updatedAt: Date.now()
+  });
 }
 export async function deleteTrip(id) {
   await db.transaction('rw', [db.trips, db.segments, db.trackChunks, db.waypoints, db.media], async () => {
@@ -69,7 +75,11 @@ export async function appendPoints(segmentId, tripId, points) {
       }
     }
     await db.segments.update(segmentId, { endTime: points[points.length - 1].t });
-    await db.trips.update(tripId, { updatedAt: Date.now() });
+    const trip = await db.trips.get(tripId);
+    await db.trips.update(tripId, {
+      updatedAt: Date.now(),
+      ...(trip?.reportedDistance != null ? { reportedDistance: null } : {})
+    });
   });
 }
 
@@ -96,17 +106,24 @@ export async function loadTripFull(tripId) {
 
 /** Replace all points of a segment (used by editor). */
 export async function replaceSegmentPoints(segmentId, tripId, points) {
-  await db.trackChunks.where('segmentId').equals(segmentId).delete();
-  if (points.length) {
-    for (let i = 0; i < points.length; i += CHUNK_SIZE) {
-      await db.trackChunks.add({
-        id: uuid(), tripId, segmentId, seq: Math.floor(i / CHUNK_SIZE),
-        points: points.slice(i, i + CHUNK_SIZE)
-      });
+  await db.transaction('rw', [db.trackChunks, db.segments, db.trips], async () => {
+    await db.trackChunks.where('segmentId').equals(segmentId).delete();
+    if (points.length) {
+      for (let i = 0; i < points.length; i += CHUNK_SIZE) {
+        await db.trackChunks.add({
+          id: uuid(), tripId, segmentId, seq: Math.floor(i / CHUNK_SIZE),
+          points: points.slice(i, i + CHUNK_SIZE)
+        });
+      }
     }
-  }
-  await db.segments.update(segmentId, {
-    startTime: points[0]?.t ?? null, endTime: points[points.length - 1]?.t ?? null
+    await db.segments.update(segmentId, {
+      startTime: points[0]?.t ?? null, endTime: points[points.length - 1]?.t ?? null
+    });
+    const trip = await db.trips.get(tripId);
+    await db.trips.update(tripId, {
+      updatedAt: Date.now(),
+      ...(trip?.reportedDistance != null ? { reportedDistance: null } : {})
+    });
   });
 }
 
