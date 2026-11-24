@@ -39,6 +39,15 @@ hosted demo is served from GitHub Pages and is rebuilt on every push to `main`.
   same browser profile can read it.
 - Clearing browser data or uninstalling the PWA deletes local trips. Users should
   export a full backup before doing so.
+- Quick camera shots keep the stored 1600 px JPEG and, during the open camera
+  session only, a full-resolution original in memory. The original is not written
+  to IndexedDB or a backup; it leaves the app only when the user taps “save
+  original” and completes the system share, save-picker, or download flow. A
+  browser cannot silently insert files into the OS photo gallery.
+- Meetup QR scanning decodes only a single frame or a user-selected image. Album
+  QR images pass the same JPEG/PNG/WebP header, byte, and pixel bounds as other
+  local image inputs before any pixel decode, and recognized text is normalized
+  through the v2 invite parser.
 - Full-library backup ZIPs are **not encrypted**. They contain complete tracks,
   waypoints, and photos, and can be read by anyone who obtains the file. They do
   carry SHA-256 checksums so the app can detect corruption or modification before
@@ -76,6 +85,7 @@ Version 1 invites and packets are rejected rather than downgraded.
 | Replay protection | Every packet carries a per-sender, strictly increasing sequence number. All packet types pass the same per-sender guard; repeated or older sequences are dropped. Timestamps are a secondary ±5-minute sanity check, and locations also enforce newer sequence ordering. |
 | Chat dedupe | Random message ids plus a bounded seen-set, in addition to the sender sequence |
 | Transport limits | Client and relay cap packets at 128 KB. The bundled relay also enforces a per-socket token bucket (8 msg/s, 40 burst), 32 clients per room, 2,000 rooms, 10,000 clients, and a 12-hour idle-room sweep |
+| Public MQTT nodes | Concurrent subscriptions to `broker-cn.emqx.io:8084`, `broker.emqx.io:8084`, and `mqtt-dashboard.com:8884`; the fastest response starts the session immediately and every connected node also receives outgoing ciphertext as redundancy. A custom URL replaces this set unless it is the legacy default |
 | MQTT topic | `${prefix}/${roomId}` (default prefix `trackmint/v2/meet`) |
 | WS path | `/room/{room}` (the relay must preserve this path) |
 
@@ -140,10 +150,12 @@ contents. Neither transport stores messages or provides history replay.
   invite leaks, ciphertext captured during that session can be decrypted. Reset
   the invite to create a new room and key. Periodic key ratcheting / MLS is not
   implemented yet.
-- **Public relay availability.** The default `broker.emqx.io` is a shared public
-  test broker. It can be rate-limited, disconnected, or observed. Use the custom
-  MQTT or WS relay option for private groups, and send invites through a trusted
-  channel.
+- **Public relay availability.** The default public MQTT nodes
+  (`broker-cn.emqx.io`, `broker.emqx.io`, and `mqtt-dashboard.com`) are shared
+  test brokers. They can be rate-limited, disconnected, or observed. Connecting
+  to several concurrently improves reachability but does not make them private;
+  use the custom MQTT or WS relay option for private groups, and send invites
+  through a trusted channel.
 - **Client-side enforcement only.** A malicious client can keep or re-share data
   it has already decrypted. The app cannot force another device to delete
   positions, messages, or photos.

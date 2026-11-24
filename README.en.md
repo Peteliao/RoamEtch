@@ -61,7 +61,8 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 - Automatic activity detection for hiking, driving, cycling, running, and travel; change the activity at any time while recording.
 - Pause/resume, add waypoints mid-recording, rename on finish, and resume as a new segment after the browser is backgrounded or the screen locks.
 - Three recording-frequency presets (high accuracy, balanced, power saving), screen wake lock, fullscreen, and a true-black OLED pocket lock to reduce accidental touches and battery drain on long trips. Locking the screen with the power button or backgrounding the browser can still pause geolocation.
-- **In-app photo waypoints**: open the camera while recording or paused, shoot in the viewfinder, and link each photo to the current WGS-84 position and altitude. Flash, vibration, burst capture, thumbnail, undo, and a “Done (N)” counter are included. Photos stay in local IndexedDB and are never uploaded.
+- **In-app photo waypoints**: open the camera while recording or paused, shoot in the viewfinder, and link each photo to the current WGS-84 position and altitude. Flash, vibration, continuous shooting, thumbnail, undo, and a “Done (N)” counter are included. Each shot keeps the in-app 1600 px version plus a full-resolution original that “Save original” can hand to the system through the share sheet, save picker, or a download; browsers cannot silently write to the OS photo gallery. Photos stay in local IndexedDB and are never uploaded.
+- **Multi-photo waypoint editor**: select several album images at once or open the camera and shoot a burst inside the node editor. Every captured or selected image is appended to the waypoint until you save it.
 - **Pocket-lock quick camera**: drag the bottom-right camera knob left by at least 120 px in the OLED pocket lock. Taps and short drags are ignored; the camera closes after 20 seconds without interaction, and a saved shot returns to the black pocket lock after 3 seconds or offers “shoot again” / “lock now”.
 - **Re-walk**: follow a reference track with off-route alerts and spoken waypoint type, name, and notes as you approach each node.
 
@@ -93,9 +94,9 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 
 ### Live meetup: stay together in real time
 
-- Create a meetup invite (`TM2.<roomId>.<secret>`) and share it as a link or QR code; the session auto-ends after 1, 2, 4, or 8 hours. Old v1 12-character codes are rejected with an explicit message and must be replaced by a new invite.
+- Create a meetup invite (`TM2.<roomId>.<secret>`) and share it as a link or QR code; joining can scan a live camera frame or decode a QR image from the album, and the session auto-ends after 1, 2, 4, or 8 hours. Old v1 12-character codes are rejected with an explicit message and must be replaced by a new invite.
 - The map shows your position and every teammate with live distance and bearing; the list highlights the nearest teammate and stale signals, and can plan a meetup route to a selected teammate.
-- The invite secret is the end-to-end key: HKDF-SHA-256 derives an AES-256-GCM key bound to the room id, with a per-session nonce prefix and monotonic counter. The room id (128 random bits) is independent of the secret (256 random bits), so the relay only sees a random public identifier and ciphertext. Packets use a strict per-sender replay guard, and every packet type is rejected when old or repeated. The default transport is the public EMQX MQTT WSS broker (custom MQTT URL and topic prefix in Settings) or your own WebSocket relay.
+- The invite secret is the end-to-end key: HKDF-SHA-256 derives an AES-256-GCM key bound to the room id, with a per-session nonce prefix and monotonic counter. The room id (128 random bits) is independent of the secret (256 random bits), so the relay only sees a random public identifier and ciphertext. Packets use a strict per-sender replay guard, and every packet type is rejected when old or repeated. By default the app connects to several public MQTT WSS providers concurrently (EMQX China/global and mqtt-dashboard); the fastest node starts the session immediately, while every connected node also forwards outgoing ciphertext as redundancy. A custom MQTT URL and topic prefix in Settings or your own WebSocket relay are supported.
 - Chat with online teammates after joining, with an unread badge. Messages live only in this tab's memory: late joiners see no history, messages are not replayed after disconnection, and everything is cleared when the session ends.
 - **Encrypted photo chat**: the camera button opens an in-app viewfinder with flip, torch where supported, album import, optional caption, and a preview showing compressed dimensions/size. Images step down for weak networks (720 px long edge, 480 px in low-data mode, 56 KB raw cap), are encrypted end-to-end, and have a 5-second sender cooldown. Received photos show an encryption badge, open in an enlarged viewer, and can pin their optional capture location on the map.
 - Only the latest 20 chat photos remain in session memory. Older payloads become expired placeholders; chat photos are never written to IndexedDB, included in backups, or uploaded to a TrackMint server.
@@ -171,7 +172,7 @@ Geolocation and PWA installation on phones require HTTPS (except `localhost`), s
 
 ### Private meetup relay (optional)
 
-The default public EMQX broker is suitable for testing. For a more stable or private relay, use the minimal blind WebSocket relay in [`relay/`](relay/README.md):
+The default setup uses several public MQTT nodes concurrently and is suitable for testing. For a more stable or private relay, use the minimal blind WebSocket relay in [`relay/`](relay/README.md):
 
 ```bash
 docker run --rm -p 8080:8080 ghcr.io/peteliao/trackmint-relay:latest
@@ -193,9 +194,9 @@ Then choose **Settings → Team relay → Custom WS relay** and enter `wss://you
 - i18n: [i18next](https://www.i18next.com/)
 - Files and photos: fflate (ZIP), exifr (EXIF parsing and stripping)
 - Offline: [vite-plugin-pwa](https://vite-pwa-org.netlify.app/) (Workbox)
-- Meetup: versioned invite (random public room id + 256-bit secret) + HKDF-SHA-256 + AES-256-GCM end-to-end encryption with per-sender replay protection; positions, text, and ephemeral chat photos all use MQTT WSS or a custom WebSocket blind relay
-- Camera: `getUserMedia` + inline video + Canvas; chat photos are weak-network compressed and only the latest 20 remain in memory, while local shots become photo waypoints linked to WGS-84 coordinates
-- Tests: Vitest covers coordinate conversion, track statistics, backup integrity and encryption, yearly footprints, GPS quality, GPX/KML/GeoJSON, share links, meetup crypto and publish cadence, and chat-image compression/validation; Playwright covers demo analysis, privacy cropping, posters, text-only HTML export, the encrypted backup round-trip, in-app photo save/undo, two-client encrypted photo chat and map locate, and OLED anti-mistouch/auto-lock; CI runs typecheck, unit tests, E2E, and the production build
+- Meetup: versioned invite (random public room id + 256-bit secret) + HKDF-SHA-256 + AES-256-GCM end-to-end encryption with per-sender replay protection; positions, text, and ephemeral chat photos all use concurrent public MQTT WSS nodes or a custom WebSocket blind relay
+- Camera: `getUserMedia` + inline video + Canvas; chat photos are weak-network compressed and only the latest 20 remain in memory, while local shots become photo waypoints linked to WGS-84 coordinates and can export a full-resolution original during the session
+- Tests: Vitest covers coordinate conversion, track statistics, backup integrity and encryption, yearly footprints, GPS quality, GPX/KML/GeoJSON, share links, meetup crypto and publish cadence, MQTT frame validation, QR decoding, and chat-image compression/validation; Playwright covers demo analysis, privacy cropping, posters, text-only HTML export, the encrypted backup round-trip, in-app photo bursts/save/undo/original download, multi-photo nodes, two-client encrypted text and image chat, camera and image QR join, public MQTT delivery, and OLED anti-mistouch/auto-lock; CI runs typecheck, unit tests, E2E, and the production build
 - Self-hosting: multi-stage Dockerfile + nginx.conf; an optional minimal blind relay template lives in [`relay/`](relay/README.md)
 
 ```text

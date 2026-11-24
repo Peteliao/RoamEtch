@@ -185,6 +185,12 @@ Three modes share the viewfinder:
   overwrite a newer one. Album inputs are bounded to 32 MB and 40 MP, and their
   JPEG/PNG/WebP headers are checked before object URL creation or canvas decode.
 - `quick`: 1600 px JPEG plus a 300 px thumbnail, saved as a local photo waypoint.
+  Each shot also holds a full-resolution JPEG in the camera closure, exposed as
+  “save original” through Web Share files, the File System Access save picker,
+  or an anchor download. The shutter stays available after every save so a burst
+  becomes separate waypoints; the node editor can also open this mode and append
+  each shot to the pending photo strip. Originals live only in camera memory and
+  are never written to IndexedDB or backups.
 - `oled`: opened by a predominantly horizontal left drag of at least 120 px from
   the bottom-right knob; taps and short drags are ignored. It auto-closes after
   20 seconds without interaction, and after a shot releases the camera and shows
@@ -215,11 +221,19 @@ Three modes share the viewfinder:
 ## Live meetup and relay
 
 Protocol v2 invitations carry a random 128-bit public room id and an independent
-256-bit secret in the URL `#` fragment or QR code. The secret derives a
-non-extractable AES-256-GCM key via HKDF-SHA-256 with v2 domain separation; the
-room id is used for routing and bound into the packet AAD. Positions and
-ephemeral chat are encrypted on-device and sent through the default public MQTT
-WSS broker (`trackmint/v2/meet/<roomId>`) or a custom WebSocket relay. Each
+256-bit secret in the URL `#` fragment or QR code. Joining accepts a pasted code,
+a live camera QR scan, or a QR image selected from the album; the latter two
+decode one frame and normalize the text through the same invite parser, with
+`BarcodeDetector` where available and jsQR as the cross-browser fallback. The
+secret derives a non-extractable AES-256-GCM key via HKDF-SHA-256 with v2 domain
+separation; the room id is used for routing and bound into the packet AAD.
+Positions and ephemeral chat are encrypted on-device and sent through the default
+public MQTT WSS providers (`trackmint/v2/meet/<roomId>`) or a custom WebSocket
+relay. The three public endpoints connect concurrently; the first successful
+connection reports the session ready, all connected endpoints receive outgoing
+ciphertext for redundancy, and duplicate envelopes are dropped by the per-sender
+sequence and chat-id guards. An empty custom URL means this automatic set,
+while a non-default custom URL replaces it. Each
 device uses a random nonce prefix plus a monotonic counter, and every packet type
 passes a per-sender strictly increasing sequence guard before it is accepted;
 timestamps and chat ids are additional checks. Messages live in memory only: no
@@ -250,14 +264,18 @@ if an old build appears.
 ## Tests and CI
 
 Vitest covers pure modules: coordinates, geo math, statistics, privacy cropping,
-GPX/KML/GeoJSON, compact links, demo data, meetup crypto and cadence, chat-image
-compression/validation, backup integrity and encryption, footprint aggregation
-and recap summaries, GPS quality, and procedural video-music composition.
-Playwright smoke tests run the demo and simulator flows in Chromium: analysis
-chart switching and privacy cropping, poster canvas rendering, text-only HTML
-export, encrypted backup export → wipe → restore, the iOS storage nudge, and
-fake-camera coverage for quick photo save/undo, two-client encrypted photo chat
-and map locate, OLED anti-mistouch, 3-second auto-lock, and 20-second idle close.
+GPX/KML/GeoJSON, compact links, demo data, meetup crypto and cadence, MQTT frame
+validation, QR pixel decoding, chat-image compression/validation, backup
+integrity and encryption, footprint aggregation and recap summaries, GPS quality,
+and procedural video-music composition. Playwright smoke tests run the demo and
+simulator flows in Chromium: analysis chart switching and privacy cropping,
+poster canvas rendering, text-only HTML export, encrypted backup export → wipe →
+restore, the iOS storage nudge, fake-camera coverage for quick photo bursts,
+original-image download, multi-select node photos, two-client encrypted text and
+image chat, camera and image QR join, OLED anti-mistouch, 3-second auto-lock, and
+20-second idle close. A separate opt-in Playwright test (`MEET_PUBLIC_E2E=1`)
+creates a public-broker room in two isolated browser contexts and verifies text
+and encrypted image delivery without duplicates.
 GitHub Actions
 runs typecheck, the full test suite, the production build, the Playwright suite,
 and a separate relay test job. The Pages workflow runs the same tests before

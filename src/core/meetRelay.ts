@@ -20,6 +20,15 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 const MAX_FRAME_CHARS = MEET_MAX_PACKET_CHARS;
 
+/** Public WSS endpoints are used together; whichever answers first wins the race. */
+export const PUBLIC_MQTT_URLS = [
+  'wss://broker-cn.emqx.io:8084/mqtt',
+  'wss://broker.emqx.io:8084/mqtt',
+  'wss://mqtt-dashboard.com:8884/mqtt'
+] as const;
+
+const LEGACY_PUBLIC_MQTT_URL = 'wss://broker.emqx.io:8084/mqtt';
+
 function concat(parts: Uint8Array[]) {
   const total = parts.reduce((n, p) => n + p.length, 0);
   const out = new Uint8Array(total);
@@ -72,6 +81,11 @@ export function validateMqttPacket(raw: Uint8Array, headerLen: number): string |
   const flags = raw[0] & 0x0f;
   const body = raw.slice(headerLen);
   if (type === 2) return flags === 0 && body.length === 2 ? null : 'mqtt-connack';
+  if (type === 9) {
+    // SUBACK always carries a packet id plus at least one grant byte.
+    if (flags !== 0 || body.length < 3) return 'mqtt-control';
+    return ((body[0] << 8) | body[1]) ? null : 'mqtt-control';
+  }
   if (type === 3) {
     if (body.length < 2) return 'mqtt-publish';
     const topicLen = (body[0] << 8) | body[1];
@@ -84,7 +98,7 @@ export function validateMqttPacket(raw: Uint8Array, headerLen: number): string |
     }
     return null;
   }
-  if ([4, 5, 7, 9].includes(type)) return flags === 0 && body.length === 2 ? null : 'mqtt-control';
+  if ([4, 5, 7, 11].includes(type)) return flags === 0 && body.length === 2 ? null : 'mqtt-control';
   if (type === 6) return flags === 2 && body.length === 2 ? null : 'mqtt-control';
   if ([13, 14].includes(type)) return flags === 0 && body.length === 0 ? null : 'mqtt-control';
   return 'mqtt-packet-type';
@@ -121,8 +135,10 @@ function randomClientId() {
   return 'tm' + [...bytes].map((b) => b.toString(36)).join('').slice(0, 18);
 }
 
-function baseMqttUrl() {
-  return String(get('meetMqttUrl') || 'wss://broker.emqx.io:8084/mqtt').trim();
+export function publicMqttUrls() {
+  const configured = String(get('meetMqttUrl') || '').trim();
+  if (configured && configured !== LEGACY_PUBLIC_MQTT_URL) return [configured];
+  return [...PUBLIC_MQTT_URLS];
 }
 
 function topicFor(roomId: string) {
@@ -145,10 +161,10 @@ class MqttRelay implements MeetRelay {
   lastRx = 0;
   packetId = 1;
 
-  constructor(topic: string, handlers: RelayHandlers) {
+  constructor(topic: string, handlers: RelayHandlers, url: string) {
     this.topic = topic;
     this.handlers = handlers;
-    this.url = baseMqttUrl();
+    this.url = url;
     this.handlers.onState('connecting');
     this.connect();
   }
@@ -345,6 +361,68 @@ class MqttRelay implements MeetRelay {
   }
 }
 
+type MqttEntry = { url: string; state: RelayState; relay: MqttRelay | null };
+
+class PublicMqttRelay implements MeetRelay {
+  handlers: RelayHandlers;
+  entries: MqttEntry[] = [];
+  closed = false;
+  lastState: RelayState | '' = '';
+
+  constructor(topic: string, handlers: RelayHandlers, urls: string[]) {
+    this.handlers = handlers;
+    for (const url of urls) {
+      const entry: MqttEntry = { url, state: 'connecting', relay: null };
+      this.entries.push(entry);
+      entry.relay = new MqttRelay(topic, {
+        onMessage: (text) => {
+          if (!this.closed) this.handlers.onMessage(text);
+        },
+        onState: (state, detail) => {
+          entry.state = state;
+          this.emitAggregate(state === 'connected', state === 'error' ? detail?.reason : undefined);
+        }
+      }, url);
+    }
+    this.emitAggregate(false);
+  }
+
+  private emitAggregate(childConnected = false, errorReason?: string) {
+    if (this.closed) return;
+    const states = this.entries.map((e) => e.state);
+    let next: RelayState;
+    if (states.includes('connected')) next = 'connected';
+    else if (states.includes('connecting')) next = 'connecting';
+    else if (states.includes('reconnecting')) next = 'reconnecting';
+    else if (states.includes('error')) next = 'error';
+    else next = 'closed';
+    if (next === this.lastState && !(next === 'connected' && childConnected)) return;
+    this.lastState = next;
+    this.handlers.onState(next, errorReason ? { reason: errorReason } : undefined);
+  }
+
+  connect() {
+    for (const entry of this.entries) entry.relay?.connect();
+  }
+
+  send(text: string) {
+    let sent = false;
+    for (const entry of this.entries) {
+      if (entry.state === 'connected' && entry.relay?.send(text)) sent = true;
+    }
+    return sent;
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    for (const entry of this.entries) {
+      try { entry.relay?.close(); } catch { /* already closed */ }
+    }
+    this.handlers.onState('closed');
+  }
+}
+
 class WebSocketRelay implements MeetRelay {
   handlers: RelayHandlers;
   template: string;
@@ -433,7 +511,9 @@ class WebSocketRelay implements MeetRelay {
 
 export function createMeetRelay(roomId: string, handlers: RelayHandlers): MeetRelay {
   if (get('meetRelayMode') === 'ws') return new WebSocketRelay(roomId, handlers);
-  return new MqttRelay(topicFor(roomId), handlers);
+  const urls = publicMqttUrls();
+  if (urls.length === 1) return new MqttRelay(topicFor(roomId), handlers, urls[0]);
+  return new PublicMqttRelay(topicFor(roomId), handlers, urls);
 }
 
 /** Reserved for the future WebRTC transport; exposes the locally stored ICE config. */

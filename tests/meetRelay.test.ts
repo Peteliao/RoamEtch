@@ -33,12 +33,21 @@ describe('MQTT frame bounds', () => {
 });
 
 describe('MQTT packet validation', () => {
-  it('accepts CONNACK, PUBLISH, and exact control packets', () => {
+  it('accepts CONNACK, PUBLISH, SUBACK, and exact control packets', () => {
     expect(validateMqttPacket(Uint8Array.of(0x20, 0x02, 0x00, 0x00), 2)).toBeNull();
     expect(validateMqttPacket(Uint8Array.of(0x30, 0x04, 0x00, 0x01, 0x61, 0x62), 2)).toBeNull();
     expect(validateMqttPacket(Uint8Array.of(0x40, 0x02, 0x00, 0x01), 2)).toBeNull();
     expect(validateMqttPacket(Uint8Array.of(0x62, 0x02, 0x00, 0x01), 2)).toBeNull();
+    expect(validateMqttPacket(Uint8Array.of(0xb0, 0x02, 0x00, 0x01), 2)).toBeNull();
     expect(validateMqttPacket(Uint8Array.of(0xd0, 0x00), 2)).toBeNull();
+  });
+
+  it('accepts a real 3-byte SUBACK with one grant byte', () => {
+    // broker.emqx.io and HiveMQ both return packet id + granted QoS.
+    expect(validateMqttPacket(Uint8Array.of(0x90, 0x03, 0x00, 0x01, 0x00), 2)).toBeNull();
+    expect(validateMqttPacket(Uint8Array.of(0x90, 0x02, 0x00, 0x01), 2)).toBe('mqtt-control');
+    expect(validateMqttPacket(Uint8Array.of(0x91, 0x03, 0x00, 0x01, 0x00), 2)).toBe('mqtt-control');
+    expect(validateMqttPacket(Uint8Array.of(0x90, 0x03, 0x00, 0x00, 0x00), 2)).toBe('mqtt-control');
   });
 
   it('rejects invalid flags, lengths, topics, packet ids, and QoS', () => {

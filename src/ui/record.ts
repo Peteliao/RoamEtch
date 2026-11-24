@@ -946,22 +946,34 @@ export function createRecordView() {
   }
 
   const psCamTrack = psCamAct.querySelector('.ps-cam-track') as HTMLElement;
-  const psCamKnob = psCamAct.querySelector('.ps-cam-knob') as HTMLElement;
-  let camGesture: { startX: number; startY: number; ready: boolean; invalid: boolean } | null = null;
+  let camGesture: { startX: number; startY: number; ready: boolean; invalid: boolean; target: number; current: number; raf: number } | null = null;
+  const setCamProgress = (value: number) => {
+    psCamTrack.style.setProperty('--cam-progress', String(Math.max(0, Math.min(1, value))));
+  };
+  function animateCam() {
+    if (!camGesture) return;
+    const delta = camGesture.target - camGesture.current;
+    camGesture.current += delta * (Math.abs(delta) < 0.02 ? 0.55 : 0.34);
+    if (Math.abs(camGesture.target - camGesture.current) < 0.004) camGesture.current = camGesture.target;
+    setCamProgress(camGesture.current);
+    camGesture.raf = camGesture.current !== camGesture.target ? requestAnimationFrame(animateCam) : 0;
+  }
   const resetCamGesture = () => {
+    if (!camGesture) return;
+    cancelAnimationFrame(camGesture.raf);
     camGesture = null;
-    psCamKnob.style.transition = '';
-    psCamKnob.style.transform = '';
-    psCamTrack.classList.remove('ready');
+    psCamTrack.classList.remove('dragging', 'ready');
+    setCamProgress(0);
   };
   psCamTrack.addEventListener('pointerdown', (e) => {
     if (!psActive || psCamAct.hidden) return;
     e.preventDefault();
     e.stopPropagation();
     try { psCamTrack.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
-    psCamKnob.style.transition = 'none';
-    psCamTrack.classList.remove('ready');
-    camGesture = { startX: e.clientX, startY: e.clientY, ready: false, invalid: false };
+    resetCamGesture();
+    psCamTrack.classList.add('dragging');
+    camGesture = { startX: e.clientX, startY: e.clientY, ready: false, invalid: false, target: 0, current: 0, raf: 0 };
+    setCamProgress(0);
   });
   psCamTrack.addEventListener('pointermove', (e) => {
     if (!camGesture) return;
@@ -970,8 +982,9 @@ export function createRecordView() {
     const dy = e.clientY - camGesture.startY;
     if (Math.abs(dy) > Math.abs(dx) + 18) camGesture.invalid = true;
     camGesture.ready = dx <= -120 && Math.abs(dy) <= 90 && !camGesture.invalid;
-    psCamKnob.style.transform = `translateX(${camGesture.ready ? -55 : Math.max(-55, Math.min(0, dx))}px)`;
+    camGesture.target = Math.max(0, Math.min(1, -dx / 120));
     psCamTrack.classList.toggle('ready', camGesture.ready);
+    if (!camGesture.raf) camGesture.raf = requestAnimationFrame(animateCam);
   });
   const endCamGesture = (e) => {
     if (!camGesture) return;
@@ -981,6 +994,7 @@ export function createRecordView() {
   };
   psCamTrack.addEventListener('pointerup', endCamGesture);
   psCamTrack.addEventListener('pointercancel', resetCamGesture);
+  psCamTrack.addEventListener('lostpointercapture', resetCamGesture);
 
   function renderOled(L) {
     if (!L || !psActive) return;

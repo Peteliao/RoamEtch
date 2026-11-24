@@ -169,13 +169,13 @@ export function createSettingsView(navigate) {
       const resetBtn = el('button', { class: 'btn sm ghost', type: 'button' },
         icon('refresh', 14), t('settings.meetBrokerReset'));
       resetBtn.onclick = () => {
-        set('meetMqttUrl', 'wss://broker.emqx.io:8084/mqtt');
+        set('meetMqttUrl', '');
         set('meetMqttPrefix', 'trackmint/v2/meet');
         renderMeetRelayFields();
         toast(t('settings.meetBrokerResetDone'), 'ok', 2200);
       };
       meetRelayFields.append(
-        textRow(t('settings.meetBroker'), t('settings.meetBrokerHint'), 'meetMqttUrl', 'wss://broker.emqx.io:8084/mqtt'),
+        textRow(t('settings.meetBroker'), t('settings.meetBrokerHint'), 'meetMqttUrl', t('settings.meetBrokerAuto')),
         textRow(t('settings.meetPrefix'), t('settings.meetPrefixHint'), 'meetMqttPrefix', 'trackmint/v2/meet'),
         el('div', { class: 'row wrap', style: { marginTop: '-4px' } }, resetBtn)
       );

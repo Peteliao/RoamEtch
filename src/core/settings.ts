@@ -25,7 +25,7 @@ const DEFAULTS = {
   meetName: '',                // default display name in live meetups
   meetExpiryMin: 120,          // self-destruct timer; host advertises it to the room
   meetRelayMode: 'mqtt',       // mqtt | ws (webrtc reserved)
-  meetMqttUrl: 'wss://broker.emqx.io:8084/mqtt',
+  meetMqttUrl: '',             // blank = auto-select public WSS nodes
   meetMqttPrefix: 'trackmint/v2/meet',
   meetWsUrl: '',               // must contain {room}
   meetStun: 'stun:stun.cloudflare.com:3478',
@@ -60,6 +60,12 @@ function load() {
     if (parsed && parsed.migrateMeetV2 !== 1) {
       if (parsed.meetMqttPrefix === 'trackmint/v1/meet') parsed.meetMqttPrefix = 'trackmint/v2/meet';
       parsed.migrateMeetV2 = 1;
+      localStorage.setItem(KEY, JSON.stringify(parsed));
+    }
+    // blank MQTT URL now means race all built-in public WSS nodes
+    if (parsed && parsed.migrateMeetMulti !== 1) {
+      if (!parsed.meetMqttUrl || parsed.meetMqttUrl === 'wss://broker.emqx.io:8084/mqtt') parsed.meetMqttUrl = '';
+      parsed.migrateMeetMulti = 1;
       localStorage.setItem(KEY, JSON.stringify(parsed));
     }
     cache = parsed

@@ -267,6 +267,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   padding: 10px 12px; outline: none;
 }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--accent); }
+.field input.scan-ok { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(43,205,167,.18); }
 .field textarea { resize: vertical; min-height: 60px; }
 .field .hint { font-size: 11.5px; color: var(--text-faint); margin-top: 4px; }
 
@@ -632,7 +633,7 @@ html.oled-lock { color-scheme: dark; }
 #oled-dash .sig-bars.lv4 i:nth-child(-n+4) { background: var(--accent); }
 #oled-dash .sig-txt { font-size: 14px; color: #999; }
 #oled-dash .od-bottom { display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 12px; }
-#oled-dash .ps-actions { width: 100%; display: flex; align-items: flex-start; justify-content: space-evenly; gap: 18px; }
+#oled-dash .ps-actions { width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 16px; }
 #oled-dash .ps-act { display: flex; flex-direction: column; align-items: center; gap: 7px; min-width: 0; }
 #oled-dash .ps-ring { position: relative; width: 104px; height: 104px; touch-action: none; cursor: pointer; }
 #oled-dash .ps-ring > svg { transform: rotate(-90deg); }
@@ -644,17 +645,29 @@ html.oled-lock { color-scheme: dark; }
 #oled-dash .ps-sub { color: #666; font-size: 12px; text-align: center; }
 #oled-dash .ps-cam-act[hidden] { display: none; }
 #oled-dash .ps-cam-track {
-  position: relative; width: 104px; height: 64px; border-radius: 999px;
-  background: #070707; border: 1px dashed #2c2c2c; touch-action: none; cursor: pointer;
+  --cam-progress: 0;
+  position: relative; width: 200px; height: 64px; border-radius: 999px;
+  background: #070707; border: 1px dashed #2c2c2c; touch-action: none; cursor: grab;
   overflow: hidden;
 }
-#oled-dash .ps-cam-track.ready { border-color: rgba(43,205,167,.55); background: #08120f; }
-#oled-dash .ps-cam-arrow { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: #555; font-size: 22px; line-height: 1; }
-#oled-dash .ps-cam-knob {
-  position: absolute; right: 5px; top: 5px; width: 52px; height: 52px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center; background: #151515;
-  border: 1px solid #333; color: #bbb; pointer-events: none; transition: transform .18s, color .18s, border-color .18s;
+#oled-dash .ps-cam-track::before {
+  content: ''; position: absolute; inset: 0; border-radius: inherit;
+  background: linear-gradient(90deg, rgba(43,205,167,.2), rgba(43,205,167,.04));
+  transform: scaleX(var(--cam-progress)); transform-origin: left center;
+  opacity: var(--cam-progress); pointer-events: none;
 }
+#oled-dash .ps-cam-track.ready { border-color: rgba(43,205,167,.55); background: #08120f; }
+#oled-dash .ps-cam-track.dragging { cursor: grabbing; }
+#oled-dash .ps-cam-arrow { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: #555; font-size: 22px; line-height: 1; }
+#oled-dash .ps-cam-knob {
+  position: absolute; right: 5px; top: 5px; width: 54px; height: 54px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; background: #151515;
+  border: 1px solid #333; color: #bbb; pointer-events: none;
+  transform: translateX(calc(var(--cam-progress) * -124px));
+  transition: transform .22s cubic-bezier(.2,.9,.25,1), color .18s, border-color .18s;
+  will-change: transform;
+}
+#oled-dash .ps-cam-track.dragging .ps-cam-knob { transition: color .18s, border-color .18s; }
 #oled-dash .ps-cam-track.ready .ps-cam-knob { color: var(--accent); border-color: var(--accent); box-shadow: 0 0 0 3px rgba(43,205,167,.12); }
 
 /* ---------- trips list ---------- */
@@ -1524,11 +1537,13 @@ html.oled-lock { color-scheme: dark; }
 .cam-chip-main { min-width: 0; flex: 1; }
 .cam-chip-title { font-size: 12px; font-weight: 700; }
 .cam-chip-sub { margin-top: 3px; color: rgba(255,255,255,.62); font-size: 10px; }
-.cam-chip-undo {
-  flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 7px 9px;
+.cam-chip-undo, .cam-chip-original {
+  flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 7px 9px;
   border-radius: 999px; border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.07);
   color: #fff; font: inherit; font-size: 11px; cursor: pointer;
 }
+.cam-chip-actions { flex: none; display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+.cam-chip-original { border-color: rgba(43,205,167,.45); background: rgba(43,205,167,.1); color: var(--accent); }
 .cam-preview {
   position: absolute; inset: 0; z-index: 8; display: flex; flex-direction: column; background: #000;
 }
@@ -1586,6 +1601,44 @@ html.oled-lock { color-scheme: dark; }
 .cam-lock-count { color: rgba(255,255,255,.65) !important; font-size: 12px; }
 .cam-lock-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: min(100%, 400px); margin-top: 8px; }
 @keyframes camSpin { to { transform: rotate(360deg); } }
+
+/* live QR scanner for meetup invites */
+.qr-scan-overlay {
+  position: fixed; inset: 0; z-index: 13000; overflow: hidden;
+  background: #000; color: #fff; touch-action: manipulation;
+}
+.qr-scan-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
+.qr-scan-shade { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.qr-scan-frame {
+  width: min(68vw, 300px); aspect-ratio: 1; border-radius: 24px;
+  border: 2px solid rgba(255,255,255,.82);
+  box-shadow: 0 0 0 100vmax rgba(0,0,0,.58), inset 0 0 38px rgba(43,205,167,.08);
+}
+.qr-scan-top {
+  position: absolute; left: 0; right: 0; top: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: calc(14px + var(--safe-t)) 16px 24px;
+  background: linear-gradient(180deg, rgba(0,0,0,.6), transparent);
+}
+.qr-scan-title { font-size: 16px; font-weight: 700; }
+.qr-scan-close {
+  width: 40px; height: 40px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; border: 1px solid rgba(255,255,255,.22); background: rgba(0,0,0,.4);
+  color: #fff; cursor: pointer;
+}
+.qr-scan-bottom {
+  position: absolute; left: 20px; right: 20px; bottom: calc(28px + var(--safe-b)); z-index: 2;
+  display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;
+}
+.qr-scan-hint { font-size: 13px; color: rgba(255,255,255,.72); }
+.qr-scan-status { padding: 8px 14px; border-radius: 999px; background: rgba(0,0,0,.55); font-size: 12px; color: #d7d7d7; }
+.qr-scan-status.err { background: rgba(123,31,31,.88); color: #fff; }
+.qr-scan-retry {
+  display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.24); background: rgba(255,255,255,.1); color: #fff;
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.qr-scan-retry[hidden] { display: none; }
 
 .settings-subhead {
   display: flex; align-items: center; gap: 6px; margin: 14px 0 8px; padding-top: 12px;

@@ -38,10 +38,13 @@ npm test
 2. Add or update tests for pure logic you touch. `tests/` covers coordinate
    conversion, track math, statistics, privacy cropping, backups and integrity
    checks, yearly footprints, GPS quality, GPX/KML/GeoJSON, compact links, meetup
-   crypto, procedural video music, and the demo track.
+   crypto, MQTT frame validation, QR decoding, procedural video music, and the
+   demo track.
 3. Run `npm run typecheck && npm test && npm run build`. If you changed the relay,
    also run `cd relay && npm test`. If you changed recording, analysis, export,
-   backup, or the iOS nudges, run `npm run test:e2e`.
+   backup, camera, QR join, or the iOS nudges, run `npm run test:e2e`. The public
+   broker test is opt-in because it needs internet access:
+   `MEET_PUBLIC_E2E=1 npx playwright test e2e/meetPublic.spec.ts`.
 4. For UI changes, test in a real browser at desktop and mobile widths. Include a
    screenshot or short recording in the PR when the layout changes.
 5. Use a commit message in the existing style: `feat(scope): ...`, `fix(scope): ...`,
@@ -59,6 +62,12 @@ These are the rules that are easy to break accidentally:
   analytics event, or error report. The random room id may appear in the topic;
   keep it independent from the key (`src/core/meetLink.ts`), and never silently
   accept v1 invites or packets.
+- **Public MQTT reachability:** an empty `meetMqttUrl` means every endpoint in
+  `PUBLIC_MQTT_URLS` is subscribed concurrently. Do not reduce this to a single
+  “fastest only” connection: devices on different networks may reach different
+  brokers and still need a shared path. Duplicate ciphertext envelopes are
+  expected and deduped by the per-sender sequence and chat-id guards; a
+  non-default custom URL intentionally replaces the public set.
 - **Ephemeral chat:** messages and positions are memory-only. Do not add chat
   history, server persistence, replayed messages, or late-joiner backfill
   without an explicit product decision and a security review.

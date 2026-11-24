@@ -4,6 +4,57 @@ All notable changes to TrackMint are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] - 2026-11-24
+
+### Added
+
+- One-tap “save original” for every quick camera shot. The full-resolution JPEG
+  is kept transiently in the camera session and handed to the system through the
+  Web Share files sheet, the File System Access save picker, or a download
+  fallback. Browsers cannot silently add files to the OS photo gallery, so the
+  saved chip and OLED result card expose this action explicitly instead of
+  pretending the original was already in the album.
+- Meetup join by QR code: scan a live camera frame or choose a QR image from the
+  album. Both paths normalize through the existing v2 invite parser and reject
+  legacy or malformed codes explicitly.
+- Waypoint editor photo actions now accept multiple album files at once and an
+  in-camera burst. Every captured or selected image is appended to the node, and
+  the pending strip is cleaned up when the editor closes.
+- The quick camera keeps the shutter available after each save, so a burst is
+  added as separate photo waypoints until the photographer taps Done.
+- Multiple default public MQTT providers (`broker-cn.emqx.io`,
+  `broker.emqx.io`, and `mqtt-dashboard.com`) connect concurrently. The app
+  subscribes everywhere to maximize reachability and selects the fastest
+  responding connection while retaining the others as redundancy; empty custom
+  URLs now mean automatic public selection.
+
+### Changed
+
+- The OLED pocket-lock action rail now stacks the swipe-to-shoot track above the
+  1.5-second unlock button. Drag feedback is interpolated with
+  `requestAnimationFrame` and a CSS custom property, so the knob follows the
+  finger without layout churn while the 120 px anti-mistouch threshold, tap
+  rejection, 20-second camera idle close, and 3-second relock remain unchanged.
+
+### Fixed
+
+- Public MQTT meetups failed to connect because SUBACK validation rejected real
+  3-byte acknowledgements (packet id plus grant byte). The parser now accepts
+  standards-compliant SUBACK packets and still rejects malformed or refused
+  subscriptions.
+- The save-original button no longer shares the undo button class, keeping the
+  undo action unambiguous for assistive selectors and automated tests.
+
+### Tests
+
+- Added QR pixel decoding tests, a Playwright camera-scan and image-scan join
+  test, and a gated two-client public MQTT test that creates a room, joins from a
+  second browser context, sends text and an encrypted image, and asserts each
+  message appears exactly once.
+- Extended camera E2E coverage for original-image download, three-shot bursts,
+  multi-select node photos, and burst photos inside the node editor. The OLED
+  test now asserts the camera rail sits below the unlock control.
+
 ## [2.2.0] - 2026-11-24
 
 ### Added

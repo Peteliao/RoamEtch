@@ -5,6 +5,7 @@ import { t } from '../core/i18n';
 import { el, icon } from './helpers';
 import { armKeepAlive } from '../core/keepalive';
 import { processPhoto } from '../core/photos';
+import { saveOriginalPhoto } from '../core/deviceSave';
 import { CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MAX_EDGE, chatImageLadder, readLocalImageHeader } from '../core/chatImage';
 
 export type CameraFix = {
@@ -32,6 +33,9 @@ export type ChatCameraShot = CameraPhoto & {
 export type QuickCameraShot = CameraPhoto & {
   takenAt: number;
   fix: CameraFix | null;
+  original?: Blob;
+  originalWidth?: number;
+  originalHeight?: number;
 };
 
 export type QuickSaveResult = {
@@ -113,9 +117,12 @@ async function compressChatShot(canvas: HTMLCanvasElement) {
   return best ? { ...best, oversize: best.blob.size > CHAT_IMAGE_MAX_BYTES } : null;
 }
 
-async function encodeQuickPhoto(canvas: HTMLCanvasElement): Promise<CameraPhoto> {
+async function encodeQuickPhoto(canvas: HTMLCanvasElement): Promise<CameraPhoto & { original: Blob; originalWidth: number; originalHeight: number }> {
   const main = resizeCanvas(canvas, LOCAL_EDGE);
-  const blob = await canvasBlob(main, 'image/jpeg', 0.82);
+  const [blob, full] = await Promise.all([
+    canvasBlob(main, 'image/jpeg', 0.82),
+    canvasBlob(canvas, 'image/jpeg', 0.92)
+  ]);
   if (!blob) throw new Error('encode-failed');
   const thumbCanvas = resizeCanvas(main, THUMB_EDGE);
   const thumb = await canvasBlob(thumbCanvas, 'image/jpeg', 0.72);
@@ -123,7 +130,10 @@ async function encodeQuickPhoto(canvas: HTMLCanvasElement): Promise<CameraPhoto>
     blob,
     thumb: thumb || blob,
     width: main.width,
-    height: main.height
+    height: main.height,
+    original: full || blob,
+    originalWidth: canvas.width,
+    originalHeight: canvas.height
   };
 }
 
@@ -631,6 +641,9 @@ export function openCamera(opts: CameraOptions) {
         thumb: processed.thumb,
         width: processed.width,
         height: processed.height,
+        original: file,
+        originalWidth: header.width,
+        originalHeight: header.height,
         takenAt: processed.exif?.time || Date.now(),
         fix
       });
@@ -639,34 +652,48 @@ export function openCamera(opts: CameraOptions) {
     }
   }
 
-  function showSavedChip(result: QuickSaveResult) {
+  async function saveOriginal(photo?: QuickCameraShot) {
+    if (!photo?.original) return;
+    const outcome = await saveOriginalPhoto(photo.original, photo.takenAt);
+    if (closed) return;
+    if (outcome === 'shared' || outcome === 'picked') camToast(t('camera.originalOk'), 'ok');
+    else if (outcome === 'downloaded') camToast(t('camera.originalDownloaded'), 'ok');
+    else if (outcome === 'failed') camToast(t('camera.originalFail'), 'err');
+  }
+
+  function showSavedChip(result: QuickSaveResult, photo?: QuickCameraShot) {
     if (!result.ok) return;
     chip.innerHTML = '';
     releaseUrl(chipUrl);
     chipUrl = result.thumbUrl ? trackUrl(result.thumbUrl) : '';
+    const originalBtn = photo?.original
+      ? el('button', { class: 'cam-chip-original', type: 'button', onclick: () => void saveOriginal(photo) },
+        icon('download', 15), t('camera.saveOriginal'))
+      : null;
+    const undoBtn = result.undo
+      ? el('button', { class: 'cam-chip-undo', type: 'button', onclick: async () => {
+        try {
+          const undone = await result.undo?.();
+          if (undone === false) throw new Error('undo-failed');
+          shotCount = Math.max(0, shotCount - 1);
+          updateCount();
+          chip.hidden = true;
+          camToast(t('camera.undone'), 'ok');
+        } catch {
+          camToast(t('camera.undoFail'), 'err');
+        }
+      } }, icon('undo', 15), t('camera.undo'))
+      : null;
     chip.append(
       chipUrl ? el('img', { src: chipUrl, alt: '' }) : icon('photo', 22),
       el('div', { class: 'cam-chip-main' },
         el('div', { class: 'cam-chip-title' }, result.label || t('camera.saved')),
-        el('div', { class: 'cam-chip-sub' }, t('camera.savedNote'))),
-      result.undo
-        ? el('button', { class: 'cam-chip-undo', type: 'button', onclick: async () => {
-          try {
-            const undone = await result.undo?.();
-            if (undone === false) throw new Error('undo-failed');
-            shotCount = Math.max(0, shotCount - 1);
-            updateCount();
-            chip.hidden = true;
-            camToast(t('camera.undone'), 'ok');
-          } catch {
-            camToast(t('camera.undoFail'), 'err');
-          }
-        } }, icon('undo', 15), t('camera.undo'))
-        : null
+        el('div', { class: 'cam-chip-sub' }, photo?.original ? t('camera.savedNoteOriginal') : t('camera.savedNote'))),
+      originalBtn || undoBtn ? el('div', { class: 'cam-chip-actions' }, originalBtn, undoBtn) : null
     );
     chip.hidden = false;
     clearTimeout(chipTimer);
-    chipTimer = window.setTimeout(() => { chip.hidden = true; }, 7000);
+    chipTimer = window.setTimeout(() => { chip.hidden = true; }, 9000);
   }
 
   async function saveQuickShot(photo: QuickCameraShot) {
@@ -685,8 +712,8 @@ export function openCamera(opts: CameraOptions) {
       }
       shotCount++;
       updateCount();
-      showSavedChip(result);
-      if (opts.mode === 'oled') showLockCard(result);
+      if (opts.mode === 'oled') showLockCard(result, photo);
+      else showSavedChip(result, photo);
     } catch {
       if (!closed) camToast(t('camera.saveFail'), 'err');
     } finally {
@@ -695,7 +722,7 @@ export function openCamera(opts: CameraOptions) {
     }
   }
 
-  function showLockCard(result: QuickSaveResult) {
+  function showLockCard(result: QuickSaveResult, photo?: QuickCameraShot) {
     clearTimeout(idleTimer);
     stopTracks();
     armKeepAlive();
@@ -706,6 +733,10 @@ export function openCamera(opts: CameraOptions) {
       seconds.textContent = t('camera.lockCountdown', { s: left });
     };
     tick();
+    const saveBtn = photo?.original
+      ? el('button', { class: 'cam-btn', type: 'button', style: { gridColumn: '1 / -1' }, onclick: () => void saveOriginal(photo) },
+        icon('download', 17), t('camera.saveOriginal'))
+      : null;
     const card = el('div', { class: 'cam-lockcard' },
       url ? el('img', { src: url, alt: t('camera.previewAlt') }) : icon('check', 48),
       el('h3', {}, result.label || t('camera.saved')),
@@ -717,7 +748,8 @@ export function openCamera(opts: CameraOptions) {
           card.remove();
           void startStream();
         } }, icon('camera', 17), t('camera.retakeOne')),
-        el('button', { class: 'cam-btn primary', type: 'button', onclick: () => closeCamera() }, icon('powerlock', 17), t('camera.lockNow'))
+        el('button', { class: 'cam-btn primary', type: 'button', onclick: () => closeCamera() }, icon('powerlock', 17), t('camera.lockNow')),
+        saveBtn
       )
     );
     stage.append(card);

@@ -8,9 +8,11 @@ import { normalizeMeetInvite, isLegacyMeetCode } from '../core/meetLink';
 import { fmtDistance, fmtDuration } from '../core/geo';
 import { regionState } from '../core/region';
 import { drawQr } from '../core/brand';
+import { decodeQrImageFile } from '../core/qr';
 import { TrackMap } from './map';
-import { el, icon, toast, modal, confirmModal } from './helpers';
+import { el, icon, toast, modal, confirmModal, filePicker } from './helpers';
 import { openCamera } from './camera';
+import { openQrScanner } from './qrScanner';
 import { CHAT_IMAGE_KEEP, readChatImageHeader } from '../core/chatImage';
 
 export function createMeetView(navigate) {
@@ -814,8 +816,42 @@ export function createMeetView(navigate) {
     const nameInp = el('input', { type: 'text', value: get('meetName') || '', placeholder: t('meet.namePlaceholder'), maxlength: '20' });
     const joinBtn = el('button', { class: 'btn primary' }, icon('meet', 16), t('meet.join'));
     const cancelBtn = el('button', { class: 'btn ghost', onclick: () => m.close() }, t('common.cancel'));
+    const scanCamBtn = el('button', { class: 'btn sm', type: 'button' }, icon('camera', 15), t('meet.scanCamera'));
+    const scanImgBtn = el('button', { class: 'btn sm', type: 'button' }, icon('photo', 15), t('meet.scanImage'));
+    const acceptScan = (raw: string) => {
+      const invite = normalizeMeetInvite(raw);
+      if (!invite) {
+        const legacy = isLegacyMeetCode(raw);
+        toast(legacy ? t('meet.legacyCode') : t('meet.scanInvalid'), legacy ? 'warn' : 'err', legacy ? 5200 : 3500);
+        return false;
+      }
+      codeInp.value = invite;
+      codeInp.classList.add('scan-ok');
+      setTimeout(() => codeInp.classList.remove('scan-ok'), 1200);
+      toast(t('meet.scanOk'), 'ok', 2200);
+      return true;
+    };
+    scanCamBtn.onclick = () => {
+      openQrScanner((text) => {
+        if (acceptScan(text)) setTimeout(() => nameInp.focus(), 80);
+      });
+    };
+    scanImgBtn.onclick = async () => {
+      const file = await filePicker('image/*');
+      if (!file) return;
+      scanImgBtn.disabled = true;
+      try {
+        const text = await decodeQrImageFile(file);
+        if (!text) { toast(t('meet.scanNotFound'), 'warn', 3600); return; }
+        if (acceptScan(text)) setTimeout(() => nameInp.focus(), 80);
+      } finally {
+        scanImgBtn.disabled = false;
+      }
+    };
     const body = el('div', {},
-      el('div', { class: 'field' }, el('label', {}, t('meet.codeLabel')), codeInp, el('div', { class: 'hint' }, t('meet.joinHint'))),
+      el('div', { class: 'field' }, el('label', {}, t('meet.codeLabel')), codeInp,
+        el('div', { class: 'row wrap', style: { marginTop: '8px', gap: '8px' } }, scanCamBtn, scanImgBtn),
+        el('div', { class: 'hint' }, t('meet.joinHint'))),
       el('div', { class: 'field' }, el('label', {}, t('meet.nameLabel')), nameInp, el('div', { class: 'hint' }, t('meet.nameHint'))),
       el('div', { class: 'meet-create-note' }, icon('shield', 15),
         el('div', {}, t('meet.expiryWarning') + ' · ' + t('meet.publicNote')))

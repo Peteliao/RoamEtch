@@ -4,10 +4,12 @@ import { t } from '../core/i18n';
 import { emit } from '../core/events';
 import * as store from '../core/store';
 import { processPhoto } from '../core/photos';
+import { readLocalImageHeader } from '../core/chatImage';
 import { resolveAltitude } from '../core/elevation';
 import { pushAction, undo, redo, state as histState } from '../core/history';
 import { appState, refreshActiveTrip, scheduleAltBackfill } from './state';
-import { el, icon, modal, toast, confirmModal, filePicker } from './helpers';
+import { el, icon, modal, toast, confirmModal, filePickerMulti } from './helpers';
+import { openCamera } from './camera';
 import { WP_ICONS } from '../core/waypointMeta';
 
 const WP_TYPES = ['start', 'end', 'view', 'photo', 'stay', 'food', 'supply', 'danger', 'fuel', 'custom'];
@@ -28,8 +30,11 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
   const wp = isNew
     ? { lat: wpOrPos.lat, lon: wpOrPos.lon, name: '', desc: '', type: 'custom', time: Date.now(), hidden: false, mediaIds: [], alt: null }
     : { ...wpOrPos };
-  let pendingPhotos = [];   // {blob, thumb, width, height}
+  let pendingPhotos = [];   // {key, blob, thumb, width, height}
   let removedMedia = [];
+  let photoKey = 0;
+  let photoRenderSeq = 0;
+  const stripUrls = new Set<string>();
 
   const nameInput = el('input', { type: 'text', value: wp.name, placeholder: t('wp.name') });
   const descInput = el('textarea', {}, wp.desc || '');
@@ -50,12 +55,26 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
   }
 
   const strip = el('div', { class: 'photo-strip' });
+  const clearStripUrls = () => {
+    for (const url of stripUrls) {
+      try { URL.revokeObjectURL(url); } catch { /* already revoked */ }
+    }
+    stripUrls.clear();
+  };
   async function renderPhotos() {
+    const seq = ++photoRenderSeq;
+    clearStripUrls();
     strip.innerHTML = '';
+    const stored = [];
     for (const mid of wp.mediaIds || []) {
       const m = await store.getMedia(mid);
-      if (!m) continue;
+      if (seq !== photoRenderSeq) return;
+      if (m) stored.push({ mid, m });
+    }
+    if (seq !== photoRenderSeq) return;
+    for (const { mid, m } of stored) {
       const url = URL.createObjectURL(m.thumb || m.blob);
+      stripUrls.add(url);
       const ph = el('div', { class: 'ph' },
         el('img', { src: url }),
         el('button', { class: 'rm', onclick: () => { wp.mediaIds = wp.mediaIds.filter((x) => x !== mid); removedMedia.push(mid); renderPhotos(); } }, '✕'));
@@ -63,6 +82,7 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
     }
     for (const p of pendingPhotos) {
       const url = URL.createObjectURL(p.thumb);
+      stripUrls.add(url);
       const ph = el('div', { class: 'ph' },
         el('img', { src: url }),
         el('button', { class: 'rm', onclick: () => { pendingPhotos = pendingPhotos.filter((x) => x !== p); renderPhotos(); } }, '✕'));
@@ -71,23 +91,75 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
   }
   renderPhotos();
 
-  const addPhotoBtn = el('button', { class: 'btn sm', type: 'button' }, icon('camera', 15), t('wp.addPhoto'));
-  addPhotoBtn.onclick = async () => {
-    const file = await filePicker('image/*');
-    if (!file) return;
-    try {
-      const processed = await processPhoto(file);
-      pendingPhotos.push(processed);
-      if (processed.exif?.lat != null && isNew && !wpOrPos.lat) {
-        wp.lat = processed.exif.lat; wp.lon = processed.exif.lon;
-      }
-      if (processed.exif?.time && !wp.time) wp.time = processed.exif.time;
-      toast(t('wp.photoRotated'), 'ok');
-      renderPhotos();
-    } catch (e) {
-      console.error(e);
-      toast(t('wp.photoErr'), 'err');
+  const pickPhotoBtn = el('button', { class: 'btn sm', type: 'button' }, icon('photo', 15), t('wp.selectPhotos'));
+  const takePhotoBtn = el('button', { class: 'btn sm', type: 'button' }, icon('camera', 15), t('wp.takePhotos'));
+  const photoActions = el('div', { class: 'row wrap', style: { marginTop: '8px', gap: '8px' } }, pickPhotoBtn, takePhotoBtn);
+
+  function setPhotoBusy(on: boolean) {
+    pickPhotoBtn.disabled = on;
+    takePhotoBtn.disabled = on;
+  }
+
+  function addPendingPhoto(photo) {
+    const entry = { key: ++photoKey, ...photo };
+    pendingPhotos.push(entry);
+    if (photo.exif?.lat != null && isNew && !wpOrPos.lat) {
+      wp.lat = photo.exif.lat; wp.lon = photo.exif.lon;
     }
+    if (photo.exif?.time && !wp.time) wp.time = photo.exif.time;
+    renderPhotos();
+    return entry;
+  }
+
+  pickPhotoBtn.onclick = async () => {
+    const files = await filePickerMulti('image/*');
+    if (!files.length) return;
+    setPhotoBusy(true);
+    let added = 0;
+    let failed = 0;
+    try {
+      for (const file of files) {
+        if (!(await readLocalImageHeader(file))) { failed++; continue; }
+        try {
+          addPendingPhoto(await processPhoto(file));
+          added++;
+        } catch {
+          failed++;
+        }
+      }
+      if (added) toast(t('wp.photoBatchOk', { n: added }), 'ok');
+      if (failed) toast(t('wp.photoBatchFail', { n: failed }), 'warn', 3200);
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  takePhotoBtn.onclick = () => {
+    if (!Number.isFinite(Number(wp.lat)) || !Number.isFinite(Number(wp.lon))) {
+      toast(t('wp.photoNoCoord'), 'warn');
+      return;
+    }
+    openCamera({
+      mode: 'quick',
+      getFix: () => ({ lat: wp.lat, lon: wp.lon, alt: wp.alt ?? null, acc: null }),
+      onQuickSave: async (shot) => {
+        const entry = { key: ++photoKey, blob: shot.blob, thumb: shot.thumb, width: shot.width, height: shot.height };
+        pendingPhotos.push(entry);
+        renderPhotos();
+        const thumbUrl = URL.createObjectURL(shot.thumb);
+        return {
+          ok: true,
+          label: t('wp.photoAdded'),
+          thumbUrl,
+          undo: async () => {
+            const before = pendingPhotos.length;
+            pendingPhotos = pendingPhotos.filter((p) => p !== entry);
+            renderPhotos();
+            return pendingPhotos.length < before;
+          }
+        };
+      }
+    });
   };
 
   const body = el('div', {},
@@ -95,7 +167,7 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
     el('div', { class: 'field' }, el('label', {}, t('wp.type')), typeGrid),
     el('div', { class: 'field' }, el('label', {}, t('wp.desc')), descInput),
     el('div', { class: 'field' }, el('label', {}, t('wp.time')), timeInput),
-    el('div', { class: 'field' }, el('label', {}, t('wp.photos')), strip, el('div', { style: { marginTop: '8px' } }, addPhotoBtn),
+    el('div', { class: 'field' }, el('label', {}, t('wp.photos')), strip, photoActions,
       el('div', { class: 'hint' }, t('wp.photoExif'))),
     el('label', { class: 'row', style: { cursor: 'pointer', fontSize: '13px' } }, hiddenCb, t('wp.hidden')),
     el('div', { class: 'hint mono', style: { marginTop: '10px' } }, `${wp.lat?.toFixed(5)}, ${wp.lon?.toFixed(5)} (WGS-84)`)
@@ -108,7 +180,11 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
       !isNew ? el('button', { class: 'btn danger', onclick: async () => { m.close(); await deleteWaypointAction(wp); opts.onSaved?.(); } }, icon('trash', 15), t('common.delete')) : null,
       el('button', { class: 'btn ghost', onclick: () => m.close() }, t('common.cancel')),
       el('button', { class: 'btn primary', onclick: save }, t('common.save'))
-    ]
+    ],
+    onClose: () => {
+      photoRenderSeq++;
+      clearStripUrls();
+    }
   });
 
   async function save() {

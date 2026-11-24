@@ -1,6 +1,12 @@
 import { test, expect, type Page } from '@playwright/test';
+import { stat } from 'node:fs/promises';
 import { createRelayServer } from '../relay/server.mjs';
 import { blockExternal, configureWsRelay, gotoTab } from './utils';
+
+const ONE_PX_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64'
+);
 
 async function openSimCamera(page: Page) {
   await blockExternal(page);
@@ -116,6 +122,82 @@ test('quick camera saves a photo waypoint, supports undo and burst count', async
   await expect.poll(() => page.evaluate(() => window.__lt.keepalive.isKeepAliveActive())).toBe(true);
 });
 
+test('quick camera keeps every burst shot and exports the original capture', async ({ page }) => {
+  await openSimCamera(page);
+  await page.evaluate(() => {
+    try { Object.defineProperty(navigator, 'canShare', { value: () => false, configurable: true }); } catch { /* ignore */ }
+    try { Object.defineProperty(window, 'showSaveFilePicker', { value: undefined, configurable: true }); } catch { /* ignore */ }
+  });
+
+  const originalDownload = page.waitForEvent('download');
+  await page.locator('.cam-shutter').click();
+  await expect(page.locator('.cam-chip')).toContainText('已保存拍照节点 #1');
+  await expect(page.getByRole('button', { name: '存原图', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '存原图', exact: true }).click();
+  const download = await originalDownload;
+  expect(download.suggestedFilename()).toMatch(/^trackmint-\d{8}-\d{6}\.jpg$/);
+  const downloadPath = await download.path();
+  expect(downloadPath).toBeTruthy();
+  expect((await stat(downloadPath!)).size).toBeGreaterThan(0);
+
+  await page.locator('.cam-shutter').click();
+  await expect(page.locator('.cam-chip')).toContainText('已保存拍照节点 #2');
+  await page.locator('.cam-shutter').click();
+  await expect(page.locator('.cam-chip')).toContainText('已保存拍照节点 #3');
+  await expect(page.locator('.cam-close')).toContainText('完成 (3)');
+
+  const saved = await page.evaluate(async () => {
+    const tripId = window.__lt.recorder.rec.tripId;
+    const waypoints = await window.__lt.store.db.waypoints.where('tripId').equals(tripId).toArray();
+    const photos = waypoints.filter((w: any) => w.type === 'photo');
+    const media = await window.__lt.store.db.media.bulkGet(photos.flatMap((w: any) => w.mediaIds));
+    return { photos: photos.length, media: media.filter(Boolean).length };
+  });
+  expect(saved).toEqual({ photos: 3, media: 3 });
+  await page.locator('.cam-close').click();
+  await expect(page.locator('.cam-overlay')).toBeHidden();
+});
+
+test('waypoint editor accepts multi-select photos and a burst from the camera', async ({ page }) => {
+  await openSimCamera(page);
+  await page.locator('.cam-close').click();
+  await expect(page.locator('.cam-overlay')).toBeHidden();
+
+  await page.locator('.rec-btn.node').click();
+  await expect(page.locator('.modal-backdrop .modal')).toBeVisible();
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: '选择图片（可多选）', exact: true }).click();
+  await (await chooser).setFiles([
+    { name: 'node-a.png', mimeType: 'image/png', buffer: ONE_PX_PNG },
+    { name: 'node-b.png', mimeType: 'image/png', buffer: ONE_PX_PNG }
+  ]);
+  await expect(page.locator('.photo-strip .ph')).toHaveCount(2);
+
+  await page.getByRole('button', { name: '拍照（可连拍）', exact: true }).click();
+  await expect(page.locator('.cam-overlay')).toBeVisible();
+  await expect(page.locator('.cam-shutter')).toBeEnabled({ timeout: 20_000 });
+  await page.locator('.cam-shutter').click();
+  await expect(page.locator('.cam-close')).toContainText('完成 (1)');
+  await page.locator('.cam-shutter').click();
+  await expect(page.locator('.cam-close')).toContainText('完成 (2)');
+  await page.locator('.cam-close').click();
+  await expect(page.locator('.photo-strip .ph')).toHaveCount(4);
+
+  const nameInput = page.locator('.modal-backdrop .m-body input[type="text"]').first();
+  await nameInput.fill('多图节点验收');
+  await page.locator('.modal-backdrop .m-foot .btn.primary').click();
+  await expect(page.locator('.modal-backdrop')).toBeHidden();
+
+  const saved = await page.evaluate(async () => {
+    const tripId = window.__lt.recorder.rec.tripId;
+    const waypoints = await window.__lt.store.db.waypoints.where('tripId').equals(tripId).toArray();
+    const wp = waypoints.find((w: any) => w.name === '多图节点验收');
+    const media = wp ? await window.__lt.store.db.media.bulkGet(wp.mediaIds) : [];
+    return { mediaIds: wp?.mediaIds?.length || 0, media: media.filter(Boolean).length };
+  });
+  expect(saved).toEqual({ mediaIds: 4, media: 4 });
+});
+
 test('closing during a pending photo save revokes the late thumbnail', async ({ page }) => {
   await openSimCamera(page);
   await page.evaluate(() => {
@@ -194,6 +276,9 @@ test('chat camera rejects oversized albums and sends only the latest encrypted p
     await gotoTab(page, 'meet');
     await page.getByRole('button', { name: '组队聊天' }).click();
     await expect(page.locator('.meet-chat-modal')).toBeVisible();
+    await page.locator('.meet-chat-input').fill('组队文字验收');
+    await page.locator('.meet-chat-send').click();
+    await expect(page.locator('.mc-bubble').filter({ hasText: '组队文字验收' })).toBeVisible();
     await page.locator('.meet-chat-cam').click();
     await expect(page.locator('.cam-shutter')).toBeEnabled({ timeout: 20_000 });
     await page.evaluate(() => {
@@ -261,6 +346,7 @@ test('chat camera rejects oversized albums and sends only the latest encrypted p
 
     await gotoTab(peer, 'meet');
     await peer.getByRole('button', { name: '组队聊天' }).click();
+    await expect(peer.locator('.mc-bubble').filter({ hasText: '组队文字验收' })).toBeVisible();
     await expect(peer.locator('.mc-image img')).toBeVisible();
     await expect(peer.locator('.mc-image-lock')).toBeVisible();
     await expect(peer.locator('.mc-caption')).toHaveText('山路实况');
@@ -336,6 +422,12 @@ test('OLED camera rail rejects taps and short drags, then saves and auto-relocks
   await openSimCamera(page);
   await page.locator('.cam-close').click();
   await enterOledLock(page);
+
+  const unlockBox = await page.locator('.ps-unlock').boundingBox();
+  const trackBox = await page.locator('.ps-cam-track').boundingBox();
+  expect(unlockBox).toBeTruthy();
+  expect(trackBox).toBeTruthy();
+  expect(trackBox!.y).toBeGreaterThan(unlockBox!.y + unlockBox!.height - 1);
 
   await page.locator('.ps-cam-track').click();
   await expect(page.locator('.cam-overlay')).toBeHidden();
