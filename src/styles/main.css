@@ -1476,32 +1476,44 @@ html.oled-lock { color-scheme: dark; }
   position: relative; display: flex; align-items: flex-end; gap: 6px;
   padding-top: 10px; border-top: 1px solid var(--border);
 }
-.meet-chat-entry { flex: 1; min-width: 0; display: flex; }
+.meet-chat-entry { position: relative; flex: 1; min-width: 0; display: flex; align-items: stretch; }
 .meet-chat-input {
   flex: 1; width: 100%; min-width: 0; min-height: 42px; max-height: 96px; resize: none;
   padding: 10px 12px; border-radius: 14px; border: 1px solid transparent;
   background: var(--bg-input); color: var(--text); line-height: 1.4; outline: none;
 }
 .meet-chat-input:focus { border-color: var(--accent); }
-.meet-chat-emoji, .meet-chat-voice-btn {
+.meet-chat-input[hidden], .meet-chat-voice-btn[hidden], .meet-chat-send[hidden] { display: none; }
+.meet-chat-emoji, .meet-chat-mode {
   width: 38px; height: 42px; flex: none; padding: 0; border: none; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--bg-input); color: var(--text); cursor: pointer;
   transition: transform var(--dur-fast), background var(--dur-fast), color var(--dur-fast);
 }
 .meet-chat-emoji:hover, .meet-chat-emoji.active,
+.meet-chat-mode:hover { background: var(--accent-soft); color: var(--accent); }
+.meet-chat-emoji:active, .meet-chat-mode:active { transform: scale(.94); }
+.meet-chat-mode:disabled { cursor: default; opacity: .5; }
+.meet-chat-voice-btn {
+  flex: 1; width: 100%; min-width: 0; min-height: 42px; padding: 10px 12px;
+  border: none; border-radius: 14px; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  background: var(--bg-input); color: var(--text); font-size: 13.5px; font-weight: 650;
+  cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none;
+  transition: transform var(--dur-fast), background var(--dur-fast), color var(--dur-fast);
+}
 .meet-chat-voice-btn:hover { background: var(--accent-soft); color: var(--accent); }
-.meet-chat-emoji:active, .meet-chat-voice-btn:active { transform: scale(.94); }
-.meet-chat-voice-btn { touch-action: none; user-select: none; -webkit-user-select: none; }
+.meet-chat-voice-btn:active { transform: scale(.98); }
 .meet-chat-voice-btn.is-starting, .meet-chat-voice-btn.is-recording { background: var(--danger); color: #fff; }
 .meet-chat-voice-btn.is-cancel { background: var(--text-dim); color: #fff; }
 .meet-chat-voice-btn:disabled { cursor: wait; opacity: .72; }
+.meet-chat-compose.is-recording .meet-chat-mode,
 .meet-chat-compose.is-recording .meet-chat-cam,
 .meet-chat-compose.is-recording .meet-chat-emoji,
 .meet-chat-compose.is-recording .meet-chat-send { display: none; }
 .meet-chat-recording {
-  flex: 1; min-width: 0; min-height: 42px; display: flex; align-items: center; gap: 8px;
+  position: absolute; inset: 0; min-width: 0; min-height: 42px; display: flex; align-items: center; gap: 8px;
   padding: 9px 12px; border-radius: 14px; background: var(--bg-input); color: var(--text);
+  pointer-events: none;
 }
 .mc-record-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--danger); animation: pulse 1.2s infinite; }
 .mc-record-time { flex: none; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }

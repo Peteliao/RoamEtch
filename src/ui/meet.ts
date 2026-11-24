@@ -643,8 +643,12 @@ export function createMeetView(navigate) {
     });
     const sendBtn = el('button', {
       class: 'meet-chat-send', type: 'button', title: t('meet.chatSend'),
-      'aria-label': t('meet.chatSend'), disabled: true
+      'aria-label': t('meet.chatSend'), disabled: true, hidden: true
     }, icon('send', 18));
+    const modeBtn = el('button', {
+      class: 'meet-chat-mode', type: 'button', title: t('meet.chatVoice'),
+      'aria-label': t('meet.chatVoice')
+    }, icon('voice', 20));
     const camBtn = el('button', {
       class: 'meet-chat-cam', type: 'button', title: t('meet.chatPhoto'),
       'aria-label': t('meet.chatPhoto')
@@ -697,6 +701,10 @@ export function createMeetView(navigate) {
       type: 'button', 'aria-label': emoji, 'data-emoji': emoji
     }, emoji)));
     const toggleEmoji = (open = emojiPanel.hidden) => {
+      if (open && inputMode !== 'text') {
+        inputMode = 'text';
+        syncInputMode();
+      }
       emojiPanel.hidden = !open;
       emojiBtn.classList.toggle('active', open);
       emojiBtn.setAttribute('aria-expanded', String(open));
@@ -722,12 +730,13 @@ export function createMeetView(navigate) {
       recordDot, recordTime, recordHint);
     const voiceBtn = el('button', {
       class: 'meet-chat-voice-btn', type: 'button', title: t('meet.chatVoice'),
-      'aria-label': t('meet.chatVoice')
-    }, icon('mic', 19));
-    const entry = el('div', { class: 'meet-chat-entry' }, input, recordPanel);
-    const composer = el('div', { class: 'meet-chat-compose' }, camBtn, emojiBtn, entry, sendBtn, voiceBtn);
+      'aria-label': t('meet.chatVoice'), hidden: true
+    }, icon('mic', 18), el('span', {}, t('meet.chatVoice')));
+    const entry = el('div', { class: 'meet-chat-entry' }, input, voiceBtn, recordPanel);
+    const composer = el('div', { class: 'meet-chat-compose' }, modeBtn, entry, emojiBtn, sendBtn, camBtn);
     const body = el('div', { class: 'meet-chat' }, note, list, emojiPanel, composer);
     let sending = false;
+    let inputMode: 'text' | 'voice' = 'text';
     let recorder: ChatVoiceRecorder | null = null;
     let recording = false;
     let starting = false;
@@ -743,7 +752,36 @@ export function createMeetView(navigate) {
       input.style.height = 'auto';
       input.style.height = `${Math.min(96, input.scrollHeight)}px`;
     };
-    const syncSend = () => { sendBtn.disabled = sending || !input.value.trim(); };
+    const syncSend = () => {
+      const visible = inputMode === 'text' && !!input.value.trim() && !sending && !starting && !recording;
+      sendBtn.disabled = !visible;
+      sendBtn.hidden = !visible;
+    };
+    const syncInputMode = () => {
+      const text = inputMode === 'text';
+      input.hidden = !text || starting || recording;
+      voiceBtn.hidden = text;
+      modeBtn.replaceChildren(icon(text ? 'voice' : 'keyboard', 20));
+      const label = t(text ? 'meet.chatVoice' : 'meet.chatKeyboard');
+      modeBtn.title = label;
+      modeBtn.setAttribute('aria-label', label);
+      modeBtn.disabled = starting || recording;
+      composer.classList.toggle('is-voice-mode', !text);
+      syncSend();
+    };
+    const setInputMode = (mode: 'text' | 'voice') => {
+      if (starting || recording || mode === inputMode) return;
+      toggleEmoji(false);
+      inputMode = mode;
+      syncInputMode();
+      if (mode === 'text') {
+        grow();
+        input.focus();
+      } else {
+        input.blur();
+      }
+    };
+    modeBtn.addEventListener('click', () => setInputMode(inputMode === 'text' ? 'voice' : 'text'));
     const render = (jump = false) => {
       const s = getMeetSnapshot();
       const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
@@ -783,11 +821,11 @@ export function createMeetView(navigate) {
       composer.classList.remove('is-recording', 'is-processing');
       voiceBtn.classList.remove('is-starting', 'is-recording', 'is-cancel');
       voiceBtn.disabled = false;
-      input.hidden = false;
       recordPanel.hidden = true;
       recordPanel.classList.remove('is-cancel');
       recordHint.textContent = t('meet.chatVoiceSlideCancel');
       recordTime.textContent = '0:00';
+      syncInputMode();
     };
     const voiceErrorText = (error: any) => {
       const code = error?.name === 'NotAllowedError' || error?.name === 'SecurityError' ? 'voice-denied' : error?.message;
@@ -798,7 +836,7 @@ export function createMeetView(navigate) {
       return t('meet.chatVoiceFailed');
     };
     const startVoice = async () => {
-      if (starting || recording || sending) return;
+      if (inputMode !== 'voice' || starting || recording || sending) return;
       const token = ++recordToken;
       const current = new ChatVoiceRecorder();
       recorder = current;
@@ -808,8 +846,8 @@ export function createMeetView(navigate) {
       toggleEmoji(false);
       composer.classList.add('is-recording');
       voiceBtn.classList.add('is-starting');
-      input.hidden = true;
       recordPanel.hidden = false;
+      syncInputMode();
       recordHint.textContent = t('meet.chatVoiceRequesting');
       try {
         await current.start();
@@ -950,6 +988,7 @@ export function createMeetView(navigate) {
       }
     });
     sendBtn.addEventListener('click', () => void send());
+    syncInputMode();
 
     const m = modal({
       title: t('meet.chatTitle'),

@@ -8,7 +8,14 @@ async function openChat(page: Page) {
   await expect(page.locator('.meet-chat-modal')).toBeVisible();
 }
 
+async function ensureVoiceMode(page: Page) {
+  if (await page.locator('.meet-chat-input').isVisible()) await page.locator('.meet-chat-mode').click();
+  await expect(page.locator('.meet-chat-voice-btn')).toBeVisible();
+  await expect(page.locator('.meet-chat-input')).toBeHidden();
+}
+
 async function holdVoice(page: Page, ms: number, cancel = false) {
+  await ensureVoiceMode(page);
   const button = page.locator('.meet-chat-voice-btn');
   const box = await button.boundingBox();
   if (!box) throw new Error('voice button is not visible');
@@ -25,7 +32,7 @@ async function holdVoice(page: Page, ms: number, cancel = false) {
   await page.mouse.up();
 }
 
-test('team chat exchanges emoji and voice messages and supports slide-to-cancel', async ({ page, browser, context }) => {
+test('team chat switches input modes and exchanges emoji and voice with a camera entry', async ({ page, browser, context }) => {
   const relay = createRelayServer({ port: 0, host: '127.0.0.1' });
   const address = await relay.listen();
   const url = `ws://127.0.0.1:${address.port}/room/{room}`;
@@ -58,10 +65,40 @@ test('team chat exchanges emoji and voice messages and supports slide-to-cancel'
 
     await openChat(page);
     await openChat(peer);
+    const input = page.locator('.meet-chat-input');
+    const voiceButton = page.locator('.meet-chat-voice-btn');
+    const modeButton = page.locator('.meet-chat-mode');
+    await expect(input).toBeVisible();
+    await expect(voiceButton).toBeHidden();
+    await expect(modeButton).toHaveAttribute('aria-label', '按住说话');
+    await modeButton.click();
+    await expect(input).toBeHidden();
+    await expect(voiceButton).toBeVisible();
+    await expect(voiceButton).toContainText('按住说话');
+    await expect(modeButton).toHaveAttribute('aria-label', '键盘输入');
+    await modeButton.click();
+    await expect(input).toBeVisible();
+    await expect(voiceButton).toBeHidden();
+
+    await modeButton.click();
     await page.getByRole('button', { name: '表情', exact: true }).click();
+    await expect(page.locator('.meet-chat-emoji-panel')).toBeVisible();
+    await expect(input).toBeVisible();
+    await expect(voiceButton).toBeHidden();
     await page.getByRole('button', { name: '😂', exact: true }).click();
     await page.getByRole('button', { name: '发送', exact: true }).click();
     await expect(peer.locator('.mc-bubble.mc-emoji')).toHaveText('😂');
+
+    const emojiBox = await page.locator('.meet-chat-emoji').boundingBox();
+    const cameraBox = await page.locator('.meet-chat-cam').boundingBox();
+    expect(emojiBox).toBeTruthy();
+    expect(cameraBox).toBeTruthy();
+    expect(cameraBox!.x).toBeGreaterThan(emojiBox!.x);
+    await page.locator('.meet-chat-cam').click();
+    await expect(page.locator('.cam-overlay')).toBeVisible();
+    await expect(page.locator('.cam-title')).toContainText('拍摄并发送');
+    await page.locator('.cam-close').click();
+    await expect(page.locator('.cam-overlay')).toBeHidden();
 
     await holdVoice(page, 1300);
     await expect(page.locator('#toast-root')).toContainText('语音已发送', { timeout: 10_000 });
