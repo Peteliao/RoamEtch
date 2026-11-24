@@ -41,6 +41,13 @@ describe('RTC signal validation', () => {
     expect(sanitizeRtcSignal(value, 'peer-bob', now)).toBeNull();
   });
 
+  it('accepts a restart request bound to the requested file', () => {
+    expect(sanitizeRtcSignal(packet({ typ: 'restart-req' }), 'peer-bob', now)).toMatchObject({
+      type: 'restart-req', payload: { fileId: 'file-1234' }
+    });
+    expect(sanitizeRtcSignal(packet({ typ: 'restart-req', p: {} }), 'peer-bob', now)).toBeNull();
+  });
+
   it('accepts bounded SDP and ICE payloads for their matching branches', () => {
     expect(sanitizeRtcSignal(packet({ typ: 'offer', p: { sdp: { type: 'offer', sdp: 'v=0\r\n' } } }), 'peer-bob', now)?.payload.sdp)
       .toEqual({ type: 'offer', sdp: 'v=0\r\n' });

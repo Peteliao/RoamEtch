@@ -6,7 +6,7 @@ export const RTC_SIGNAL_SEEN_LIMIT = 500;
 export const RTC_SIGNAL_RATE_WINDOW_MS = 3_000;
 export const RTC_SIGNAL_RATE_LIMIT = 40;
 
-export type RtcSignalType = 'pull-req' | 'pull-reject' | 'offer' | 'answer' | 'ice' | 'abort';
+export type RtcSignalType = 'pull-req' | 'pull-reject' | 'offer' | 'answer' | 'ice' | 'restart-req' | 'abort';
 export type RtcRejectReason = 'expired' | 'busy' | 'privacy-disabled' | 'ice-timeout';
 
 export type RtcSignalPayload = {
@@ -32,7 +32,7 @@ export type RtcSignalMessage = {
 const ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
 const PEER_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 const SHA256_RE = /^[A-Fa-f0-9]{64}$/;
-const TYPES = new Set<RtcSignalType>(['pull-req', 'pull-reject', 'offer', 'answer', 'ice', 'abort']);
+const TYPES = new Set<RtcSignalType>(['pull-req', 'pull-reject', 'offer', 'answer', 'ice', 'restart-req', 'abort']);
 const REASONS = new Set<RtcRejectReason>(['expired', 'busy', 'privacy-disabled', 'ice-timeout']);
 
 function record(value: unknown): value is Record<string, any> {
@@ -111,6 +111,8 @@ export function sanitizeRtcSignal(msg: any, selfPeerId: string, now = Date.now()
     const candidate = cleanCandidate(msg.p.candidate);
     if (!candidate) return null;
     payload.candidate = candidate;
+  } else if (type === 'restart-req') {
+    if (!fileId) return null;
   } else if (msg.p.reason != null) {
     if (!REASONS.has(msg.p.reason)) return null;
     payload.reason = msg.p.reason;

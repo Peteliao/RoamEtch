@@ -82,7 +82,7 @@ class FakePeerConnection extends EventTarget {
   candidates: RTCIceCandidateInit[] = [];
   closeCalls = 0;
   restartIceCalls = 0;
-  onicecandidate: ((event: { candidate: { toJSON: () => RTCIceCandidateInit } }) => void) | null = null;
+  onicecandidate: ((event: { candidate: any }) => void) | null = null;
   onconnectionstatechange: (() => void) | null = null;
   oniceconnectionstatechange: (() => void) | null = null;
   ondatachannel: ((event: { channel: FakeDataChannel }) => void) | null = null;
@@ -302,6 +302,56 @@ describe('WebRTC original transfer', () => {
     expect(network.peers[1].candidates).toEqual([candidate]);
   });
 
+  it('serializes ICE candidates without relying on toJSON support', async () => {
+    const cached = await original();
+    const network = new FakeNetwork();
+    const pair = managers(network, [cached]);
+    cleanups.push(() => { pair.holder.close(); pair.receiver.close(); });
+    const pending = pair.receiver.requestFile({
+      peerId: 'alice', fileId: cached.fileId, sha256: cached.sha256, size: cached.size,
+      mime: cached.mime, width: cached.width, height: cached.height
+    });
+    await pair.routeOne(pair.holder, pair.receiverOutbox);
+    const candidate = {
+      candidate: 'candidate:1 1 UDP 2130706431 127.0.0.1 5000 typ host',
+      sdpMid: '0', sdpMLineIndex: 0, usernameFragment: 'abc'
+    };
+    network.peers[0].onicecandidate?.({ candidate });
+    expect(pair.holderOutbox.find((entry) => entry.type === 'ice')?.payload.candidate).toEqual(candidate);
+    await pair.flush();
+    await pending;
+  });
+
+  it('asks the sender to restart ICE when the receiver fails first', async () => {
+    const cached = await original();
+    const network = new FakeNetwork();
+    const pair = managers(network, [cached]);
+    cleanups.push(() => { pair.holder.close(); pair.receiver.close(); });
+    const pending = pair.receiver.requestFile({
+      peerId: 'alice', fileId: cached.fileId, sha256: cached.sha256, size: cached.size,
+      mime: cached.mime, width: cached.width, height: cached.height
+    });
+    await pair.routeOne(pair.holder, pair.receiverOutbox);
+    await pair.routeOne(pair.receiver, pair.holderOutbox);
+    pair.receiverOutbox.splice(0, pair.receiverOutbox.length);
+    const receiverPc = network.peers[1];
+    receiverPc.iceConnectionState = 'failed';
+    receiverPc.oniceconnectionstatechange?.();
+    receiverPc.connectionState = 'failed';
+    receiverPc.onconnectionstatechange?.();
+    await vi.waitFor(() => expect(pair.receiverSignals.filter((entry) => entry.type === 'restart-req')).toHaveLength(1));
+    expect((pair.receiver as any).sessions.size).toBe(1);
+
+    await pair.routeOne(pair.holder, pair.receiverOutbox);
+    expect(network.peers[0].restartIceCalls).toBe(1);
+    await pair.routeOne(pair.receiver, pair.holderOutbox);
+    const freshAnswer = pair.receiverOutbox.at(-1)!;
+    pair.receiverOutbox.splice(pair.receiverOutbox.indexOf(freshAnswer), 1);
+    await pair.holder.handleSignal(freshAnswer);
+    await pair.flush();
+    expect((await pending).size).toBe(cached.size);
+  });
+
   it('restarts ICE once when the first connection fails before the answer arrives', async () => {
     const cached = await original();
     const network = new FakeNetwork();
@@ -328,6 +378,34 @@ describe('WebRTC original transfer', () => {
     await pair.holder.handleSignal(freshAnswer);
     await pair.flush();
     expect((await pending).size).toBe(cached.size);
+  });
+
+  it('keeps the receiver alive through a sender ICE restart', async () => {
+    vi.useFakeTimers();
+    const cached = await original();
+    const network = new FakeNetwork();
+    const pair = managers(network, [cached]);
+    cleanups.push(() => { pair.holder.close(); pair.receiver.close(); });
+    const pending = pair.receiver.requestFile({
+      peerId: 'alice', fileId: cached.fileId, sha256: cached.sha256, size: cached.size,
+      mime: cached.mime, width: cached.width, height: cached.height
+    });
+    const received = expect(pending).resolves.toMatchObject({ size: cached.size });
+    await pair.routeOne(pair.holder, pair.receiverOutbox);
+    await pair.routeOne(pair.receiver, pair.holderOutbox);
+    pair.receiverOutbox.splice(0, pair.receiverOutbox.length);
+    await vi.advanceTimersByTimeAsync(RTC_CONNECT_TIMEOUT_MS - 500);
+    const holderPc = network.peers[0];
+    holderPc.iceConnectionState = 'failed';
+    holderPc.oniceconnectionstatechange?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pair.holderSignals.filter((entry) => entry.type === 'offer')).toHaveLength(2);
+
+    await pair.routeOne(pair.receiver, pair.holderOutbox);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pair.routeOne(pair.holder, pair.receiverOutbox);
+    await pair.flush();
+    await received;
   });
 
   it('reports a remote ICE timeout instead of a user cancellation', async () => {
@@ -425,7 +503,22 @@ describe('WebRTC original transfer', () => {
     expect(pair.holderOutbox.at(-1)).toMatchObject({ type: 'pull-reject', payload: { reason: 'busy' } });
   });
 
-  it('times out an unanswered request after ten seconds', async () => {
+  it('allows slow mobile signaling to finish within the extended connect deadline', async () => {
+    vi.useFakeTimers();
+    const cached = await original();
+    const pair = managers(new FakeNetwork(), [cached]);
+    cleanups.push(() => { pair.holder.close(); pair.receiver.close(); });
+    const pending = pair.receiver.requestFile({
+      peerId: 'alice', fileId: cached.fileId, sha256: cached.sha256, size: cached.size,
+      mime: cached.mime, width: cached.width, height: cached.height
+    });
+    const received = expect(pending).resolves.toMatchObject({ size: cached.size });
+    await vi.advanceTimersByTimeAsync(RTC_CONNECT_TIMEOUT_MS - 1_000);
+    await pair.flush();
+    await received;
+  });
+
+  it('times out an unanswered request after the connect deadline', async () => {
     vi.useFakeTimers();
     const cached = await original();
     const pair = managers(new FakeNetwork());

@@ -14,7 +14,7 @@ export const RTC_DATA_CHANNEL_LABEL = 'trackmint-file';
 export const RTC_CHUNK_SIZE = 16 * 1024;
 export const RTC_HIGH_WATER_MARK = 256 * 1024;
 export const RTC_LOW_WATER_MARK = 64 * 1024;
-export const RTC_CONNECT_TIMEOUT_MS = 10_000;
+export const RTC_CONNECT_TIMEOUT_MS = 20_000;
 export const RTC_IDLE_TIMEOUT_MS = 30_000;
 export const RTC_ICE_RESTART_DELAY_MS = 2500;
 export const RTC_MAX_ICE_RESTARTS = 1;
@@ -107,6 +107,16 @@ type TransferSession = {
 
 function record(value: unknown): value is Record<string, any> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function candidateInit(candidate: RTCIceCandidate): RTCIceCandidateInit {
+  if (typeof candidate.toJSON === 'function') return candidate.toJSON();
+  return {
+    candidate: candidate.candidate,
+    sdpMid: candidate.sdpMid ?? undefined,
+    sdpMLineIndex: candidate.sdpMLineIndex ?? undefined,
+    usernameFragment: candidate.usernameFragment ?? undefined
+  };
 }
 
 function validMeta(meta: Record<string, any>, expected: Pick<RequestOriginalInput, 'fileId' | 'sha256' | 'size' | 'mime' | 'width' | 'height'>) {
@@ -226,6 +236,12 @@ export class P2PTransferManager {
       else this.failSession(session, signal.payload.reason === 'ice-timeout' ? 'timeout' : 'aborted');
       return;
     }
+    if (signal.type === 'restart-req') {
+      if (session.role !== 'sender' || signal.payload.fileId !== session.fileId || session.transferStarted || session.iceRestarting) return;
+      if (this.canRestartIce(session)) void this.restartIce(session);
+      else this.failSession(session, 'timeout', true, 'ice-timeout');
+      return;
+    }
     if (signal.type === 'offer') {
       await this.handleOffer(session, signal);
       return;
@@ -251,7 +267,7 @@ export class P2PTransferManager {
 
   recover() {
     for (const session of [...this.sessions.values()]) {
-      if (session.role !== 'sender' || session.transferStarted) continue;
+      if (session.transferStarted) continue;
       const state = session.pc?.iceConnectionState;
       if (state === 'disconnected') this.scheduleIceRestart(session);
       else if (state === 'failed') this.handleIceFailure(session);
@@ -315,7 +331,7 @@ export class P2PTransferManager {
 
   private async handleOffer(session: TransferSession, signal: RtcSignalMessage) {
     if (session.role !== 'receiver' || !signal.payload.sdp) return;
-    if (session.state !== 'requesting' && !(session.remoteReady && session.pc)) return;
+    if (session.state !== 'requesting' && !(session.pc && (session.remoteReady || session.iceRestarting))) return;
     let pc = session.pc;
     if (!pc) {
       try {
@@ -338,6 +354,8 @@ export class P2PTransferManager {
       await pc.setRemoteDescription(signal.payload.sdp);
       if (session.closed) return;
       session.remoteReady = true;
+      session.iceRestarting = false;
+      this.armConnectTimeout(session);
       await this.flushCandidates(session);
       if (session.closed) return;
       const answer = await pc.createAnswer();
@@ -433,7 +451,7 @@ export class P2PTransferManager {
     this.armConnectTimeout(session);
     pc.onicecandidate = (event) => {
       if (!event.candidate || session.closed) return;
-      const candidate = event.candidate.toJSON();
+      const candidate = candidateInit(event.candidate);
       if (session.role === 'sender' && !session.offerSent) session.localCandidates.push(candidate);
       else void this.sendSignal(session, 'ice', { candidate });
     };
@@ -459,11 +477,18 @@ export class P2PTransferManager {
       && typeof session.pc?.restartIce === 'function';
   }
 
+  private canRequestIceRestart(session: TransferSession) {
+    return !session.closed && session.role === 'receiver' && !session.transferStarted
+      && session.remoteReady && !session.iceRestarting && session.iceRestarts < RTC_MAX_ICE_RESTARTS;
+  }
+
   private scheduleIceRestart(session: TransferSession) {
-    if (!this.canRestartIce(session) || session.iceRestartTimer) return;
+    const canRestart = session.role === 'sender' ? this.canRestartIce(session) : this.canRequestIceRestart(session);
+    if (!canRestart || session.iceRestartTimer) return;
     session.iceRestartTimer = setTimeout(() => {
       session.iceRestartTimer = null;
-      void this.restartIce(session);
+      if (session.role === 'sender') void this.restartIce(session);
+      else this.requestIceRestart(session);
     }, RTC_ICE_RESTART_DELAY_MS);
   }
 
@@ -473,7 +498,24 @@ export class P2PTransferManager {
       void this.restartIce(session);
       return;
     }
+    if (this.canRequestIceRestart(session)) {
+      this.requestIceRestart(session);
+      return;
+    }
     this.failSession(session, 'timeout', true, 'ice-timeout');
+  }
+
+  private requestIceRestart(session: TransferSession) {
+    if (!this.canRequestIceRestart(session)) return false;
+    session.iceRestarting = true;
+    session.iceRestarts++;
+    session.remoteReady = false;
+    session.pendingCandidates = [];
+    this.armConnectTimeout(session);
+    void this.sendSignal(session, 'restart-req', { fileId: session.fileId }).then((sent) => {
+      if (!sent && !session.closed) this.failSession(session, 'offline');
+    });
+    return true;
   }
 
   private async restartIce(session: TransferSession) {
@@ -485,6 +527,8 @@ export class P2PTransferManager {
     session.iceRestarts++;
     session.remoteReady = false;
     session.offerSent = false;
+    session.pendingCandidates = [];
+    session.localCandidates = [];
     this.armConnectTimeout(session);
     try {
       pc.restartIce!();
