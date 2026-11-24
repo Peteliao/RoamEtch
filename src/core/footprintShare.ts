@@ -392,10 +392,11 @@ function drawCityMap(ctx, fp, P, highContrast, map, x, y, w, h, reveal = 1, elap
     return;
   }
   const maxTrips = Math.max(1, ...cities.map((city) => city.trips || 1));
+  const displayCities = map?.segments?.[0]?.points || [];
   cities.forEach((city, i) => {
     const local = easeOut(clamp01(reveal * 1.45 - i * 0.07));
     if (local <= 0 || !map?.fit) return;
-    const [px, py] = map.fit.toPx(city);
+    const [px, py] = map.fit.toPx(displayCities[i] || city);
     const cx = x + px, cy = y + py;
     const radius = 8 + Math.round((city.trips / maxTrips) * 6);
     const pulse = ((elapsedMs / 1300) + i * 0.17) % 1;
@@ -408,8 +409,8 @@ function drawCityMap(ctx, fp, P, highContrast, map, x, y, w, h, reveal = 1, elap
     ctx.strokeStyle = P.panel;
     ctx.lineWidth = 3;
     ctx.stroke();
-    const label = fitText(ctx, city.name, 150);
     ctx.font = `700 17px ${FONT}`;
+    const label = fitText(ctx, city.name, 150);
     const lw = ctx.measureText(label).width;
     const lx = Math.max(x + 8, Math.min(x + w - lw - 16, cx + radius + 8));
     const ly = Math.max(y + 86, Math.min(y + h - 14, cy + 6));

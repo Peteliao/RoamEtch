@@ -22,6 +22,9 @@ test('city footprint asks for consent, lights the map and reaches the share imag
     });
   });
   await openDemo(page);
+  await gotoTab(page, 'settings');
+  await page.getByRole('button', { name: '国内方案', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__lt.region.effective)).toBe('cn');
   await gotoTab(page, 'trips');
 
   const card = page.locator('.footprint-card');
@@ -43,8 +46,13 @@ test('city footprint asks for consent, lights the map and reaches the share imag
   expect(await page.evaluate(() => localStorage.getItem('trackmint.cityFootprintConsent.v1'))).toBe('yes');
 
   await page.evaluate(() => {
-    const probe: any = { cityLabels: 0, videoCityLabels: 0, audioContexts: 0 };
+    const probe: any = { cityLabels: 0, videoCityLabels: 0, audioContexts: 0, imageArcs: [] };
     (window as any).__footprintDrawProbe = probe;
+    const arc = CanvasRenderingContext2D.prototype.arc;
+    CanvasRenderingContext2D.prototype.arc = function (x, y, radius, start, end, counterclockwise) {
+      if (this.canvas.width === 1080 && this.canvas.height === 1620 && y > 722 && y < 1112) probe.imageArcs.push({ x, y, radius });
+      return arc.call(this, x, y, radius, start, end, counterclockwise);
+    };
     const fillText = CanvasRenderingContext2D.prototype.fillText;
     CanvasRenderingContext2D.prototype.fillText = function (text, x, y, maxWidth) {
       if (String(text).includes('杭州')) {
@@ -67,6 +75,26 @@ test('city footprint asks for consent, lights the map and reaches the share imag
   await card.getByRole('button', { name: '分享图片', exact: true }).click();
   await expect(page.locator('.promo-preview-img')).toBeVisible({ timeout: 60_000 });
   await expect.poll(() => page.evaluate(() => (window as any).__footprintDrawProbe.cityLabels)).toBeGreaterThan(0);
+  const marker = await page.evaluate(async () => {
+    const cached = JSON.parse(localStorage.getItem('trackmint.cities.v1') || '{}');
+    const city = Object.values(cached)[0] as any;
+    const coordsUrl = '/src/core/coords.ts';
+    const mapUrl = '/src/core/mapPaint.ts';
+    const { toDisplay } = await import(coordsUrl);
+    const { mercatorFit } = await import(mapUrl);
+    const [lon, lat] = toDisplay(city.lon, city.lat, 'GCJ02');
+    const point = { lon, lat };
+    const fit = mercatorFit([point], 936, 390, 50, 10);
+    const [px, py] = fit.toPx(point);
+    return {
+      expectedX: 72 + px,
+      expectedY: 722 + py,
+      actual: (window as any).__footprintDrawProbe.imageArcs.find((item: any) => item.radius >= 10 && item.radius <= 20)
+    };
+  });
+  expect(marker.actual).toBeTruthy();
+  expect(marker.actual.x).toBeCloseTo(marker.expectedX, 3);
+  expect(marker.actual.y).toBeCloseTo(marker.expectedY, 3);
   expect(tileZooms.length).toBeGreaterThan(0);
   const footprintMaxZoom = Math.max(...tileZooms);
   expect(footprintMaxZoom).toBeLessThanOrEqual(10);
