@@ -5,6 +5,7 @@ import { haversine, simplify } from './geo';
 import { loadTripFull, replaceSegmentPoints } from './store';
 import { pushAction } from './history';
 import { emit } from './events';
+import { applyPrivacy } from './privacy';
 
 const MIN_GAP = 60;
 const ROUTE_TIMEOUT = 9000;
@@ -117,6 +118,42 @@ export function buildGapPoints(from: any, to: any, coords: number[][]) {
     return { ...p, t, alt: null, altSrc: null, acc: null, speed: null, synth: true };
   });
   return { points: pts, distance: total };
+}
+
+export async function bridgeTrackGapsForExport(full: any, cropped: any, privacy: any = {}, {
+  signal
+}: { signal?: AbortSignal } = {}) {
+  const originalPoints = full.segments.flatMap((seg) => seg.points);
+  if (originalPoints.length < 2 || cropped.segments.length < 2) {
+    return { ...cropped, bridged: 0, failed: 0, points: 0 };
+  }
+  const boundaries = [];
+  for (let i = 0; i < full.segments.length - 1; i++) {
+    const from = full.segments[i]?.points?.at(-1);
+    const to = full.segments[i + 1]?.points?.[0];
+    if (from && to) boundaries.push({ from, to });
+  }
+  const segments = cropped.segments.map((seg) => ({ ...seg, points: [...seg.points] }));
+  const gaps = findTrackGaps(segments).filter((gap) =>
+    boundaries.some(({ from, to }) => gap.from === from && gap.to === to)
+  );
+  let bridged = 0, failed = 0, points = 0;
+  for (const gap of gaps) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const route = await routeOverRoads(gap.from, gap.to, full.trip?.activity || 'hike', signal);
+    const built = route ? buildGapPoints(gap.from, gap.to, route.coords as number[][]) : null;
+    if (!built || !segments[gap.index]) { failed++; continue; }
+    segments[gap.index].points.push(...built.points.slice(1));
+    bridged++;
+    points += built.points.length - 1;
+  }
+  if (!bridged) return { ...cropped, bridged, failed, points };
+  const sanitized = applyPrivacy({ ...full, segments }, {
+    ...privacy,
+    start: originalPoints[0],
+    end: originalPoints[originalPoints.length - 1]
+  });
+  return { ...sanitized, bridged, failed, points };
 }
 
 export async function repairTrackGaps(tripId: string, {

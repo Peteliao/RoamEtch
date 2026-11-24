@@ -9,9 +9,9 @@ test('demo trip renders charts and privacy crop feedback', async ({ page }) => {
   const chartCard = page.locator('#view-analysis .chart-card');
   await expect(chartCard.locator('.chart-wrap canvas').first()).toBeVisible();
 
-  const speedTab = chartCard.locator('.seg-toggle button', { hasText: '速度' });
-  await speedTab.click();
-  await expect(speedTab).toHaveClass(/active/);
+  const legend = chartCard.locator('.chart-legend');
+  await expect(legend).toContainText('海拔');
+  await expect(legend).toContainText('速度');
   await expect(chartCard.locator('.chart-wrap canvas').first()).toBeVisible();
 
   await gotoTab(page, 'export');

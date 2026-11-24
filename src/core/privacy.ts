@@ -2,18 +2,25 @@
 // start/end privacy circles, sensitive waypoint hiding. EXIF already stripped at import.
 import { haversine } from './geo';
 
+export type PrivacyOptions = {
+  radius?: number;
+  hideSensitive?: boolean;
+  start?: any;
+  end?: any;
+};
+
 /**
  * @param {{trip, segments, waypoints}} full
- * @param {{radius:number, hideSensitive:boolean}} opts
+ * @param {PrivacyOptions} opts
  * @returns {{segments, waypoints, croppedPoints, croppedWaypoints}}
  */
-export function applyPrivacy(full, { radius = 300, hideSensitive = true } = {}) {
+export function applyPrivacy(full, { radius = 300, hideSensitive = true, start: anchorStart, end: anchorEnd }: PrivacyOptions = {}) {
   const allPts = full.segments.flatMap((s) => s.points);
   if (!allPts.length) {
     return { segments: [], waypoints: hideSensitive ? full.waypoints.filter((w) => !w.hidden) : full.waypoints, croppedPoints: 0, croppedWaypoints: 0 };
   }
-  const start = allPts[0];
-  const end = allPts[allPts.length - 1];
+  const start = anchorStart || allPts[0];
+  const end = anchorEnd || allPts[allPts.length - 1];
   const inCircle = (lat, lon) =>
     (radius > 0 && haversine(lat, lon, start.lat, start.lon) <= radius) ||
     (radius > 0 && haversine(lat, lon, end.lat, end.lon) <= radius);

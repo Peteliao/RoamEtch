@@ -800,16 +800,22 @@ async function beginSession({ invite, name, host, expiryMin }: { invite: string;
     route: null,
     routeLoading: '',
     routeAbort: null,
-    onVisible: null
+    onVisible: null,
+    onOnline: null
   };
   const s = session;
   setMeetFragment(s.invite);
   s.onVisible = () => {
     if (document.visibilityState !== 'visible' || session !== s) return;
     startWatch();
+    s.p2p?.recover();
     if (s.relayState === 'connected') sendPresence();
   };
-  document.addEventListener('visibilitychange', s.onVisible);
+  s.onOnline = () => {
+    if (session === s) s.p2p?.recover();
+  };
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', s.onVisible);
+  if (typeof window !== 'undefined') window.addEventListener('online', s.onOnline);
   startP2P(s);
   startWatch();
   startRelay();
@@ -846,7 +852,8 @@ function cleanupSession(s: MeetSession) {
   clearInterval(s.tickTimer);
   s.routeAbort?.abort();
   s.routeAbort = null;
-  if (s.onVisible) document.removeEventListener('visibilitychange', s.onVisible);
+  if (s.onVisible && typeof document !== 'undefined') document.removeEventListener('visibilitychange', s.onVisible);
+  if (s.onOnline && typeof window !== 'undefined') window.removeEventListener('online', s.onOnline);
   try { if (s.watchId != null) navigator.geolocation?.clearWatch(s.watchId); } catch { /* ignore */ }
   s.watchId = null;
   s.relayGen++;

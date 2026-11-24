@@ -1,4 +1,4 @@
-// Analysis view: stats grid, elevation/speed charts (uPlot) linked with a mini map,
+// Analysis view: stats grid, combined elevation/speed chart linked with a mini map,
 // slope distribution, segment table, timeline, difficulty & fatigue advisories.
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
@@ -13,6 +13,7 @@ import { cleanGpsTrack } from '../core/trackCleanup';
 import { TrackMap } from './map';
 import { WP_ICONS } from '../core/waypointMeta';
 import { canvasPalette } from '../core/palette';
+import { buildProfile, altitudeUnit, distanceUnit, speedUnit } from '../core/profileChart';
 import { appState, setActiveTrip, refreshActiveTrip } from './state';
 import { el, icon, confirmModal, toast } from './helpers';
 
@@ -34,12 +35,10 @@ export function createAnalysisView() {
   const gapCard = el('div', { class: 'card', style: { display: 'none' } },
     el('h3', {}, icon('routeFwd', 18), t('analysis.gapTitle')), gapBody);
   const miniMapBox = el('div', { class: 'analysis-map' });
-  const chartWrap = el('div', { class: 'chart-wrap' });
-  const altTab = el('button', { class: 'active', onclick: () => setChartMode('alt') }, t('analysis.altTab'));
-  const speedTab = el('button', { onclick: () => setChartMode('speed') }, t('analysis.speedTab'));
-  const chartTabs = el('div', { class: 'seg-toggle sm' }, altTab, speedTab);
+  const chartWrap = el('div', { class: 'chart-wrap', 'aria-label': t('analysis.chartTitle') });
+  const chartLegend = el('div', { class: 'chart-legend' });
   const chartCard = el('div', { class: 'card chart-card' },
-    el('div', { class: 'chart-head' }, el('h3', {}, t('analysis.chartTitle')), chartTabs),
+    el('div', { class: 'chart-head' }, el('h3', {}, t('analysis.chartTitle')), chartLegend),
     el('div', { class: 'small faint', style: { marginBottom: '2px' } }, t('analysis.hoverHint')),
     chartWrap);
   const slopeCard = el('div', { class: 'card' }, el('h3', {}, t('analysis.slopeDist')), el('canvas', { id: 'slope-canvas', style: { width: '100%', height: '120px' } }));
@@ -51,15 +50,7 @@ export function createAnalysisView() {
 
   let miniMap = null;
   let chart = null;
-  let chartMode = 'alt';
   let flatPoints = [];
-
-  function setChartMode(mode) {
-    chartMode = mode;
-    altTab.classList.toggle('active', mode === 'alt');
-    speedTab.classList.toggle('active', mode === 'speed');
-    if (appState.stats) renderCharts(appState.stats);
-  }
 
   function ensureMiniMap() {
     if (miniMap) return;
@@ -195,30 +186,49 @@ export function createAnalysisView() {
     }
   }
 
-  function chartOpts(height): any {
+  function chartOpts(height, profile): any {
     const P = canvasPalette();
+    const speedColor = `rgb(${P.lut[1].join(',')})`;
     return {
       width: Math.max(280, scroll.clientWidth - 60),
       height,
-      scales: { x: { time: false } },
+      scales: {
+        x: { time: false, range: () => [0, profile.maxX] },
+        y: profile.hasAlt ? { range: () => [profile.altRange.min, profile.altRange.max] } : {},
+        y1: profile.hasSpeed ? { range: () => [profile.speedRange.min, profile.speedRange.max] } : {}
+      },
       series: [
-        {},
-        { stroke: P.accent, width: 2, fill: P.accentSoft, points: { show: false } }
+        { label: distanceUnit(profile.units) },
+        { label: `${t('panel.altitude')} (${altitudeUnit(profile.units)})`, stroke: P.accent, width: 1.8, fill: P.accentSoft, points: { show: false }, show: profile.hasAlt },
+        { label: `${t('panel.speed')} (${speedUnit(profile.units)})`, stroke: speedColor, width: 2, scale: 'y1', fill: null, points: { show: false }, show: profile.hasSpeed }
       ],
       axes: [
-        { stroke: P.muted, grid: { stroke: P.grid }, size: 42, font: '11px system-ui' },
-        { stroke: P.muted, grid: { stroke: P.grid }, size: 46, font: '11px system-ui' }
+        { stroke: P.muted, grid: { stroke: P.grid }, size: 42, font: '11px system-ui', label: [] },
+        { stroke: P.accent, grid: { stroke: P.grid }, size: 46, font: '11px system-ui', label: [], show: profile.hasAlt },
+        { stroke: speedColor, grid: { show: false }, size: 52, font: '11px system-ui', side: 1, label: [], show: profile.hasSpeed }
       ],
-      cursor: { drag: { x: false, y: false } },
+      cursor: { drag: { x: false, y: false }, points: { show: false } },
       legend: { show: false }
     };
   }
 
-  function hoverHook(valueLabel) {
+  function hoverHook(profile, units) {
     return (u) => {
       const idx = u.cursor.idx;
-      if (idx == null || !flatPoints[idx] || !miniMap) { miniMap?.clearHover(); return; }
-      miniMap.showHover(flatPoints[idx].lat, flatPoints[idx].lon, valueLabel ? valueLabel(idx) : null);
+      const sourceIdx = idx == null ? null : profile.sourceIndices[idx];
+      if (sourceIdx == null || !flatPoints[sourceIdx] || !miniMap) { miniMap?.clearHover(); return; }
+      const parts = [];
+      const rawAlt = appState.stats?.series.alt?.[sourceIdx];
+      const rawSpeed = appState.stats?.series.speed?.[sourceIdx];
+      if (rawAlt != null) {
+        const a = fmtAltitude(rawAlt, units);
+        parts.push(`${t('panel.altitude')} ${a.v} ${a.u}`);
+      }
+      if (rawSpeed != null) {
+        const s = fmtSpeed(rawSpeed, units);
+        parts.push(`${t('panel.speed')} ${s.v} ${s.u}`);
+      }
+      miniMap.showHover(flatPoints[sourceIdx].lat, flatPoints[sourceIdx].lon, parts.join(' · ') || null);
     };
   }
 
@@ -256,55 +266,22 @@ export function createAnalysisView() {
     chart = null;
     if (!stats || !flatPoints.length) { chartCard.style.display = 'none'; return; }
 
-    const xs = stats.series.d.map((d) => d / 1000);
-    const alts = stats.series.alt;
-    const speeds = stats.series.speed.map((s) => (s != null ? s * 3.6 : null));
-    const hasAlt = alts.some((a) => a != null);
-    const hasSpeed = stats.hasTime && speeds.some((s) => s != null);
-    altTab.disabled = !hasAlt;
-    speedTab.disabled = !hasSpeed;
-    if (!hasAlt && !hasSpeed) {
+    const units = get('units');
+    const profile = buildProfile(stats, units, 1800);
+    if (!profile.hasAlt && !profile.hasSpeed) {
       chartCard.style.display = 'none';
       renderSlope(stats);
       return;
     }
-    if ((chartMode === 'alt' && !hasAlt) || (chartMode === 'speed' && !hasSpeed)) {
-      chartMode = hasAlt ? 'alt' : 'speed';
-    }
-    altTab.classList.toggle('active', chartMode === 'alt');
-    speedTab.classList.toggle('active', chartMode === 'speed');
-    chartCard.style.display = '';
-
-    const units = get('units');
     const P = canvasPalette();
-    const opts = chartOpts(210);
-    opts.axes[0].label = 'km';
-    if (chartMode === 'alt') {
-      opts.axes[1].label = 'm';
-      opts.series[1].stroke = P.accent;
-      opts.series[1].fill = P.accentSoft;
-      opts.hooks = {
-        setCursor: [hoverHook((idx) => {
-          if (alts[idx] == null) return null;
-          const a = fmtAltitude(alts[idx], units);
-          return `${a.v} ${a.u}`;
-        })]
-      };
-      chart = new uPlot(opts, [xs, alts], chartWrap);
-    } else {
-      opts.axes[1].label = 'km/h';
-      opts.series[1].stroke = `rgb(${P.lut[1].join(',')})`;
-      opts.series[1].fill = `rgba(${P.lut[1].join(',')},0.12)`;
-      opts.hooks = {
-        setCursor: [hoverHook((idx) => {
-          const raw = stats.series.speed[idx];
-          if (raw == null) return null;
-          const s = fmtSpeed(raw, units);
-          return `${s.v} ${s.u}`;
-        })]
-      };
-      chart = new uPlot(opts, [xs, speeds], chartWrap);
-    }
+    chartLegend.innerHTML = [
+      profile.hasAlt ? `<span><i style="background:${P.accent}"></i>${t('panel.altitude')} · ${altitudeUnit(units)}</span>` : '',
+      profile.hasSpeed ? `<span><i style="background:rgb(${P.lut[1].join(',')})"></i>${t('panel.speed')} · ${speedUnit(units)}</span>` : ''
+    ].join('');
+    chartCard.style.display = '';
+    const opts = chartOpts(220, profile);
+    opts.hooks = { setCursor: [hoverHook(profile, units)] };
+    chart = new uPlot(opts, [profile.x, profile.alt, profile.speed], chartWrap);
     attachScrub(chart);
     renderSlope(stats);
   }
@@ -475,7 +452,7 @@ export function createAnalysisView() {
     resize: () => {
       miniMap?.resize();
       const w = Math.max(280, scroll.clientWidth - 60);
-      chart?.setSize({ width: w, height: 210 });
+      chart?.setSize({ width: w, height: 220 });
       if (appState.stats) renderSlope(appState.stats);
     },
     destroy: () => {

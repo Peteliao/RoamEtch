@@ -8,11 +8,13 @@ import { currentLang, t } from './i18n';
 import { get } from './settings';
 import { createMusicSession } from './music';
 import { makeVideoRecorder, videoSupported } from './videoCapture';
+import { prepareMap } from './mapPaint';
+import { MUSIC_PREF_RANDOM } from './music';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
 const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
 const M = 72;
-const IMG_W = 1080, IMG_H = 1350;
+const IMG_W = 1080, IMG_H = 1620;
 const VID_W = 1080, VID_H = 1920;
 const VIDEO_MS = 9000;
 
@@ -39,6 +41,7 @@ export function footprintCaption(fp, units = get('units')) {
     ascent: `${r.ascent.v}${r.ascent.u}`,
     days: r.days,
     months: r.activeMonths,
+    cities: r.cityCount,
     url: SITE_URL
   });
 }
@@ -339,16 +342,98 @@ function drawPrivacy(ctx: CanvasRenderingContext2D, P, w, y) {
   ctx.fillText(t('trips.footprintPrivacy'), w / 2, y);
 }
 
-function drawImageScene(ctx, fp, P, highContrast) {
+async function prepareFootprintMap(fp, w, h) {
+  const cities = (fp.cities || []).slice(0, 40);
+  if (!cities.length) return null;
+  return prepareMap({
+    w, h, pad: 50, maxZoom: 10,
+    segments: [{ id: 'cities', points: cities.map((city) => ({ lat: city.lat, lon: city.lon })) }],
+    waypoints: []
+  });
+}
+
+function drawCityMap(ctx, fp, P, highContrast, map, x, y, w, h, reveal = 1, elapsedMs = 0) {
+  const cities = (fp.cities || []).slice(0, 12);
+  ctx.save();
+  roundRectPath(ctx, x, y, w, h, 30);
+  ctx.clip();
+  if (map) ctx.drawImage(map.bg, x, y, w, h);
+  else {
+    ctx.fillStyle = P.vectorBg;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = P.grid;
+    ctx.lineWidth = 1;
+    for (let gx = x + 36; gx < x + w; gx += 72) {
+      ctx.beginPath(); ctx.moveTo(gx, y); ctx.lineTo(gx, y + h); ctx.stroke();
+    }
+    for (let gy = y + 36; gy < y + h; gy += 72) {
+      ctx.beginPath(); ctx.moveTo(x, gy); ctx.lineTo(x + w, gy); ctx.stroke();
+    }
+  }
+  const shade = ctx.createLinearGradient(0, y, 0, y + 100);
+  shade.addColorStop(0, highContrast ? 'rgba(255,255,255,.88)' : 'rgba(0,0,0,.34)');
+  shade.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = shade;
+  ctx.fillRect(x, y, w, 100);
+  ctx.textAlign = 'left';
+  ctx.fillStyle = highContrast ? P.text : '#ffffff';
+  ctx.font = `700 25px ${FONT}`;
+  ctx.fillText(t('trips.footprintCityMap'), x + 28, y + 42);
+  ctx.font = `600 18px ${FONT}`;
+  ctx.fillStyle = highContrast ? P.muted : 'rgba(255,255,255,.82)';
+  ctx.fillText(t('trips.footprintCities', { n: fp.cities?.length || 0 }), x + 28, y + 70);
+
+  if (!cities.length) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = P.muted;
+    ctx.font = `600 22px ${FONT}`;
+    ctx.fillText(t('trips.footprintCityEmpty'), x + w / 2, y + h / 2 + 10);
+    ctx.restore();
+    return;
+  }
+  const maxTrips = Math.max(1, ...cities.map((city) => city.trips || 1));
+  cities.forEach((city, i) => {
+    const local = easeOut(clamp01(reveal * 1.45 - i * 0.07));
+    if (local <= 0 || !map?.fit) return;
+    const [px, py] = map.fit.toPx(city);
+    const cx = x + px, cy = y + py;
+    const radius = 8 + Math.round((city.trips / maxTrips) * 6);
+    const pulse = ((elapsedMs / 1300) + i * 0.17) % 1;
+    ctx.globalAlpha = local;
+    ctx.strokeStyle = highContrast ? P.accent : 'rgba(255,255,255,.85)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cx, cy, radius + 7 + pulse * 13, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = P.accent;
+    ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = P.panel;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    const label = fitText(ctx, city.name, 150);
+    ctx.font = `700 17px ${FONT}`;
+    const lw = ctx.measureText(label).width;
+    const lx = Math.max(x + 8, Math.min(x + w - lw - 16, cx + radius + 8));
+    const ly = Math.max(y + 86, Math.min(y + h - 14, cy + 6));
+    ctx.fillStyle = highContrast ? 'rgba(255,255,255,.92)' : 'rgba(0,0,0,.58)';
+    roundRectPath(ctx, lx - 6, ly - 18, lw + 12, 26, 7);
+    ctx.fill();
+    ctx.fillStyle = highContrast ? P.text : '#ffffff';
+    ctx.fillText(label, lx, ly);
+  });
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function drawImageScene(ctx, fp, P, highContrast, cityMap) {
   const lang = currentLang();
   const r = recapFootprint(fp, get('units'));
   drawBackground(ctx, P, highContrast, IMG_W, IMG_H);
   drawHeader(ctx, P, highContrast, r.year);
   drawHero(ctx, P, highContrast, r, 214);
   drawKpiCard(ctx, P, highContrast, r, M, 506, IMG_W - M * 2, 184);
-  drawMonthCard(ctx, P, highContrast, fp, r, M, 722, IMG_W - M * 2, 336, 1, lang);
-  drawFooter(ctx, P, highContrast, M, 1130, IMG_W - M * 2, 132);
-  drawPrivacy(ctx, P, IMG_W, 1322);
+  drawCityMap(ctx, fp, P, highContrast, cityMap, M, 722, IMG_W - M * 2, 390, 1);
+  drawMonthCard(ctx, P, highContrast, fp, r, M, 1132, IMG_W - M * 2, 290, 1, lang);
+  drawFooter(ctx, P, highContrast, M, 1432, IMG_W - M * 2, 100);
+  drawPrivacy(ctx, P, IMG_W, 1604);
 }
 
 export async function generateFootprintImage(fp): Promise<{ blob: Blob; filename: string }> {
@@ -358,14 +443,15 @@ export async function generateFootprintImage(fp): Promise<{ blob: Blob; filename
   canvas.height = IMG_H;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D unavailable');
-  drawImageScene(ctx, fp, canvasPalette(), document.documentElement.dataset.theme === 'contrast');
+  const cityMap = await prepareFootprintMap(fp, IMG_W - M * 2, 390);
+  drawImageScene(ctx, fp, canvasPalette(), document.documentElement.dataset.theme === 'contrast', cityMap);
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png');
   });
   return { blob, filename: `trackmint-footprint-${fp.year}-${Date.now()}.png` };
 }
 
-function drawVideoScene(ctx, fp, P, highContrast, elapsedMs) {
+function drawVideoScene(ctx, fp, P, highContrast, elapsedMs, cityMap) {
   const u = clamp01(elapsedMs / VIDEO_MS);
   const intro = easeOut(Math.min(1, elapsedMs / 800));
   const counters = easeOut(Math.max(0, (elapsedMs - 500) / 3600));
@@ -389,13 +475,14 @@ function drawVideoScene(ctx, fp, P, highContrast, elapsedMs) {
     days: Math.round(r.days * counters)
   };
   drawKpiCard(ctx, P, highContrast, counted, M, 650, VID_W - M * 2, 226, easeOut(Math.min(1, Math.max(0, (elapsedMs - 300) / 700))));
-  drawMonthCard(ctx, P, highContrast, fp, r, M, 930, VID_W - M * 2, 512, easeOut(Math.max(0, (elapsedMs - 650) / 1700)), lang);
+  drawCityMap(ctx, fp, P, highContrast, cityMap, M, 910, VID_W - M * 2, 380, easeOut(Math.max(0, (elapsedMs - 500) / 1200)), elapsedMs);
+  drawMonthCard(ctx, P, highContrast, fp, r, M, 1310, VID_W - M * 2, 270, easeOut(Math.max(0, (elapsedMs - 900) / 1600)), lang);
 
   const footerA = easeOut(Math.max(0, (elapsedMs - 5200) / 900));
   ctx.save();
   ctx.globalAlpha = footerA;
-  drawFooter(ctx, P, highContrast, M, 1550, VID_W - M * 2, 172);
-  drawPrivacy(ctx, P, VID_W, 1816);
+  drawFooter(ctx, P, highContrast, M, 1620, VID_W - M * 2, 150);
+  drawPrivacy(ctx, P, VID_W, 1830);
   ctx.restore();
 
   if (u < 0.12) {
@@ -412,13 +499,16 @@ function drawVideoScene(ctx, fp, P, highContrast, elapsedMs) {
   }
 }
 
-export async function generateFootprintVideo(fp, { music = get('videoMusic'), signal = null, onProgress = null } = {}): Promise<any> {
+export async function generateFootprintVideo(fp, { music = MUSIC_PREF_RANDOM, signal = null, onProgress = null } = {}): Promise<any> {
   if (!videoSupported()) throw new Error('video-unsupported');
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   const musicSession = createMusicSession(music);
   let abort = null;
   try {
     await loadBrandFonts();
+    const cityMap = await prepareFootprintMap(fp, VID_W - M * 2, 380);
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    onProgress?.(0.05);
     const P = canvasPalette();
     const highContrast = document.documentElement.dataset.theme === 'contrast';
     const canvas = document.createElement('canvas');
@@ -447,7 +537,7 @@ export async function generateFootprintVideo(fp, { music = get('videoMusic'), si
     signal?.addEventListener('abort', abort, { once: true });
     rec.start(250);
 
-    drawVideoScene(ctx, fp, P, highContrast, VIDEO_MS);
+    drawVideoScene(ctx, fp, P, highContrast, VIDEO_MS, cityMap);
     let cover = '';
     try { cover = canvas.toDataURL('image/jpeg', 0.82); } catch { /* ignore encode failure */ }
 
@@ -456,8 +546,8 @@ export async function generateFootprintVideo(fp, { music = get('videoMusic'), si
       const step = (now) => {
         if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
         const elapsed = now - t0;
-        drawVideoScene(ctx, fp, P, highContrast, Math.min(VIDEO_MS, elapsed));
-        onProgress?.(Math.min(1, elapsed / VIDEO_MS));
+        drawVideoScene(ctx, fp, P, highContrast, Math.min(VIDEO_MS, elapsed), cityMap);
+        onProgress?.(0.05 + 0.95 * Math.min(1, elapsed / VIDEO_MS));
         if (elapsed >= VIDEO_MS) { resolve(); return; }
         requestAnimationFrame(step);
       };
@@ -479,6 +569,7 @@ export async function generateFootprintVideo(fp, { music = get('videoMusic'), si
     };
   } finally {
     if (abort) signal?.removeEventListener('abort', abort);
+    abort?.();
     musicSession?.stop();
   }
 }

@@ -1,13 +1,15 @@
 // Trips list: open/edit/analyze, GPX import, full backup/restore, storage monitor.
 import { t } from '../core/i18n';
 import { on } from '../core/events';
-import { listTrips, deleteTrip, updateTrip, storageEstimate } from '../core/store';
+import { listTrips, deleteTrip, updateTrip, loadTripFull, storageEstimate } from '../core/store';
 import { importGPX } from '../core/gpx';
 import { exportTripsZip, importTripFiles } from '../core/batch';
 import { startRewalk } from '../core/rewalk';
 import { importDemoTrip } from '../core/demo';
-import { buildFootprints } from '../core/footprint';
+import { aggregateCityFootprints, buildFootprints, withFootprintCities } from '../core/footprint';
 import { generateFootprintImage, generateFootprintVideo, footprintCaption } from '../core/footprintShare';
+import { resolveTripCities } from '../core/shareInfo';
+import { paintTrack, prepareMap } from '../core/mapPaint';
 import { videoSupported, videoIsWebmOnly } from '../core/videoCapture';
 import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
 import { openInstallGuide, isIOS, isStandaloneMode } from './install';
@@ -16,7 +18,13 @@ import { fmtDistance, fmtDuration, simplify } from '../core/geo';
 import { get } from '../core/settings';
 import { exportImage, exportFile, isWeChat, wechatFileGuidance } from '../core/shareEnv';
 import { appState, setActiveTrip } from './state';
+import { TrackMap } from './map';
 import { el, icon, toast, confirmModal, filePicker, filePickerMulti, modal } from './helpers';
+
+function thumbnailPoints(segments) {
+  const points = segments.flatMap((segment) => segment.points);
+  return simplify(points, 40).slice(0, 160).map((p) => ({ lat: p.lat, lon: p.lon }));
+}
 
 function copyFootprintCaption(fp) {
   const text = footprintCaption(fp);
@@ -201,6 +209,8 @@ export function createTripsView(navigate) {
   let sortMode = 'recent';
   let allTrips = [];
   let footprintYear = new Date().getFullYear();
+  const thumbNodes = new Map();
+  let thumbRun = 0;
   const chipBar = el('div', { class: 'chip-bar' });
   const chipButtons = new Map();
   for (const a of ACTIVITIES) {
@@ -231,6 +241,15 @@ export function createTripsView(navigate) {
   sortSel.onchange = () => { sortMode = sortSel.value; renderList(); };
   const toolbar = el('div', { class: 'trips-toolbar' }, chipBar, sortSel);
 
+  const CITY_CONSENT_KEY = 'trackmint.cityFootprintConsent.v1';
+  const footprintStates = new Map();
+  const footprintJobs = new Map();
+  const footprintAborts = new Map();
+  let footprintMap = null;
+  let footprintMapKey = '';
+  let viewDestroyed = false;
+  const footprintMapBox = el('div', { class: 'footprint-map', 'aria-label': t('trips.footprintCityMap') });
+  const footprintMapStatus = el('div', { class: 'footprint-map-status' });
   const footprintBody = el('div', {});
   const footprintCard = el('div', { class: 'card footprint-card' }, footprintBody);
   const nudge = el('div', { class: 'backup-nudge', style: { display: 'none' } });
@@ -287,8 +306,45 @@ export function createTripsView(navigate) {
     return `<svg viewBox="0 0 52 52"><path d="${path}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/></svg>`;
   }
 
+  async function hydrateThumbnails(trips) {
+    const run = ++thumbRun;
+    for (const trip of trips) {
+      if (run !== thumbRun || viewDestroyed) return;
+      try {
+        let points = trip.thumbPoints;
+        if (!points || points.length < 2) {
+          const full = await loadTripFull(trip.id);
+          points = full ? thumbnailPoints(full.segments) : [];
+          if (points.length < 2 || run !== thumbRun) continue;
+          await updateTrip(trip.id, { thumbPoints: points }, { touch: false });
+          if (run !== thumbRun) continue;
+          trip.thumbPoints = points;
+        }
+        const thumb = thumbNodes.get(trip.id);
+        if (!thumb) continue;
+        thumb.innerHTML = thumbSVG(points);
+        const map = await prepareMap({
+          w: 108, h: 108, pad: 8,
+          segments: [{ id: trip.id, points }], waypoints: []
+        });
+        if (run !== thumbRun || thumbNodes.get(trip.id) !== thumb || viewDestroyed) continue;
+        const canvas = document.createElement('canvas');
+        canvas.width = 108; canvas.height = 108;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(map.bg, 0, 0);
+        paintTrack(ctx, map.fit, map.segments, [], { lineWidth: 3.2, dotRadius: 3.5, wpRadius: 2, darkBg: map.darkBg });
+        const img = el('img', { src: canvas.toDataURL('image/webp', 0.84), alt: '', draggable: false });
+        thumb.replaceChildren(img);
+      } catch (e) {
+        console.warn('thumbnail hydration failed', trip.id, e);
+      }
+    }
+  }
+
   function renderList() {
     const units = get('units');
+    thumbRun++;
+    thumbNodes.clear();
     listBox.innerHTML = '';
     if (!allTrips.length) {
       listBox.append(el('div', { class: 'empty-state' },
@@ -325,9 +381,11 @@ export function createTripsView(navigate) {
       const st = trip.statsCache;
       const d = st ? fmtDistance(st.distance, units) : null;
       const statusKey = trip.status === 'recording' ? 'statusRecording' : trip.status === 'paused' ? 'statusPaused' : 'statusFinished';
+      const thumb = el('div', { class: 'thumb', html: thumbSVG(trip.thumbPoints) });
+      thumbNodes.set(trip.id, thumb);
       const item = el('div', { class: 'trip-item', onclick: () => openTrip(trip) },
         el('div', { class: 'ti-row' },
-          el('div', { class: 'thumb', html: thumbSVG(trip.thumbPoints) }),
+          thumb,
           el('div', { class: 'info' },
             el('div', { class: 'name' },
               el('button', {
@@ -355,6 +413,7 @@ export function createTripsView(navigate) {
       );
       listBox.append(item);
     }
+    void hydrateThumbnails(trips);
   }
 
   function renderSummary() {
@@ -386,12 +445,143 @@ export function createTripsView(navigate) {
       btn);
   }
 
+  function hasCityConsent() {
+    try { return localStorage.getItem(CITY_CONSENT_KEY) === 'yes'; } catch { return false; }
+  }
+
+  function yearTrips(year) {
+    return allTrips.filter((trip) => trip.status !== 'recording' && trip.status !== 'paused'
+      && new Date(trip.createdAt).getFullYear() === year);
+  }
+
+  function ensureFootprintMap() {
+    if (footprintMap || viewDestroyed) return;
+    footprintMap = new TrackMap(footprintMapBox);
+    footprintMap.init([105, 35], 3);
+    footprintMapBox.append(footprintMapStatus);
+  }
+
+  async function requestCityConsent(trips) {
+    if (hasCityConsent()) return true;
+    const ok = await confirmModal({
+      title: t('trips.footprintCityConsentTitle'),
+      message: t('trips.footprintCityConsent'),
+      confirmText: t('trips.footprintCityConsentConfirm')
+    });
+    if (!ok) return false;
+    try { localStorage.setItem(CITY_CONSENT_KEY, 'yes'); } catch { /* consent lasts for this view */ }
+    return true;
+  }
+
+  async function loadFootprintCities(year, trips) {
+    if (footprintJobs.has(year) || viewDestroyed) return;
+    if (!navigator.onLine) {
+      footprintStates.set(year, { ...(footprintStates.get(year) || {}), status: 'offline', ids: trips.map((tr) => tr.id).sort().join(',') });
+      renderFootprint();
+      return;
+    }
+    const previous = footprintStates.get(year);
+    footprintStates.set(year, {
+      status: 'loading', progress: 0, cities: previous?.cities || [],
+      ids: trips.map((tr) => tr.id).sort().join(',')
+    });
+    renderFootprint();
+    const controller = new AbortController();
+    footprintAborts.set(year, controller);
+    const job = (async () => {
+      const entries = [];
+      try {
+        for (let i = 0; i < trips.length; i++) {
+          if (controller.signal.aborted || viewDestroyed) return;
+          const trip = trips[i];
+          const full = await loadTripFull(trip.id);
+          if (!full || controller.signal.aborted || viewDestroyed) continue;
+          const cities = await resolveTripCities(full, { radius: get('privacyRadius') }, {
+            signal: controller.signal,
+            onProgress: (p) => {
+              if (viewDestroyed || controller.signal.aborted) return;
+              const state = footprintStates.get(year);
+              if (state?.status === 'loading') state.progress = Math.round(((i + p) / trips.length) * 100);
+              renderFootprint();
+            }
+          });
+          entries.push({ trip: full.trip, cities });
+          const citiesSoFar = aggregateCityFootprints(entries);
+          const state = footprintStates.get(year);
+          if (state?.status === 'loading') {
+            state.cities = citiesSoFar;
+            state.progress = Math.round(((i + 1) / trips.length) * 100);
+          }
+          renderFootprint();
+        }
+        if (controller.signal.aborted || viewDestroyed) return;
+        footprintStates.set(year, {
+          status: 'ready', cities: aggregateCityFootprints(entries),
+          ids: trips.map((tr) => tr.id).sort().join(',')
+        });
+      } catch (err) {
+        if (err?.name !== 'AbortError' && !viewDestroyed) {
+          footprintStates.set(year, { status: 'error', cities: previous?.cities || [], progress: 0 });
+        }
+      } finally {
+        footprintAborts.delete(year);
+        footprintJobs.delete(year);
+        if (!viewDestroyed) renderFootprint();
+      }
+    })();
+    footprintJobs.set(year, job);
+    await job;
+  }
+
+  async function lightUpCities(year, trips) {
+    if (!await requestCityConsent(trips)) return;
+    await loadFootprintCities(year, trips);
+  }
+
+  function renderFootprintCities(year, trips, cities) {
+    ensureFootprintMap();
+    const state = footprintStates.get(year);
+    const key = `${year}:${cities.map((city) => `${city.name}:${city.lat}:${city.lon}:${city.trips}`).join('|')}`;
+    if (footprintMap && key !== footprintMapKey) {
+      footprintMap.setCityMarkers(cities.map((city) => ({
+        ...city,
+        label: `${city.name} · ${t('trips.footprintCityTrips', { trips: city.trips })}`
+      })));
+      footprintMapKey = key;
+    }
+    footprintMapStatus.style.display = state?.status === 'ready' && cities.length ? 'none' : '';
+    footprintMapStatus.replaceChildren();
+    if (state?.status === 'loading') {
+      footprintMapStatus.append(t('trips.footprintCityLoading', { p: state.progress || 0 }));
+      return;
+    }
+    if (state?.status === 'error' || state?.status === 'offline') {
+      const message = state.status === 'offline' ? t('trips.footprintCityOffline') : t('trips.footprintCityFail');
+      const retry = el('button', { class: 'btn sm', onclick: () => lightUpCities(year, trips) }, t('common.retry'));
+      footprintMapStatus.append(el('span', {}, message), retry);
+      return;
+    }
+    if (state?.status === 'ready' && !cities.length) {
+      const retry = el('button', { class: 'btn sm', onclick: () => lightUpCities(year, trips) }, t('common.retry'));
+      footprintMapStatus.append(el('span', {}, t('trips.footprintCityEmpty')), retry);
+      return;
+    }
+    const load = el('button', {
+      class: 'btn sm primary', onclick: () => lightUpCities(year, trips)
+    }, icon('pin', 14), t('trips.footprintCityLoad'));
+    footprintMapStatus.append(el('span', {}, t('trips.footprintCityEmpty')), load);
+  }
+
   function renderFootprint() {
+    if (viewDestroyed) return;
     if (!allTrips.length) { footprintCard.style.display = 'none'; return; }
     const { years } = buildFootprints(allTrips);
     if (!years.length) { footprintCard.style.display = 'none'; return; }
     if (!years.some((y) => y.year === footprintYear)) footprintYear = years[0].year;
-    const fp = years.find((y) => y.year === footprintYear) || years[0];
+    const baseFp = years.find((y) => y.year === footprintYear) || years[0];
+    const trips = yearTrips(baseFp.year);
+    const cityState = footprintStates.get(baseFp.year);
+    const fp = withFootprintCities(baseFp, cityState?.cities || []);
     const units = get('units');
     const d = fmtDistance(fp.distance, units);
     const yearSel = el('select', { class: 'footprint-year', 'aria-label': t('trips.footprintTitle') },
@@ -430,6 +620,14 @@ export function createTripsView(navigate) {
         el('div', { class: 'fp-kpi' }, el('div', { class: 'v', html: `${d.v}<small>${d.u}</small>` }), el('div', { class: 'k' }, t('analysis.distance'))),
         el('div', { class: 'fp-kpi' }, el('div', { class: 'v', html: `${Math.round(fp.ascent)}<small>m</small>` }), el('div', { class: 'k' }, t('analysis.ascent'))),
         el('div', { class: 'fp-kpi' }, el('div', { class: 'v' }, String(fp.days)), el('div', { class: 'k' }, t('trips.sumDays')))),
+      el('div', { class: 'footprint-city-head' },
+        el('span', {}, t('trips.footprintCityMap')),
+        fp.cities.length ? el('span', { class: 'tag' }, t('trips.footprintCities', { n: fp.cities.length })) : null),
+      footprintMapBox,
+      fp.cities.length ? el('div', { class: 'footprint-city-list' },
+        ...fp.cities.slice(0, 12).map((city) => el('span', {
+          class: 'trip-tag', title: t('trips.footprintCityTrips', { trips: city.trips })
+        }, `${city.name} · ${city.trips}`))) : [],
       el('div', { class: 'footprint-bars' },
         ...fp.months.map((m) => {
           const md = fmtDistance(m.distance, units);
@@ -442,10 +640,21 @@ export function createTripsView(navigate) {
         imageBtn, videoBtn,
         el('div', { class: 'fp-share-note small faint' }, icon('shield', 12), t('trips.footprintShareHint'))));
     footprintCard.style.display = '';
+    renderFootprintCities(fp.year, trips, fp.cities);
+    const ids = trips.map((trip) => trip.id).sort().join(',');
+    if (hasCityConsent() && !footprintJobs.has(fp.year)
+      && (!cityState || (cityState.ids && cityState.ids !== ids))) {
+      if (navigator.onLine) void loadFootprintCities(fp.year, trips);
+      else {
+        footprintStates.set(fp.year, { status: 'offline', cities: fp.cities, ids });
+        renderFootprintCities(fp.year, trips, fp.cities);
+      }
+    }
   }
 
   async function render() {
     allTrips = await listTrips();
+    if (viewDestroyed) return;
     renderSummary();
     renderNudge();
     renderIosNudge();
@@ -677,16 +886,45 @@ export function createTripsView(navigate) {
   }
 
   on('trip:stats', async (stats) => {
-    // keep a lightweight thumbnail on the trip row
     const full = appState.activeTripFull;
     if (full && stats) {
-      const pts = full.segments.flatMap((s) => s.points);
-      await updateTrip(full.trip.id, { thumbPoints: simplify(pts, 40).slice(0, 160).map((p) => ({ lat: p.lat, lon: p.lon })) });
+      const points = thumbnailPoints(full.segments);
+      await updateTrip(full.trip.id, { thumbPoints: points }, { touch: false });
+      const current = allTrips.find((trip) => trip.id === full.trip.id);
+      if (current) current.thumbPoints = points;
+      const thumb = thumbNodes.get(full.trip.id);
+      if (thumb) thumb.innerHTML = thumbSVG(points);
+      if (current) void hydrateThumbnails([current]);
     }
   });
+  on('theme:applied', renderList);
   on('backup:restored', render);
   on('backup:exported', renderNudge);
   on('recorder:stopped', render);
 
-  return { view, refresh: render, resize: () => {} };
+  const onTripsOnline = () => {
+    if (viewDestroyed) return;
+    renderList();
+    const state = footprintStates.get(footprintYear);
+    if (!hasCityConsent() || footprintJobs.has(footprintYear)) return;
+    if (state?.status === 'offline' || state?.status === 'error') {
+      void loadFootprintCities(footprintYear, yearTrips(footprintYear));
+    }
+  };
+  window.addEventListener('online', onTripsOnline);
+
+  return {
+    view,
+    refresh: render,
+    resize: () => footprintMap?.resize(),
+    destroy: () => {
+      viewDestroyed = true;
+      window.removeEventListener('online', onTripsOnline);
+      for (const controller of footprintAborts.values()) controller.abort();
+      footprintAborts.clear();
+      footprintJobs.clear();
+      footprintMap?.destroy();
+      footprintMap = null;
+    }
+  };
 }

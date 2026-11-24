@@ -28,6 +28,7 @@ export function createExportView(getRecordMap) {
     el('h2', { class: 'page-title' }, t('export.title')),
     el('div', { class: 'small muted', style: { marginTop: '3px' } }, t('export.subtitle')));
   let curFull = null;
+  let tripVersion = 0;
   const tripSel = el('select', { style: { width: '100%' } });
   const tripLabel = el('div', { class: 'small muted', style: { marginTop: '6px' } });
   const tripCard = el('div', { class: 'card' }, el('h3', {}, icon('pin', 18), t('export.tripPick')), tripSel, tripLabel);
@@ -138,11 +139,13 @@ export function createExportView(getRecordMap) {
   posterShareBtn.onclick = () => { if (posterBlob) shareMedia(posterBlob, `localtrace-poster-${Date.now()}.png`, 'image'); };
   const posterNote = el('div', { class: 'small faint', style: { marginTop: '6px' } });
   genBtn.onclick = async () => {
-    const full = curFull;
-    if (!full) { toast(t('analysis.noTrip'), 'warn'); return; }
+    if (!curFull || !currentTripId()) { toast(t('analysis.noTrip'), 'warn'); return; }
     genBtn.disabled = true;
     genBtn.textContent = t('common.loading');
     try {
+      const loaded = await reloadCurrentTrip();
+      if (!loaded) return;
+      const { full, version } = loaded;
       const { blob, usedVectorFallback } = await generatePoster(full, {
         size: posterSize,
         privacy: privacyOpts(),
@@ -150,6 +153,7 @@ export function createExportView(getRecordMap) {
         basemapId: getRecordMap?.()?.basemapId || '',
         onProgress: (p) => { genBtn.textContent = `${t('common.loading')} ${Math.round(p * 100)}%`; }
       });
+      if (version !== tripVersion) return;
       posterBlob = blob;
       const url = URL.createObjectURL(blob);
       previewBox.innerHTML = '';
@@ -161,10 +165,11 @@ export function createExportView(getRecordMap) {
     } catch (e) {
       console.error(e);
       toast(String(e.message || e), 'err');
+    } finally {
+      genBtn.disabled = false;
+      genBtn.innerHTML = '';
+      genBtn.append(icon('photo', 15), t('export.generateShort'));
     }
-    genBtn.disabled = false;
-    genBtn.innerHTML = '';
-    genBtn.append(icon('photo', 15), t('export.generateShort'));
   };
   dlBtn.onclick = async () => {
     if (!posterBlob) return;
@@ -224,9 +229,9 @@ export function createExportView(getRecordMap) {
     : null;
   vCancelBtn.onclick = () => videoAbort?.abort();
   vGenBtn.onclick = async () => {
-    const full = curFull;
-    if (!full) { toast(t('analysis.noTrip'), 'warn'); return; }
-    videoAbort = new AbortController();
+    if (!curFull || !currentTripId()) { toast(t('analysis.noTrip'), 'warn'); return; }
+    const abort = new AbortController();
+    videoAbort = abort;
     vGenBtn.disabled = true;
     tripSel.disabled = true;
     durToggle.querySelectorAll('button').forEach((x) => { x.disabled = true; });
@@ -237,15 +242,19 @@ export function createExportView(getRecordMap) {
     vPreview.style.display = 'none';
     vNote.textContent = t('export.videoKeepVisible');
     try {
+      const loaded = await reloadCurrentTrip(abort.signal);
+      if (!loaded) return;
+      const { full, version } = loaded;
       const r = await generateTrackVideo(full, {
         privacy: privacyOpts(),
         vectorOnly: vectorCb.checked,
         basemapId: getRecordMap?.()?.basemapId || '',
         seconds: videoSeconds,
         music: musicSel.value,
-        signal: videoAbort.signal,
+        signal: abort.signal,
         onProgress: (p) => { vGenBtn.textContent = t('export.videoRendering', { p: Math.round(p * 100) }); }
       });
+      if (version !== tripVersion) return;
       videoBlob = r.blob;
       videoExt = r.mime.includes('mp4') ? 'mp4' : 'webm';
       if (videoUrl) URL.revokeObjectURL(videoUrl);
@@ -265,15 +274,16 @@ export function createExportView(getRecordMap) {
       else if (e.message === 'no-track') toast(t('export.videoNoTrack'), 'warn');
       else if (e.message === 'video-unsupported') toast(t('export.videoUnsupported'), 'warn');
       else { console.error(e); toast(String(e.message || e), 'err'); }
+    } finally {
+      if (videoAbort === abort) videoAbort = null;
+      vGenBtn.disabled = !videoOk;
+      tripSel.disabled = false;
+      musicSel.disabled = false;
+      vGenBtn.innerHTML = '';
+      vGenBtn.append(icon('play', 15), t('export.generateShort'));
+      vCancelBtn.style.display = 'none';
+      durToggle.querySelectorAll('button').forEach((x) => { x.disabled = false; });
     }
-    videoAbort = null;
-    vGenBtn.disabled = !videoOk;
-    tripSel.disabled = false;
-    musicSel.disabled = false;
-    vGenBtn.innerHTML = '';
-    vGenBtn.append(icon('play', 15), t('export.generateShort'));
-    vCancelBtn.style.display = 'none';
-    durToggle.querySelectorAll('button').forEach((x) => { x.disabled = false; });
   };
   vDlBtn.onclick = () => {
     if (!videoBlob) return;
@@ -294,11 +304,11 @@ export function createExportView(getRecordMap) {
   );
 
   // ---- standard files ----
-  function croppedFull() {
-    const full = curFull;
-    if (!full) return null;
-    const c = applyPrivacy(full, privacyOpts());
-    return { ...full, segments: c.segments, waypoints: c.waypoints };
+  async function croppedFull() {
+    const loaded = await reloadCurrentTrip();
+    if (!loaded) return null;
+    const c = applyPrivacy(loaded.full, privacyOpts());
+    return { ...loaded.full, segments: c.segments, waypoints: c.waypoints };
   }
   const fileBtn = (label, hint, fn) => {
     const b = el('button', { class: 'btn block', style: { justifyContent: 'flex-start', marginBottom: '8px' } }, icon('download', 16),
@@ -308,20 +318,20 @@ export function createExportView(getRecordMap) {
   };
   const filesCard = el('div', { class: 'card' },
     el('h3', {}, icon('download', 18), t('common.export')),
-    fileBtn(t('export.gpx'), t('export.gpxHint'), () => {
-      const f = croppedFull();
+    fileBtn(t('export.gpx'), t('export.gpxHint'), async () => {
+      const f = await croppedFull();
       if (!f) return toast(t('analysis.noTrip'), 'warn');
       exportFile(new Blob([buildGPX(f)], { type: 'application/gpx+xml' }), `${f.trip.name || 'trip'}.gpx`);
       toast(t('export.exported'), 'ok');
     }),
-    fileBtn(t('export.geojson'), 'WGS-84 · RFC 7946', () => {
-      const f = croppedFull();
+    fileBtn(t('export.geojson'), 'WGS-84 · RFC 7946', async () => {
+      const f = await croppedFull();
       if (!f) return toast(t('analysis.noTrip'), 'warn');
       exportFile(new Blob([JSON.stringify(buildGeoJSON(f), null, 1)], { type: 'application/geo+json' }), `${f.trip.name || 'trip'}.geojson`);
       toast(t('export.exported'), 'ok');
     }),
-    fileBtn(t('export.kml'), 'Google Earth / 奥维', () => {
-      const f = croppedFull();
+    fileBtn(t('export.kml'), 'Google Earth / 奥维', async () => {
+      const f = await croppedFull();
       if (!f) return toast(t('analysis.noTrip'), 'warn');
       exportFile(new Blob([buildKML(f)], { type: 'application/vnd.google-earth.kml+xml' }), `${f.trip.name || 'trip'}.kml`);
       toast(t('export.exported'), 'ok');
@@ -367,19 +377,22 @@ export function createExportView(getRecordMap) {
   }
   htmlPhotosCb.onchange = () => { htmlPhotosPref = htmlPhotosCb.checked; updateHtmlEstimate(); };
   htmlBtn.onclick = async () => {
-    const full = curFull;
-    if (!full) return toast(t('analysis.noTrip'), 'warn');
+    if (!curFull) return toast(t('analysis.noTrip'), 'warn');
     htmlBtn.disabled = true;
     htmlPhotosCb.disabled = true;
     tierButtons.forEach((b) => { b.disabled = true; });
     htmlBtn.textContent = t('export.htmlBuilding');
     try {
+      const loaded = await reloadCurrentTrip();
+      if (!loaded) return;
+      const { full, version } = loaded;
       const { html, size, photos } = await buildSelfContainedHTML(full, {
         tier: htmlTier,
         privacy: privacyOpts(),
         includePhotos: htmlTier !== 'none' && htmlPhotosCb.checked,
         onProgress: (p) => { htmlBtn.textContent = `${t('export.htmlBuilding')} ${Math.round(p * 100)}%`; }
       });
+      if (version !== tripVersion) return;
       if (size > 1_500_000) toast(t('export.htmlWarn', { size: (size / 1048576).toFixed(1) + 'MB' }), 'warn', 4000);
       exportFile(new Blob([html], { type: 'text/html' }), `${full.trip.name || 'trip'}.html`);
       toast(`${t('export.exported')} · ${(size / 1024).toFixed(0)} KB${photos ? ` · ${photos} ${t('wp.photos')}` : ''}`, 'ok');
@@ -429,9 +442,12 @@ export function createExportView(getRecordMap) {
       return false;
     }
   }
-  linkBtn.onclick = () => updateLink(false);
+  linkBtn.onclick = async () => {
+    if (!await reloadCurrentTrip()) return;
+    updateLink(false);
+  };
   copyBtn.onclick = async () => {
-    if (!linkInput.value && !updateLink(true)) {
+    if (!await reloadCurrentTrip() || !updateLink(true)) {
       toast(t('analysis.noTrip'), 'warn');
       return;
     }
@@ -446,11 +462,11 @@ export function createExportView(getRecordMap) {
   const shareBtn = el('button', { class: 'btn sm' }, icon('share', 14), t('export.shareNative'));
   shareBtn.style.display = navigator.share ? '' : 'none';
   shareBtn.onclick = async () => {
-    const full = curFull;
-    if (!full) return;
-    if (!linkInput.value) updateLink(true);
+    const loaded = await reloadCurrentTrip();
+    if (!loaded) return;
+    updateLink(true);
     const ok = await nativeShare({
-      title: full.trip.name,
+      title: loaded.full.trip.name,
       text: t('app.tagline'),
       url: linkInput.value || undefined
     });
@@ -495,11 +511,32 @@ export function createExportView(getRecordMap) {
     linkInput.value = '';
     linkNote.textContent = '';
   }
-  async function pickTrip(id) {
-    curFull = id ? await loadTripFull(id) : null;
+  function currentTripId() {
+    return tripSel.value || curFull?.trip.id || '';
+  }
+  function replaceCurrentFull(full) {
+    curFull = full;
+    tripSel.value = full?.trip.id || '';
     resetOutputs();
     refresh();
-    warmExport(curFull);
+  }
+  async function pickTrip(id) {
+    const version = ++tripVersion;
+    tripSel.value = id;
+    const full = id ? await loadTripFull(id) : null;
+    if (version !== tripVersion || currentTripId() !== id) return null;
+    replaceCurrentFull(full);
+    return full;
+  }
+  async function reloadCurrentTrip(signal = null) {
+    const id = currentTripId();
+    if (!id) return null;
+    const version = ++tripVersion;
+    const full = await loadTripFull(id);
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    if (version !== tripVersion || currentTripId() !== id) return null;
+    replaceCurrentFull(full);
+    return full ? { full, version } : null;
   }
   async function refreshTripList() {
     const trips = await listTrips();
@@ -521,10 +558,8 @@ export function createExportView(getRecordMap) {
     warmExport(curFull);
   }
   on('trip:active', (full) => {
-    if (full && full.trip.id !== curFull?.trip.id) {
-      tripSel.value = full.trip.id;
-      pickTrip(full.trip.id);
-    } else refresh();
+    tripVersion++;
+    replaceCurrentFull(full);
   });
   refreshTripList();
 

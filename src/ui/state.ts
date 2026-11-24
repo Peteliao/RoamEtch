@@ -15,8 +15,12 @@ export const appState = {
 };
 
 let recalcTimer = null;
+let activeTripRequest = 0;
+let statsRequest = 0;
 
 export async function setActiveTrip(id, { fit = false } = {}) {
+  const request = ++activeTripRequest;
+  statsRequest++;
   appState.activeTripId = id;
   set('lastTripId', id);
   if (!id) {
@@ -26,18 +30,25 @@ export async function setActiveTrip(id, { fit = false } = {}) {
     return null;
   }
   const full = await loadTripFull(id);
+  if (request !== activeTripRequest || appState.activeTripId !== id) return null;
   appState.activeTripFull = full;
   emit('trip:active', full);
   await recalcNow();
   return full;
 }
 
-export async function refreshActiveTrip() {
-  if (!appState.activeTripId) return;
-  const full = await loadTripFull(appState.activeTripId);
+export async function refreshActiveTrip(id = appState.activeTripId) {
+  if (!id) return null;
+  // Recording edits can refresh their own trip without changing the selected trip.
+  if (id !== appState.activeTripId) return loadTripFull(id);
+  const request = ++activeTripRequest;
+  statsRequest++;
+  const full = await loadTripFull(id);
+  if (request !== activeTripRequest || appState.activeTripId !== id) return null;
   appState.activeTripFull = full;
   emit('trip:active', full);
   scheduleRecalc();
+  return full;
 }
 
 export function scheduleRecalc() {
@@ -46,19 +57,23 @@ export function scheduleRecalc() {
 }
 
 export async function recalcNow() {
+  const request = ++statsRequest;
   const full = appState.activeTripFull;
   if (!full) return null;
+  const id = full.trip.id;
   emit('stats:busy');
   const stats = await computeStatsAsync(
     full.segments.map((s) => ({ id: s.id, points: s.points })),
     { ascentThreshold: get('ascentThreshold'), activity: full.trip.activity, weightKg: get('weightKg') }
   );
+  if (request !== statsRequest || appState.activeTripId !== id || appState.activeTripFull?.trip.id !== id) return null;
   const reportedDistance = full.trip.reportedDistance != null ? Number(full.trip.reportedDistance) : null;
   const resolvedStats = reportedDistance != null && isFinite(reportedDistance) && reportedDistance >= 0
     ? { ...stats, distance: reportedDistance }
     : stats;
+  await updateTrip(id, { statsCache: { ...resolvedStats, series: undefined, segments: resolvedStats.segments } });
+  if (request !== statsRequest || appState.activeTripId !== id || appState.activeTripFull?.trip.id !== id) return null;
   appState.stats = resolvedStats;
-  await updateTrip(full.trip.id, { statsCache: { ...resolvedStats, series: undefined, segments: resolvedStats.segments } });
   emit('trip:stats', resolvedStats);
   return resolvedStats;
 }

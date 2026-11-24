@@ -144,7 +144,7 @@ export async function startRewalk(tripId, mode: RewalkMode = 'full-fwd') {
     tripId, name: rewalk.name, total, mode, targetType: rewalk.targetType,
     segments: full.segments, waypoints: full.waypoints
   });
-  speak(t('rewalk.startModeAnnounce', { name: rewalk.name, mode: t(`rewalk.${MODE_KEYS[mode]}`) }));
+  speak(t('rewalk.voiceStart', { name: rewalk.name, mode: t(`rewalk.${MODE_KEYS[mode]}`) }));
   startWatch();
   return true;
 }
@@ -205,7 +205,7 @@ function finish() {
   rewalk.phase = 'finished';
   stopWatch();
   stopSim();
-  speak(t(rewalk.targetType === 'start' ? 'rewalk.arriveStart' : 'rewalk.arriveEnd'));
+  speak(t(rewalk.targetType === 'start' ? 'rewalk.voiceArriveStart' : 'rewalk.voiceArriveEnd'));
   emit('rewalk:finished', { total: rewalk.total, targetType: rewalk.targetType, mode: rewalk.mode });
 }
 

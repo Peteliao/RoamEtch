@@ -80,6 +80,9 @@ function loadTile(url) {
     img.src = url;
   });
   tileCache.set(url, p);
+  p.then((img) => {
+    if (!img && tileCache.get(url) === p) tileCache.delete(url);
+  });
   if (tileCache.size > 800) tileCache.delete(tileCache.keys().next().value);
   return p;
 }
@@ -126,7 +129,7 @@ function mapResult(bg, fit, segments, waypoints, vector, label) {
  * @returns {Promise<{bg:HTMLCanvasElement, fit, segments, waypoints, vector:boolean, label:string, darkBg:boolean}>}
  */
 export async function prepareMap({
-  w, h, pad = 90, segments, waypoints = [], basemapId = '', vectorOnly = false, onProgress
+  w, h, pad = 90, segments, waypoints = [], basemapId = '', vectorOnly = false, maxZoom = Infinity, onProgress = undefined
 }) {
   const offline = vectorOnly || isOfflineSim() || isCorsFailSim();
   const provider = offline ? null : pickProvider(basemapId);
@@ -138,7 +141,7 @@ export async function prepareMap({
   const dispSegs = cs === 'GCJ02' ? segments.map((s) => ({ ...s, points: s.points.map(conv) })) : segments;
   const dispWps = cs === 'GCJ02' ? waypoints.map(conv) : waypoints;
   const all = dispSegs.flatMap((s) => s.points);
-  const fit = mercatorFit(all, w, h, pad, provider?.maxzoom ?? 18);
+  const fit = mercatorFit(all, w, h, pad, Math.min(maxZoom ?? Infinity, provider?.maxzoom ?? 18));
 
   const bg = document.createElement('canvas');
   bg.width = w; bg.height = h;

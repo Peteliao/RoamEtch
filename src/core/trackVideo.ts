@@ -15,6 +15,8 @@ import { get } from './settings';
 import { t } from './i18n';
 import { createMusicSession } from './music';
 import { makeVideoRecorder, videoSupported } from './videoCapture';
+import { buildProfile, drawProfileChart, altitudeInUnit, distanceInUnit, speedInUnit } from './profileChart';
+import { bridgeTrackGapsForExport } from './gapRepair';
 
 export { videoSupported };
 
@@ -96,48 +98,6 @@ function drawSignalCell(ctx, x, y, avgAcc, P) {
   ctx.fillText(`${t('panel.signal')}${avgAcc != null ? ` ±${Math.round(avgAcc)}m` : ''}`, x, y + 34);
 }
 
-function drawProfileCursor(ctx, prof, meta, curD, curA, x, y, w, h, P) {
-  if (prof.length < 2) return;
-  const { minA, maxA, maxD } = meta;
-  const span = Math.max(1, maxA - minA);
-  const px = (d) => x + (d / maxD) * w;
-  const py = (a) => y + h - ((a - minA) / span) * (h - 10) - 5;
-
-  ctx.beginPath();
-  prof.forEach(([d, a], i) => { i ? ctx.lineTo(px(d), py(a)) : ctx.moveTo(px(d), py(a)); });
-  ctx.strokeStyle = P.accentLine;
-  ctx.lineWidth = 3;
-  ctx.stroke();
-
-  let n = 0;
-  while (n < prof.length && prof[n][0] <= curD) n++;
-  if (n >= 2) {
-    ctx.beginPath();
-    for (let i = 0; i < n; i++) { const [d, a] = prof[i]; i ? ctx.lineTo(px(d), py(a)) : ctx.moveTo(px(d), py(a)); }
-    ctx.strokeStyle = P.accent;
-    ctx.lineWidth = 3;
-    ctx.stroke();
-    ctx.lineTo(px(prof[n - 1][0]), y + h);
-    ctx.lineTo(px(prof[0][0]), y + h);
-    ctx.closePath();
-    ctx.fillStyle = P.accentSoft;
-    ctx.fill();
-  }
-  const cx = px(curD);
-  ctx.strokeStyle = P.amber;
-  ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(cx, y); ctx.lineTo(cx, y + h); ctx.stroke();
-  if (curA != null) {
-    ctx.fillStyle = P.amber;
-    ctx.beginPath(); ctx.arc(cx, py(curA), 7, 0, 7); ctx.fill();
-  }
-  ctx.fillStyle = P.muted;
-  ctx.font = `20px ${MONO}`;
-  ctx.textAlign = 'left';
-  ctx.fillText(`${Math.round(maxA)}m`, x + 4, y + 18);
-  ctx.fillText(`${Math.round(minA)}m`, x + 4, y + h - 6);
-}
-
 async function decodeImage(blob) {
   if (!blob) return null;
   try {
@@ -202,7 +162,7 @@ export async function generateTrackVideo(full, {
   if (!videoSupported()) throw new Error('video-unsupported');
   const musicSession = createMusicSession(music);
   try {
-  const cropped = applyPrivacy(full, privacy);
+  const cropped = await bridgeTrackGapsForExport(full, applyPrivacy(full, privacy), privacy, { signal });
   const stats = computeStats(cropped.segments, {
     ascentThreshold: get('ascentThreshold'),
     activity: full.trip.activity,
@@ -300,15 +260,8 @@ export async function generateTrackVideo(full, {
 
   const { asc: cumAsc, desc: cumDesc } = cumulativeAscentDescent(stats.series.alt, get('ascentThreshold') ?? 4);
   const render = decimate(m.segments);
-  const profAll = stats.series.alt.map((a, i) => [stats.series.d[i], a]).filter(([, a]) => a != null);
-  const pk = Math.max(1, Math.ceil(profAll.length / 1200));
-  const prof = profAll.filter((_, i) => i % pk === 0 || i === profAll.length - 1);
-  const profMeta = prof.length ? {
-    minA: Math.min(...prof.map((v) => v[1])),
-    maxA: Math.max(...prof.map((v) => v[1])),
-    maxD: stats.series.d[N - 1] || 1
-  } : null;
   const units = get('units');
+  const profile = buildProfile(stats, units, 1200);
 
   // cumulative calories along the replay (MET uses current moving average)
   const cumKcal = new Array(N);
@@ -512,7 +465,13 @@ export async function generateTrackVideo(full, {
       60, py0 + 430
     );
 
-    drawProfileCursor(ctx, prof, profMeta, stats.series.d[idx] || 0, stats.series.alt[idx], 60, py0 + 470, W - 120, 240, P);
+    drawProfileChart(ctx, profile, { x: 60, y: py0 + 470, w: W - 120, h: 240 }, P, {
+      altitudeLabel: t('panel.altitude'),
+      speedLabel: t('panel.speed'),
+      cursorD: distanceInUnit(stats.series.d[idx] || 0, units),
+      cursorAlt: stats.series.alt[idx] == null ? null : altitudeInUnit(stats.series.alt[idx], units),
+      cursorSpeed: stats.series.speed[idx] == null ? null : speedInUnit(stats.series.speed[idx], units)
+    });
 
     ctx.fillStyle = P.faint;
     ctx.font = `20px ${FONT}`;

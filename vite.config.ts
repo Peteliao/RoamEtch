@@ -53,7 +53,7 @@ export default defineConfig({
             }
           },
           {
-            urlPattern: /^https:\/\/(webrd0\d\.is\.autonavi\.com|wprd0\d\.is\.autonavi\.com)\/.*/i,
+            urlPattern: /^https:\/\/(?:(?:webrd|webst|wprd)0\d\.is\.autonavi\.com)\/.*/i,
             handler: 'CacheFirst',
             options: {
               cacheName: 'tiles-amap',

@@ -31,6 +31,7 @@ export class TrackMap {
   declare follow: boolean;
   declare liveMode: boolean;
   declare wpMarkers: Map<any, any>;
+  declare cityMarkers: any[];
   declare vertexMarkers: any[];
   declare posMarker: any;
   declare hoverMarker: any;
@@ -48,7 +49,9 @@ export class TrackMap {
   declare destroyed: boolean;
   declare map: any;
   declare _offRegion: any;
+  declare _offProbe: any;
   declare _offTheme: any;
+  declare _onOnline: (() => void) | null;
   declare _fallbackEl: HTMLElement | null;
   declare _liveZoomed: boolean;
   declare _liveFeats: Map<string, any> | null;
@@ -65,6 +68,7 @@ export class TrackMap {
     this.follow = false;
     this.liveMode = false;
     this.wpMarkers = new Map();
+    this.cityMarkers = [];
     this.vertexMarkers = [];
     this.posMarker = null;
     this.hoverMarker = null;
@@ -84,10 +88,10 @@ export class TrackMap {
 
   init(center = [116.4, 39.9], zoom = 10) {
     const offline = isOfflineSim();
-    const provider = offline ? null : getBasemap(defaultBasemapId());
+    const provider = getBasemap(defaultBasemapId());
     this.basemapId = provider?.id || null;
     this.coordSystem = provider?.coordSystem || 'WGS84';
-    this.vectorFallback = !provider;
+    this.vectorFallback = offline || !provider;
     this.map = new maplibregl.Map({
       container: this.container,
       style: (provider ? buildRasterStyle(provider) : buildVectorStyle()) as any,
@@ -135,6 +139,14 @@ export class TrackMap {
     });
     this.map.on('dragstart', () => { this.follow = false; emit('map:followoff'); });
     this._offRegion = on('region:changed', () => { if (!this.liveMode) this.refreshBasemapForRegion(); });
+    const recover = () => {
+      if (!isOfflineSim() && (this.vectorFallback || (this.tileErrors > 0 && !this.tileLoaded))) {
+        this.refreshBasemapForRegion();
+      }
+    };
+    this._offProbe = on('region:probed', recover);
+    this._onOnline = recover;
+    window.addEventListener('online', recover);
     this._offTheme = on('theme:applied', () => this._applyTheme());
     return this;
   }
@@ -168,7 +180,10 @@ export class TrackMap {
     const list = availableBasemaps();
     if (!list.length) return;
     const keep = list.find((b) => b.id === this.basemapId);
-    if (this.vectorFallback) { this.setBasemap(keep?.id || defaultBasemapId()); return; }
+    if (this.vectorFallback || (this.tileErrors > 0 && !this.tileLoaded)) {
+      this.setBasemap(keep?.id || defaultBasemapId());
+      return;
+    }
     if (!keep) this.setBasemap(list[0].id);
   }
 
@@ -196,7 +211,8 @@ export class TrackMap {
   }
 
   retryTiles() {
-    if (this.basemapId) this.setBasemap(this.basemapId);
+    const id = this.basemapId || defaultBasemapId();
+    if (id) this.setBasemap(id);
   }
 
   _showFallbackBanner() {
@@ -316,6 +332,40 @@ export class TrackMap {
   setWaypoints(waypoints = []) {
     this.waypoints = waypoints;
     this._renderWaypoints();
+  }
+
+  setCityMarkers(cities = []) {
+    for (const marker of this.cityMarkers) marker.remove();
+    this.cityMarkers = [];
+    if (!this.map) return;
+    const bounds = new maplibregl.LngLatBounds();
+    const maxTrips = Math.max(1, ...cities.map((city) => city.trips || 1));
+    for (const city of cities) {
+      const [lon, lat] = toDisplay(city.lon, city.lat, this.coordSystem);
+      const node = document.createElement('button');
+      node.className = 'city-footprint-marker';
+      node.type = 'button';
+      node.style.setProperty('--city-size', `${18 + Math.round((city.trips / maxTrips) * 10)}px`);
+      const dot = document.createElement('i');
+      const label = document.createElement('span');
+      label.textContent = city.name;
+      node.append(dot, label);
+      node.setAttribute('aria-label', city.label || city.name);
+      node.title = city.label || city.name;
+      const marker = new maplibregl.Marker({ element: node }).setLngLat([lon, lat]);
+      if (city.label) {
+        marker.setPopup(new maplibregl.Popup({ offset: 22, closeButton: false }).setText(city.label));
+        node.addEventListener('click', (e) => { e.stopPropagation(); marker.togglePopup(); });
+      }
+      marker.addTo(this.map);
+      this.cityMarkers.push(marker);
+      bounds.extend([lon, lat]);
+    }
+    if (cities.length > 1) this.map.fitBounds(bounds, { padding: 48, maxZoom: 8, duration: 650 });
+    else if (cities.length === 1) {
+      const center = bounds.getCenter();
+      this.map.flyTo({ center: [center.lng, center.lat], zoom: 5, duration: 650 });
+    }
   }
 
   _renderWaypoints() {
@@ -723,9 +773,13 @@ export class TrackMap {
   destroy() {
     this.destroyed = true;
     this._offRegion?.();
+    this._offProbe?.();
+    if (this._onOnline) window.removeEventListener('online', this._onOnline);
     this._offTheme?.();
     this._clearVertices();
     for (const [, mk] of this.wpMarkers) mk.remove();
+    for (const marker of this.cityMarkers) marker.remove();
+    this.cityMarkers = [];
     for (const [, entry] of this.meetMarkers) entry.marker.remove();
     this.meetMarkers.clear();
     this.posMarker?.remove();

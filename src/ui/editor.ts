@@ -18,8 +18,8 @@ function segById(id) {
   return appState.activeTripFull?.segments.find((s) => s.id === id);
 }
 
-async function afterEdit() {
-  await refreshActiveTrip();
+async function afterEdit(tripId = appState.activeTripId) {
+  return refreshActiveTrip(tripId);
 }
 
 // ---------------- waypoints ----------------
@@ -177,7 +177,7 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
     title: isNew ? t('wp.add') : t('wp.edit'),
     body,
     footer: [
-      !isNew ? el('button', { class: 'btn danger', onclick: async () => { m.close(); await deleteWaypointAction(wp); opts.onSaved?.(); } }, icon('trash', 15), t('common.delete')) : null,
+      !isNew ? el('button', { class: 'btn danger', onclick: async () => { m.close(); const full = await deleteWaypointAction(wp); await opts.onSaved?.(full); } }, icon('trash', 15), t('common.delete')) : null,
       el('button', { class: 'btn ghost', onclick: () => m.close() }, t('common.cancel')),
       el('button', { class: 'btn primary', onclick: save }, t('common.save'))
     ],
@@ -207,50 +207,52 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
       const created = await store.addWaypoint({ ...wp, tripId });
       pushAction({
         label: 'wp-add',
-        undo: async () => { await store.deleteWaypoint(created.id); await afterEdit(); },
-        redo: async () => { await store.db.waypoints.put(created); await afterEdit(); }
+        undo: async () => { await store.deleteWaypoint(created.id); await afterEdit(tripId); },
+        redo: async () => { await store.db.waypoints.put(created); await afterEdit(tripId); }
       });
     } else {
       const prev = await store.getWaypoint(wp.id);
       await store.updateWaypoint(wp.id, wp);
       pushAction({
         label: 'wp-edit',
-        undo: async () => { await store.db.waypoints.put(prev); await afterEdit(); },
-        redo: async () => { await store.db.waypoints.put({ ...wp }); await afterEdit(); }
+        undo: async () => { await store.db.waypoints.put(prev); await afterEdit(tripId); },
+        redo: async () => { await store.db.waypoints.put({ ...wp }); await afterEdit(tripId); }
       });
     }
     m.close();
     toast(t('wp.saved'), 'ok');
-    await afterEdit();
-    opts.onSaved?.();
+    const full = await afterEdit(tripId);
+    await opts.onSaved?.(full);
   }
 }
 
 export async function moveWaypoint(wp, lon, lat) {
+  const tripId = wp.tripId || appState.activeTripId;
   const prev = { lon: wp.lon, lat: wp.lat, alt: wp.alt };
   await store.updateWaypoint(wp.id, { lon, lat, alt: null });
   pushAction({
     label: 'wp-move',
-    undo: async () => { await store.updateWaypoint(wp.id, prev); await afterEdit(); },
-    redo: async () => { await store.updateWaypoint(wp.id, { lon, lat, alt: null }); await afterEdit(); }
+    undo: async () => { await store.updateWaypoint(wp.id, prev); await afterEdit(tripId); },
+    redo: async () => { await store.updateWaypoint(wp.id, { lon, lat, alt: null }); await afterEdit(tripId); }
   });
   toast(t('wp.dragHint'), 'info', 1500);
-  await afterEdit();
+  await afterEdit(tripId);
   scheduleAltBackfill();
 }
 
 export async function deleteWaypointAction(wp) {
   const ok = await confirmModal({ title: t('common.delete'), message: t('wp.deleteConfirm'), danger: true, confirmText: t('common.delete') });
-  if (!ok) return;
-  const full = await store.getWaypoint(wp.id);
+  if (!ok) return null;
+  const waypoint = await store.getWaypoint(wp.id);
+  const tripId = waypoint.tripId;
   await store.deleteWaypoint(wp.id);
   pushAction({
     label: 'wp-del',
-    undo: async () => { await store.db.waypoints.put(full); await afterEdit(); },
-    redo: async () => { await store.deleteWaypoint(wp.id); await afterEdit(); }
+    undo: async () => { await store.db.waypoints.put(waypoint); await afterEdit(tripId); },
+    redo: async () => { await store.deleteWaypoint(wp.id); await afterEdit(tripId); }
   });
   toast(t('wp.deleted'), 'ok');
-  await afterEdit();
+  return afterEdit(tripId);
 }
 
 // ---------------- track vertices ----------------

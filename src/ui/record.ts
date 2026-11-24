@@ -11,12 +11,12 @@ import { availableBasemaps } from '../core/providers';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine, bearing } from '../core/geo';
 import { estimateCalories } from '../core/calories';
 import { altSourceShortKey, altSourceTagClass } from '../core/elevation';
-import { loadTripFull, updateTrip, getTrip, listWaypoints, addPhotoWaypoint, deletePhotoWaypoint } from '../core/store';
+import { loadTripFull, updateTrip, getTrip, addPhotoWaypoint, deletePhotoWaypoint } from '../core/store';
 import { onBroadcast } from '../core/locks';
 import { TrackMap } from './map';
 import { WP_ICONS } from '../core/waypointMeta';
 import { rewalk, stopRewalk, toggleMute, startSim, stopSim } from '../core/rewalk';
-import { appState, setActiveTrip } from './state';
+import { appState, setActiveTrip, refreshActiveTrip } from './state';
 import { openWaypointModal, moveWaypoint, moveVertex, insertVertex, deleteVertex, undoEdit, redoEdit, histState } from './editor';
 import { el, icon, toast, modal, promptModal } from './helpers';
 import { confirmModal } from './helpers';
@@ -597,7 +597,8 @@ export function createRecordView() {
         takenAt: shot.takenAt,
         nameFor: (n) => t('record.photoNodeName', { n })
       });
-      await refreshRecordingWaypoints();
+      const full = await refreshActiveTrip(tripId);
+      refreshRecordingWaypoints(full);
       const thumbUrl = URL.createObjectURL(shot.thumb);
       return {
         ok: true,
@@ -605,7 +606,8 @@ export function createRecordView() {
         thumbUrl,
         undo: async () => {
           await deletePhotoWaypoint(saved.waypoint.id, tripId, saved.media.id);
-          await refreshRecordingWaypoints();
+          const full = await refreshActiveTrip(tripId);
+          refreshRecordingWaypoints(full);
         }
       };
     } catch (e) {
@@ -764,11 +766,10 @@ export function createRecordView() {
       ? { tripId: rec.tripId, onSaved: refreshRecordingWaypoints }
       : {};
   }
-  async function refreshRecordingWaypoints() {
-    if (!rec.tripId) return;
+  function refreshRecordingWaypoints(full) {
+    if (!full || full.trip.id !== rec.tripId) return;
     try {
-      const waypoints = await listWaypoints(rec.tripId);
-      if (map && !psActive) map.setWaypoints(waypoints);
+      if (map && !psActive) map.setWaypoints(full.waypoints);
     } catch (e) {
       console.warn('waypoint refresh failed', e);
     }

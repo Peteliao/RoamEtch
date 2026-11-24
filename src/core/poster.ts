@@ -11,39 +11,18 @@ import { canvasPalette } from './palette';
 import { loadBrandFonts, drawBrandBlock, drawSignalChip, SPORT_FONT } from './brand';
 import { tripTimeInfo, routePlaceNames } from './shareInfo';
 import { t } from './i18n';
+import { buildProfile, drawProfileChart } from './profileChart';
+import { bridgeTrackGapsForExport } from './gapRepair';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
 const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
 
 function drawProfile(ctx, stats, x, y, w, h, P) {
-  const alts = stats.series.alt;
-  const ds = stats.series.d;
-  if (!alts.some((a) => a != null) || ds.length < 2) return;
-  const valid = alts.map((a, i) => [ds[i], a]).filter(([, a]) => a != null);
-  if (valid.length < 2) return;
-  const minA = Math.min(...valid.map((v) => v[1]));
-  const maxA = Math.max(...valid.map((v) => v[1]));
-  const maxD = ds[ds.length - 1] || 1;
-  const span = Math.max(1, maxA - minA);
-  ctx.beginPath();
-  valid.forEach(([d, a], i) => {
-    const px = x + (d / maxD) * w;
-    const py = y + h - ((a - minA) / span) * (h - 8) - 4;
-    i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+  const profile = buildProfile(stats, get('units'), 1200);
+  drawProfileChart(ctx, profile, { x, y, w, h }, P, {
+    altitudeLabel: t('panel.altitude'),
+    speedLabel: t('panel.speed')
   });
-  ctx.strokeStyle = P.accent;
-  ctx.lineWidth = 3;
-  ctx.stroke();
-  ctx.lineTo(x + w, y + h);
-  ctx.lineTo(x, y + h);
-  ctx.closePath();
-  ctx.fillStyle = P.accentSoft;
-  ctx.fill();
-  ctx.fillStyle = P.muted;
-  ctx.font = `20px ${MONO}`;
-  ctx.textAlign = 'left';
-  ctx.fillText(`${Math.round(maxA)}m`, x + 4, y + 18);
-  ctx.fillText(`${Math.round(minA)}m`, x + 4, y + h - 6);
 }
 
 function drawCaloriesCell(stats) {
@@ -191,7 +170,9 @@ function drawSquarePanel(ctx, full, stats, score, W, H, mapH, P, time, places) {
   const gap = 16, cw = (W - 120 - gap * 3) / 4, ch = 92, cy = py + 186;
   cells.forEach(([v, u, k], i) => drawStatCard(ctx, 60 + i * (cw + gap), cy, cw, ch, v, u, k, P));
 
-  drawBrandBlock(ctx, 60, H - 160, 130, P, W - 120 - 150);
+  const brandY = H - 110;
+  drawProfile(ctx, stats, 60, py + 300, W - 120, Math.max(150, brandY - 30 - py - 300), P);
+  drawBrandBlock(ctx, 60, brandY, 100, P, W - 120 - 115);
 }
 
 /**
@@ -206,7 +187,7 @@ export async function generatePoster(full, {
 }: any = {}): Promise<any> {
   const P = canvasPalette();
   await loadBrandFonts();
-  const cropped = applyPrivacy(full, privacy);
+  const cropped = await bridgeTrackGapsForExport(full, applyPrivacy(full, privacy), privacy);
   const stats = computeStats(cropped.segments, {
     ascentThreshold: get('ascentThreshold'),
     activity: full.trip.activity,
@@ -227,7 +208,7 @@ export async function generatePoster(full, {
   const ctx = canvas.getContext('2d');
 
   if (size === 'square') {
-    const mapH = 600;
+    const mapH = 480;
     const m = await prepareMap({
       w: W, h: mapH, pad: 80, segments: cropped.segments, waypoints: cropped.waypoints,
       basemapId, vectorOnly, onProgress: (p) => { mapP = p; report(); }

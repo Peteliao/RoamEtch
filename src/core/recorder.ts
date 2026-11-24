@@ -50,6 +50,8 @@ let flushTimer = null;
 let saveRetryTimer = null;
 let flushChain = Promise.resolve(true);
 let tickTimer = null;
+let geoRetryTimer = null;
+let geoRetryAttempts = 0;
 let altSmooth = null;
 let altRef = null;
 let pausedAt = 0;
@@ -83,6 +85,21 @@ function emitPersistence() {
 function clearTimer(timer) {
   if (timer) clearTimeout(timer);
   return null;
+}
+
+function clearGeoRetry() {
+  geoRetryTimer = clearTimer(geoRetryTimer);
+  geoRetryAttempts = 0;
+}
+
+function scheduleGeoRetry() {
+  if (geoRetryTimer || rec.status !== 'recording' || rec.simulated || rec.permissionDenied) return;
+  const delay = Math.min(30_000, 3000 * 2 ** Math.min(geoRetryAttempts, 3));
+  geoRetryAttempts++;
+  geoRetryTimer = setTimeout(() => {
+    geoRetryTimer = null;
+    retryGeolocation();
+  }, delay);
 }
 
 function resetSaveState() {
@@ -119,6 +136,8 @@ export async function startRecording({ tripId = null, name = '', activity = null
       lockHeld = true;
     }
     rec.simulated = simulated;
+    clearGeoRetry();
+    lastWatchRestart = 0;
     rec.filteredCount = 0;
     rec.permissionDenied = false;
     rec.geoError = null;
@@ -196,19 +215,23 @@ function onGeoError(err) {
   if (err.code === 1) {
     rec.permissionDenied = true;
     rec.geoError = 'denied';
+    clearGeoRetry();
     emit('recorder:geoerror', { code: 'denied' });
     emit('recorder:denied');
     void pauseRecording();
-  } else {
-    // code 2 = OS location off / no source; code 3 = timeout (weak signal)
-    rec.geoError = err.code === 2 ? 'unavailable' : 'timeout';
-    emit('recorder:geoerror', { code: rec.geoError });
-    if (err.code === 2) void pauseRecording();
+    return;
   }
+  const code = err.code === 2 ? 'unavailable' : 'timeout';
+  if (rec.geoError !== code) {
+    rec.geoError = code;
+    emit('recorder:geoerror', { code });
+  }
+  scheduleGeoRetry();
 }
 
 function onGeoPosition(pos) {
   if (rec.status !== 'recording' || rec.simulated) return;
+  clearGeoRetry();
   if (rec.geoError && rec.geoError !== 'denied') {
     rec.geoError = null;
     emit('recorder:geoerror', { code: null });
@@ -236,6 +259,7 @@ function startWatch() {
       (err) => { if (epoch === watchEpoch) onGeoError(err); },
       watchOptions()
     );
+    lastWatchRestart = Date.now();
     return true;
   } catch (e) {
     console.error('watchPosition failed', e);
@@ -262,20 +286,20 @@ export function retryGeolocation() {
   if (!navigator.geolocation) {
     rec.permissionDenied = true;
     rec.geoError = 'denied';
+    clearGeoRetry();
     emit('recorder:geoerror', { code: 'denied' });
     emit('recorder:denied');
     void pauseRecording();
     return;
   }
-  rec.geoError = null;
+  geoRetryTimer = clearTimer(geoRetryTimer);
   rec.lastFixWall = Date.now();
   armResumeBreak();
   if (!startWatch()) {
-    void pauseRecording();
+    scheduleGeoRetry();
     return;
   }
   locateNow();
-  emit('recorder:geoerror', { code: null });
 }
 
 function stopWatch() {
@@ -679,11 +703,7 @@ function startTick() {
           rec.geoError = 'silent';
           emit('recorder:geoerror', { code: 'silent' });
         }
-        if (Date.now() - lastWatchRestart > 60_000) {
-          lastWatchRestart = Date.now();
-          startWatch();
-          locateNow();
-        }
+        if (!geoRetryTimer && Date.now() - lastWatchRestart > 5000) retryGeolocation();
       }
       emit('recorder:tick', { live: rec.live });
     }
@@ -693,6 +713,7 @@ function stopTick() { if (tickTimer) { clearInterval(tickTimer); tickTimer = nul
 
 export async function pauseRecording() {
   if (rec.status !== 'recording') return false;
+  clearGeoRetry();
   suspendFixIngest = true;
   if (!rec.simulated) stopWatch();
   await fixChain.catch(() => {});
@@ -754,6 +775,8 @@ export async function resumeRecording() {
     rec.lastPoint = null;
     rec.live.segCount++;
     rec.status = 'recording';
+    clearGeoRetry();
+    lastWatchRestart = 0;
     rec.startedAt = Date.now() - (rec.live?.duration || 0);
     rec.permissionDenied = false;
     rec.geoError = null;
@@ -794,6 +817,7 @@ export function stopRecording() {
 
 async function doStopRecording() {
   if (rec.status === 'idle' || rec.status === 'finished') return null;
+  clearGeoRetry();
   suspendFixIngest = true;
   stopWatch();
   stopTick();
@@ -910,15 +934,16 @@ document.addEventListener('visibilitychange', () => {
     const gapMs = now - hiddenAt;
     const silentMs = now - Math.max(hiddenAt, rec.lastFixT || 0);
     hiddenAt = 0;
-    if (rec.status === 'recording' && !rec.simulated) {
-      // iOS often retires the watch silently while locked; rebuild it and ask
-      // for one fresh high-accuracy fix immediately.
-      armResumeBreak();
-      startWatch();
-      locateNow();
-    }
+    if (rec.status === 'recording' && !rec.simulated) retryGeolocation();
     if (gapMs > BG_NOTICE_MS) {
       emit('recorder:background', { gapMs, silentMs, autoBreak: breakOnNextFix });
     }
   }
 });
+
+function recoverRecordingLocation() {
+  if (document.visibilityState !== 'visible' || rec.status !== 'recording' || rec.simulated) return;
+  if (rec.geoError || Date.now() - (rec.lastFixWall || rec.startedAt) > SILENT_MS) retryGeolocation();
+}
+window.addEventListener('online', recoverRecordingLocation);
+window.addEventListener('focus', recoverRecordingLocation);

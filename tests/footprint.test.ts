@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFootprints, recapFootprint } from '../src/core/footprint';
+import { aggregateCityFootprints, buildFootprints, recapFootprint } from '../src/core/footprint';
 
 function trip(createdAt, distance, ascent = 100, duration = 3600_000) {
   return { createdAt, statsCache: { distance, ascent, duration } };
@@ -36,6 +36,28 @@ describe('footprint statistics', () => {
     expect(years).toEqual([]);
     expect(current.trips).toBe(0);
     expect(current.months).toHaveLength(12);
+  });
+});
+
+describe('city footprint aggregation', () => {
+  it('counts unique trips and visits per city', () => {
+    const cities = aggregateCityFootprints([
+      { trip: { id: 'a', createdAt: 100 }, cities: [{ name: '杭州', lat: 30.27, lon: 120.15 }] },
+      { trip: { id: 'a', createdAt: 100 }, cities: [{ name: '杭州', lat: 30.27, lon: 120.15 }] },
+      { trip: { id: 'b', createdAt: 200 }, cities: [{ name: '杭州', lat: 30.27, lon: 120.15 }, { name: '上海', lat: 31.23, lon: 121.47 }] }
+    ]);
+    expect(cities[0]).toMatchObject({ name: '杭州', trips: 2, visits: 3, firstAt: 100, lastAt: 200 });
+    expect(cities[0].tripIds).toEqual(['a', 'b']);
+    expect(cities[1].name).toBe('上海');
+  });
+
+  it('merges repeated city names from different rounded sample points', () => {
+    const cities = aggregateCityFootprints([
+      { trip: { id: 'a', createdAt: 100 }, cities: [{ name: '杭州', lat: 30.27, lon: 120.15 }] },
+      { trip: { id: 'b', createdAt: 200 }, cities: [{ name: ' 杭州 ', lat: 30.28, lon: 120.16 }] }
+    ]);
+    expect(cities).toHaveLength(1);
+    expect(cities[0]).toMatchObject({ name: '杭州', trips: 2, visits: 2, lat: 30.275, lon: 120.155 });
   });
 });
 

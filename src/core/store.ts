@@ -29,13 +29,13 @@ export async function createTrip({ name, activity = 'hike', status = 'recording'
 }
 export const getTrip = (id) => db.trips.get(id);
 export const listTrips = () => db.trips.orderBy('updatedAt').reverse().toArray();
-export async function updateTrip(id, patch) {
+export async function updateTrip(id, patch, { touch = true }: { touch?: boolean } = {}) {
   const current = patch.activity != null ? await db.trips.get(id) : null;
   const clearReported = current?.reportedDistance != null && current.activity !== patch.activity;
   await db.trips.update(id, {
     ...patch,
     ...(clearReported ? { reportedDistance: null } : {}),
-    updatedAt: Date.now()
+    ...(touch ? { updatedAt: Date.now() } : {})
   });
 }
 export async function deleteTrip(id) {

@@ -7,6 +7,7 @@ import { armKeepAlive } from '../core/keepalive';
 import { processPhoto } from '../core/photos';
 import { saveOriginalPhoto } from '../core/deviceSave';
 import { CHAT_IMAGE_MAX_BYTES, CHAT_IMAGE_MAX_EDGE, LOCAL_IMAGE_MAX_PIXELS, chatImageLadder, readLocalImageHeader } from '../core/chatImage';
+import { cameraFocusPoint, requestCameraFocus } from './cameraFocus';
 
 export type CameraFix = {
   lat: number;
@@ -67,6 +68,15 @@ let activeCamera: { close: () => void } | null = null;
 
 export function cameraApiAvailable() {
   return !!navigator.mediaDevices?.getUserMedia;
+}
+
+function supportedFocusConstraints(track: MediaStreamTrack) {
+  try {
+    const ctor = globalThis.MediaStreamTrack as any;
+    return ctor?.getSupportedConstraints?.() || (track as any).getSupportedConstraints?.() || null;
+  } catch {
+    return null;
+  }
 }
 
 function lowDataMode() {
@@ -208,6 +218,8 @@ export function openCamera(opts: CameraOptions) {
   let idleTimer = 0;
   let hintTimer = 0;
   let chipTimer = 0;
+  let focusTimer = 0;
+  let focusSeq = 0;
   let lockTimer = 0;
   let lockTick = 0;
   let preview: HTMLElement | null = null;
@@ -248,6 +260,7 @@ export function openCamera(opts: CameraOptions) {
   const hint = el('div', { class: 'cam-hint' });
   const flash = el('div', { class: 'cam-flash' });
   const toastEl = el('div', { class: 'cam-toast', hidden: true });
+  const focusRing = el('div', { class: 'cam-focus-ring', hidden: true, 'aria-hidden': 'true' });
   const chip = el('div', { class: 'cam-chip', hidden: true });
 
   const shutterDot = el('span', { class: 'cam-shutter-dot' });
@@ -260,7 +273,7 @@ export function openCamera(opts: CameraOptions) {
   }, icon('refresh', 23), el('span', {}, t('camera.flip')));
   const leftSlot = opts.mode === 'chat' ? albumBtn : el('span', { class: 'cam-side-spacer' });
   const bottom = el('div', { class: 'cam-bottom' }, leftSlot, shutter, flipBtn);
-  const stage = el('div', { class: 'cam-stage' }, video, flash, top, hint, toastEl, chip, bottom);
+  const stage = el('div', { class: 'cam-stage' }, video, flash, focusRing, top, hint, toastEl, chip, bottom);
   const overlay = el('div', { class: 'cam-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': title.textContent }, stage);
   document.body.append(overlay);
 
@@ -274,6 +287,7 @@ export function openCamera(opts: CameraOptions) {
     clearTimeout(idleTimer);
     clearInterval(hintTimer);
     clearTimeout(chipTimer);
+    clearTimeout(focusTimer);
     clearInterval(lockTick);
     clearTimeout(lockTimer);
     stopStream();
@@ -359,14 +373,21 @@ export function openCamera(opts: CameraOptions) {
 
   function camToast(text: string, type: 'info' | 'ok' | 'warn' | 'err' = 'info') {
     toastEl.textContent = text;
+    toastEl.hidden = false;
     toastEl.className = `cam-toast show ${type}`;
     clearTimeout((toastEl as any)._timer);
     (toastEl as any)._timer = setTimeout(() => {
       toastEl.className = 'cam-toast';
+      toastEl.hidden = true;
     }, 2600);
   }
 
   function stopTracks() {
+    focusSeq++;
+    clearTimeout(focusTimer);
+    focusTimer = 0;
+    focusRing.hidden = true;
+    focusRing.classList.remove('show');
     if (!stream) return;
     for (const track of stream.getTracks()) {
       try { track.stop(); } catch { /* already ended */ }
@@ -407,6 +428,39 @@ export function openCamera(opts: CameraOptions) {
     const track = stream?.getVideoTracks?.()[0];
     const caps = (track as any)?.getCapabilities?.();
     torchBtn.hidden = !(facing === 'environment' && caps?.torch);
+  }
+
+  async function focusAt(clientX: number, clientY: number) {
+    if (closed || !videoReady || busy || preview) return;
+    const track = stream?.getVideoTracks?.()[0];
+    if (!track) return;
+    const rect = video.getBoundingClientRect();
+    const point = cameraFocusPoint(clientX, clientY, rect, video.videoWidth, video.videoHeight);
+    if (!point) return;
+    const seq = ++focusSeq;
+    clearTimeout(focusTimer);
+    focusTimer = 0;
+    focusRing.hidden = true;
+    focusRing.classList.remove('show');
+    const applied = await requestCameraFocus(track, point, supportedFocusConstraints(track));
+    if (!applied || closed || seq !== focusSeq || stream?.getVideoTracks?.()[0] !== track) return;
+
+    const radius = Math.min(36, rect.width / 2, rect.height / 2);
+    const x = Math.max(radius, Math.min(rect.width - radius, clientX - rect.left));
+    const y = Math.max(radius, Math.min(rect.height - radius, clientY - rect.top));
+    focusRing.style.left = `${x}px`;
+    focusRing.style.top = `${y}px`;
+    clearTimeout(focusTimer);
+    focusRing.hidden = false;
+    focusRing.classList.remove('show');
+    void focusRing.offsetWidth;
+    focusRing.classList.add('show');
+    focusTimer = window.setTimeout(() => {
+      focusRing.hidden = true;
+      focusRing.classList.remove('show');
+      focusTimer = 0;
+    }, 900);
+    camToast(t('camera.focusOk'), 'ok');
   }
 
   async function startStream() {
@@ -803,6 +857,7 @@ export function openCamera(opts: CameraOptions) {
     }
   }
 
+  video.addEventListener('click', (event) => { void focusAt(event.clientX, event.clientY); });
   shutter.addEventListener('click', () => {
     if (opts.mode === 'chat') {
       if (busy || !videoReady) return;

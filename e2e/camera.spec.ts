@@ -8,13 +8,66 @@ const ONE_PX_PNG = Buffer.from(
   'base64'
 );
 
-async function openSimCamera(page: Page) {
+async function openSimRecord(page: Page) {
   await blockExternal(page);
   await page.goto('/?sim=1');
   await expect(page.locator('#view-record.active')).toBeVisible({ timeout: 30_000 });
+}
+
+async function openSimCamera(page: Page) {
+  await openSimRecord(page);
   await page.locator('.rec-btn.camera').click();
   await expect(page.locator('.cam-overlay')).toBeVisible();
   await expect(page.locator('.cam-shutter')).toBeEnabled({ timeout: 20_000 });
+}
+
+async function installCameraFocusMock(page: Page, opts: { supported?: boolean; capabilities?: boolean } = {}) {
+  await page.evaluate((options) => {
+    const w = window as any;
+    const state = w.__cameraFocusMock = {
+      supported: options.supported ?? true,
+      capabilities: options.capabilities ?? true,
+      reject: false,
+      confirm: true,
+      calls: [] as any[],
+      settings: { focusMode: 'continuous', pointsOfInterest: [] as Array<{ x: number; y: number }> }
+    };
+    Object.defineProperty(window.MediaStreamTrack, 'getSupportedConstraints', {
+      configurable: true,
+      value: () => state.supported ? { focusMode: true, pointsOfInterest: true } : { focusMode: false, pointsOfInterest: false }
+    });
+    const media = navigator.mediaDevices;
+    const getUserMedia = media.getUserMedia.bind(media);
+    media.getUserMedia = async (constraints) => {
+      const stream = await getUserMedia(constraints);
+      for (const track of stream.getVideoTracks()) {
+        const getSettings = track.getSettings.bind(track);
+        track.getCapabilities = () => state.capabilities
+          ? { focusMode: ['continuous', 'single-shot'], pointsOfInterest: true } as any
+          : { focusMode: [], pointsOfInterest: false } as any;
+        track.getSettings = () => ({
+          ...getSettings(),
+          focusMode: state.settings.focusMode,
+          pointsOfInterest: state.settings.pointsOfInterest.map((point: { x: number; y: number }) => ({ ...point }))
+        } as any);
+        track.applyConstraints = async (constraints) => {
+          const focus = constraints as any;
+          state.calls.push({
+            focusMode: focus.focusMode,
+            pointsOfInterest: focus.pointsOfInterest?.map((point: { x: number; y: number }) => ({ ...point }))
+          });
+          if (state.reject) throw new DOMException('Focus unsupported', 'OverconstrainedError');
+          if (state.confirm) {
+            state.settings = {
+              focusMode: focus.focusMode,
+              pointsOfInterest: focus.pointsOfInterest.map((point: { x: number; y: number }) => ({ ...point }))
+            };
+          }
+        };
+      }
+      return stream;
+    };
+  }, opts);
 }
 
 function jpegHeaderBuffer(width: number, height: number) {
@@ -44,6 +97,95 @@ async function enterOledLock(page: Page) {
   await expect(page.locator('#oled-dash.active')).toBeVisible();
   await expect(page.locator('.ps-cam-act')).toBeVisible();
 }
+
+test('camera tap maps cover-cropped coordinates and shows focus only after constraints apply', async ({ page }) => {
+  await openSimRecord(page);
+  await installCameraFocusMock(page);
+  await page.locator('.rec-btn.camera').click();
+  await expect(page.locator('.cam-shutter')).toBeEnabled({ timeout: 20_000 });
+
+  const video = page.locator('.cam-video');
+  const metrics = await video.evaluate((node) => {
+    const rect = (node as HTMLVideoElement).getBoundingClientRect();
+    return {
+      left: rect.left, top: rect.top, width: rect.width, height: rect.height,
+      videoWidth: (node as HTMLVideoElement).videoWidth,
+      videoHeight: (node as HTMLVideoElement).videoHeight
+    };
+  });
+  const position = { x: Math.round(metrics.width * 0.75), y: Math.round(metrics.height * 0.58) };
+  await video.click({ position });
+
+  await expect(page.locator('.cam-focus-ring')).toBeVisible();
+  await expect(page.locator('.cam-toast')).toBeVisible();
+  await expect(page.locator('.cam-toast')).toContainText('已对焦');
+  const result = await page.evaluate(() => {
+    const state = (window as any).__cameraFocusMock;
+    return { calls: state.calls, settings: state.settings };
+  });
+  expect(result.calls).toHaveLength(1);
+  expect(result.calls[0].focusMode).toBe('continuous');
+  const scale = Math.max(metrics.width / metrics.videoWidth, metrics.height / metrics.videoHeight);
+  const renderedWidth = metrics.videoWidth * scale;
+  const renderedHeight = metrics.videoHeight * scale;
+  const expected = {
+    x: (position.x - (metrics.width - renderedWidth) / 2) / renderedWidth,
+    y: (position.y - (metrics.height - renderedHeight) / 2) / renderedHeight
+  };
+  expect(result.calls[0].pointsOfInterest).toHaveLength(1);
+  expect(result.calls[0].pointsOfInterest[0].x).toBeCloseTo(expected.x, 5);
+  expect(result.calls[0].pointsOfInterest[0].y).toBeCloseTo(expected.y, 5);
+  expect(result.settings.pointsOfInterest[0].x).toBeCloseTo(expected.x, 5);
+  expect(result.settings.pointsOfInterest[0].y).toBeCloseTo(expected.y, 5);
+
+  await page.locator('.cam-shutter').click();
+  await expect(page.locator('.cam-chip')).toContainText('已保存拍照节点 #1');
+});
+
+test('camera focus silently degrades when capabilities, constraints, or settings confirmation fail', async ({ page }) => {
+  await openSimRecord(page);
+  await installCameraFocusMock(page, { supported: false });
+  await page.locator('.rec-btn.camera').click();
+  await expect(page.locator('.cam-shutter')).toBeEnabled({ timeout: 20_000 });
+  const video = page.locator('.cam-video');
+
+  await video.click();
+  await expect(page.locator('.cam-focus-ring')).toBeHidden();
+  expect(await page.evaluate(() => (window as any).__cameraFocusMock.calls.length)).toBe(0);
+
+  await page.evaluate(() => {
+    const state = (window as any).__cameraFocusMock;
+    state.supported = true;
+    state.capabilities = false;
+  });
+  await video.click();
+  await expect(page.locator('.cam-focus-ring')).toBeHidden();
+  expect(await page.evaluate(() => (window as any).__cameraFocusMock.calls.length)).toBe(0);
+
+  await page.evaluate(() => {
+    const state = (window as any).__cameraFocusMock;
+    state.capabilities = true;
+    state.reject = true;
+  });
+  await video.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__cameraFocusMock.calls.length)).toBe(1);
+  await expect(page.locator('.cam-focus-ring')).toBeHidden();
+  await expect(page.locator('.cam-toast')).not.toHaveClass(/show/);
+
+  await page.evaluate(() => {
+    const state = (window as any).__cameraFocusMock;
+    state.reject = false;
+    state.confirm = false;
+  });
+  await video.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__cameraFocusMock.calls.length)).toBe(2);
+  await expect(page.locator('.cam-focus-ring')).toBeHidden();
+  await expect(page.locator('.cam-toast')).not.toHaveClass(/show/);
+  await expect(page.locator('.cam-toast')).not.toContainText('已对焦');
+
+  await page.locator('.cam-shutter').click();
+  await expect(page.locator('.cam-chip')).toContainText('已保存拍照节点 #1');
+});
 
 test('quick camera saves a photo waypoint, supports undo and burst count', async ({ page }) => {
   await openSimCamera(page);

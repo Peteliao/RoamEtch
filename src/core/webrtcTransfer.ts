@@ -15,6 +15,8 @@ export const RTC_HIGH_WATER_MARK = 256 * 1024;
 export const RTC_LOW_WATER_MARK = 64 * 1024;
 export const RTC_CONNECT_TIMEOUT_MS = 10_000;
 export const RTC_IDLE_TIMEOUT_MS = 30_000;
+export const RTC_ICE_RESTART_DELAY_MS = 2500;
+export const RTC_MAX_ICE_RESTARTS = 1;
 export const RTC_MAX_SEND_SESSIONS = 2;
 
 export type P2PErrorCode =
@@ -87,6 +89,9 @@ type TransferSession = {
   localCandidates: RTCIceCandidateInit[];
   connectTimer: ReturnType<typeof setTimeout> | null;
   idleTimer: ReturnType<typeof setTimeout> | null;
+  iceRestartTimer: ReturnType<typeof setTimeout> | null;
+  iceRestarts: number;
+  iceRestarting: boolean;
   chunks: ArrayBuffer[];
   receivedBytes: number;
   meta: FileMeta | null;
@@ -169,6 +174,9 @@ export class P2PTransferManager {
       localCandidates: [],
       connectTimer: null,
       idleTimer: null,
+      iceRestartTimer: null,
+      iceRestarts: 0,
+      iceRestarting: false,
       chunks: [],
       receivedBytes: 0,
       meta: null,
@@ -214,7 +222,7 @@ export class P2PTransferManager {
     if (signal.type === 'abort') {
       if (signal.payload.fileId && signal.payload.fileId !== session.fileId) return;
       if (session.state === 'complete') this.closeSession(session);
-      else this.failSession(session, 'aborted');
+      else this.failSession(session, signal.payload.reason === 'ice-timeout' ? 'timeout' : 'aborted');
       return;
     }
     if (signal.type === 'offer') {
@@ -237,6 +245,15 @@ export class P2PTransferManager {
   closePeer(peerId: string) {
     for (const session of [...this.sessions.values()]) {
       if (session.peerId === peerId) this.closeSession(session);
+    }
+  }
+
+  recover() {
+    for (const session of [...this.sessions.values()]) {
+      if (session.role !== 'sender' || session.transferStarted) continue;
+      const state = session.pc?.iceConnectionState;
+      if (state === 'disconnected') this.scheduleIceRestart(session);
+      else if (state === 'failed') this.handleIceFailure(session);
     }
   }
 
@@ -296,23 +313,26 @@ export class P2PTransferManager {
   }
 
   private async handleOffer(session: TransferSession, signal: RtcSignalMessage) {
-    if (session.role !== 'receiver' || session.state !== 'requesting' || !signal.payload.sdp) return;
-    let pc: RTCPeerConnection;
-    try {
-      pc = this.attachPeer(session);
-    } catch {
-      this.failSession(session, 'unsupported');
-      return;
-    }
-    session.state = 'connecting';
-    pc.ondatachannel = (event) => {
-      if (session.closed) return;
-      if (event.channel.label !== RTC_DATA_CHANNEL_LABEL || session.dc) {
-        this.failSession(session, 'protocol', true);
+    if (session.role !== 'receiver' || !signal.payload.sdp) return;
+    if (session.state !== 'requesting' && !(session.remoteReady && session.pc)) return;
+    let pc = session.pc;
+    if (!pc) {
+      try {
+        pc = this.attachPeer(session);
+      } catch {
+        this.failSession(session, 'unsupported');
         return;
       }
-      this.attachChannel(session, event.channel);
-    };
+      pc.ondatachannel = (event) => {
+        if (session.closed) return;
+        if (event.channel.label !== RTC_DATA_CHANNEL_LABEL || session.dc) {
+          this.failSession(session, 'protocol', true);
+          return;
+        }
+        this.attachChannel(session, event.channel);
+      };
+    }
+    session.state = 'connecting';
     try {
       await pc.setRemoteDescription(signal.payload.sdp);
       if (session.closed) return;
@@ -387,6 +407,9 @@ export class P2PTransferManager {
       localCandidates: [],
       connectTimer: null,
       idleTimer: null,
+      iceRestartTimer: null,
+      iceRestarts: 0,
+      iceRestarting: false,
       chunks: [],
       receivedBytes: 0,
       meta: null,
@@ -415,13 +438,77 @@ export class P2PTransferManager {
     };
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState;
-      if (state === 'failed') this.failSession(session, 'timeout', true, 'ice-timeout');
+      if (state === 'failed') this.handleIceFailure(session);
       else if (state === 'closed' && !session.closed) this.failSession(session, 'closed');
     };
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'failed') this.failSession(session, 'timeout', true, 'ice-timeout');
+      const state = pc.iceConnectionState;
+      this.clearTimer(session.iceRestartTimer);
+      session.iceRestartTimer = null;
+      if (state === 'connected') return;
+      if (state === 'disconnected') this.scheduleIceRestart(session);
+      else if (state === 'failed') this.handleIceFailure(session);
     };
     return pc;
+  }
+
+  private canRestartIce(session: TransferSession) {
+    return !session.closed && session.role === 'sender' && !session.transferStarted
+      && session.offerSent && !session.iceRestarting && session.iceRestarts < RTC_MAX_ICE_RESTARTS
+      && typeof session.pc?.restartIce === 'function';
+  }
+
+  private scheduleIceRestart(session: TransferSession) {
+    if (!this.canRestartIce(session) || session.iceRestartTimer) return;
+    session.iceRestartTimer = setTimeout(() => {
+      session.iceRestartTimer = null;
+      void this.restartIce(session);
+    }, RTC_ICE_RESTART_DELAY_MS);
+  }
+
+  private handleIceFailure(session: TransferSession) {
+    if (session.iceRestarting) return;
+    if (this.canRestartIce(session)) {
+      void this.restartIce(session);
+      return;
+    }
+    this.failSession(session, 'timeout', true, 'ice-timeout');
+  }
+
+  private async restartIce(session: TransferSession) {
+    if (!this.canRestartIce(session)) return false;
+    const pc = session.pc!;
+    this.clearTimer(session.iceRestartTimer);
+    session.iceRestartTimer = null;
+    session.iceRestarting = true;
+    session.iceRestarts++;
+    session.remoteReady = false;
+    session.offerSent = false;
+    this.armConnectTimeout(session);
+    try {
+      pc.restartIce!();
+      const offer = await pc.createOffer();
+      if (session.closed) return true;
+      await pc.setLocalDescription(offer);
+      if (session.closed) return true;
+      const sent = await this.sendSignal(session, 'offer', { sdp: { type: 'offer', sdp: pc.localDescription?.sdp || offer.sdp || '' } });
+      if (session.closed) return true;
+      if (!sent) {
+        this.failSession(session, 'offline');
+        return true;
+      }
+      session.offerSent = true;
+      for (const candidate of session.localCandidates.splice(0)) {
+        if (session.closed) return true;
+        await this.sendSignal(session, 'ice', { candidate });
+      }
+      return true;
+    } catch {
+      this.failSession(session, 'timeout', true, 'ice-timeout');
+      return true;
+    } finally {
+      session.iceRestarting = false;
+    }
   }
 
   private attachChannel(session: TransferSession, channel: RTCDataChannel) {
@@ -448,6 +535,9 @@ export class P2PTransferManager {
     if (!channelOpen || session.closed || session.state === 'complete') return;
     this.clearTimer(session.connectTimer);
     session.connectTimer = null;
+    this.clearTimer(session.iceRestartTimer);
+    session.iceRestartTimer = null;
+    session.iceRestarting = false;
     session.state = 'connected';
     this.armActivityTimeout(session);
   }
@@ -663,8 +753,11 @@ export class P2PTransferManager {
     session.closed = true;
     this.clearTimer(session.connectTimer);
     this.clearTimer(session.idleTimer);
+    this.clearTimer(session.iceRestartTimer);
     session.connectTimer = null;
     session.idleTimer = null;
+    session.iceRestartTimer = null;
+    session.iceRestarting = false;
     this.sessions.delete(session.id);
     if (session.dc) {
       session.dc.onopen = null;
