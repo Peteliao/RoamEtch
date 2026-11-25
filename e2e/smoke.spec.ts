@@ -12,16 +12,32 @@ test('RoamEtch record view starts directly without manual creation', async ({ pa
   await expect(page.getByRole('button', { name: '手动', exact: true })).toHaveCount(0);
 });
 
-test('promo preview renders and advances to the next variant', async ({ page }) => {
+test('promo preview lists 25 designs, advances and switches audiences', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error' && !message.text().includes('Failed to load resource')) errors.push(message.text());
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
   await blockExternal(page);
   await page.goto('/');
   await gotoTab(page, 'settings');
   await page.getByRole('button', { name: '生成宣传图', exact: true }).click();
   const preview = page.locator('.promo-preview-img');
+  const select = page.locator('.promo-variant-select');
   await expect(preview).toBeVisible({ timeout: 30_000 });
+  await expect(select.locator('option')).toHaveCount(25);
   const first = Number(await preview.getAttribute('data-variant'));
   await page.getByRole('button', { name: '换一张', exact: true }).click();
-  await expect.poll(async () => Number(await preview.getAttribute('data-variant'))).toBe((first + 1) % 8);
+  await expect.poll(async () => Number(await preview.getAttribute('data-variant'))).toBe((first + 1) % 25);
+
+  const previousSrc = await preview.getAttribute('src');
+  await select.selectOption('8');
+  await expect(preview).toHaveAttribute('data-variant', '8', { timeout: 30_000 });
+  await expect(select).toHaveValue('8');
+  expect(await preview.getAttribute('src')).not.toBe(previousSrc);
+  const overflow = await page.locator('.modal-backdrop .modal').evaluate((node) => node.scrollWidth - node.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  expect(errors).toEqual([]);
 });
 
 test('demo trip renders charts and privacy crop feedback', async ({ page }) => {

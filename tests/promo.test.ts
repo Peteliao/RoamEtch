@@ -21,6 +21,22 @@ function installStorage() {
   });
 }
 
+const audienceSlugs = [
+  'solo-outdoor', 'road-crews', 'travel-creators', 'cross-border', 'frontend-open-source',
+  'endurance-athletes', 'urban-commuters', 'family-outings', 'overland-vanlife', 'event-leads',
+  'field-researchers', 'gpx-data-stewards', 'yearly-memory', 'night-oled', 'dog-walkers',
+  'site-visits', 'loved-ones'
+];
+const audienceKeys = [
+  'soloOutdoor', 'roadCrews', 'travelCreators', 'crossBorder', 'frontend', 'athletes', 'commuters',
+  'family', 'overland', 'eventLeads', 'fieldResearch', 'dataStewards', 'yearlyMemory', 'nightOled',
+  'dogWalkers', 'siteVisits', 'lovedOnes'
+];
+const copyFields = [
+  'label', 'eyebrow', 'headline1', 'headline2', 'sub1', 'sub2',
+  'feature1', 'feature2', 'feature3', 'cta', 'caption'
+] as const;
+
 let promo: typeof import('../src/core/promo');
 let i18n: typeof import('../src/core/i18n');
 
@@ -38,25 +54,63 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function installCanvasMock() {
+  const canvases: HTMLCanvasElement[] = [];
+  const texts: string[] = [];
+  const gradient = { addColorStop: vi.fn() };
+  const ctx = new Proxy({
+    measureText: (text: string) => ({ width: String(text).length * 12 }),
+    createLinearGradient: () => gradient,
+    createRadialGradient: () => gradient
+  }, {
+    get(target, key: string) {
+      if (key in target) return target[key as keyof typeof target];
+      return (...args: any[]) => {
+        if (key === 'fillText') texts.push(String(args[0]));
+      };
+    }
+  });
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ctx as any);
+  vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(function (this: HTMLCanvasElement, callback: BlobCallback) {
+    canvases.push(this);
+    callback(new Blob(['png'], { type: 'image/png' }));
+  });
+  return { canvases, texts };
+}
+
 describe('promo variants', () => {
-  it('cycles through all eight variants and wraps', () => {
-    expect(promo.PROMO_VARIANT_COUNT).toBe(8);
+  it('cycles through all 25 variants and wraps', () => {
+    expect(promo.PROMO_VARIANT_COUNT).toBe(25);
     let variant = 0;
     const sequence = [];
     for (let i = 0; i < promo.PROMO_VARIANT_COUNT; i++) {
       sequence.push(variant);
       variant = promo.nextVariant(variant);
     }
-    expect(sequence).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(sequence).toEqual(Array.from({ length: 25 }, (_, i) => i));
     expect(variant).toBe(0);
     expect(promo.nextVariant(-1)).toBe(0);
+    expect(promo.nextVariant(24)).toBe(0);
+    expect(promo.nextVariant(25)).toBe(1);
+  });
+
+  it('exposes the complete 17-audience label and filename catalog', () => {
+    for (let index = 0; index < audienceSlugs.length; index++) {
+      expect(promo.promoVariantSlug(index + 8)).toBe(audienceSlugs[index]);
+      expect(promo.promoVariantLabel(index + 8)).not.toBe(`promo.audience.${audienceKeys[index]}.label`);
+      expect(promo.promoVariantLabel(index + 8).length).toBeGreaterThan(0);
+    }
+    for (let variant = 0; variant < 8; variant++) {
+      expect(promo.promoVariantSlug(variant)).toBe(String(variant + 1));
+      expect(promo.promoVariantLabel(variant)).not.toMatch(/^promo\./);
+    }
   });
 
   it('keeps random initial selection within range without consecutive repeats', () => {
     let previous = promo.pickPromoVariant(() => 0.2);
     expect(previous).toBeGreaterThanOrEqual(0);
     expect(previous).toBeLessThan(promo.PROMO_VARIANT_COUNT);
-    for (let i = 0; i < 24; i++) {
+    for (let i = 0; i < 40; i++) {
       const next = promo.pickPromoVariant(() => 0.2);
       expect(next).not.toBe(previous);
       expect(next).toBeGreaterThanOrEqual(0);
@@ -65,7 +119,7 @@ describe('promo variants', () => {
     }
   });
 
-  it('provides eight distinct localized RoamEtch captions with the site URL', async () => {
+  it('provides 25 distinct localized captions with the site URL', async () => {
     for (const lang of ['zh', 'en'] as const) {
       await i18n.setLanguage(lang);
       const captions = Array.from({ length: promo.PROMO_VARIANT_COUNT }, (_, variant) => promo.promoCaption(variant));
@@ -82,42 +136,56 @@ describe('promo variants', () => {
     }
   });
 
-  it('renders every variant at 1080×1350 with normalized metadata and translated copy', async () => {
-    await i18n.setLanguage('zh');
-    const canvases: HTMLCanvasElement[] = [];
-    const texts: string[] = [];
-    const gradient = { addColorStop: vi.fn() };
-    const ctx = new Proxy({
-      measureText: (text: string) => ({ width: String(text).length * 12 }),
-      createLinearGradient: () => gradient,
-      createRadialGradient: () => gradient
-    }, {
-      get(target, key: string) {
-        if (key in target) return target[key as keyof typeof target];
-        return (...args: any[]) => {
-          if (key === 'fillText') texts.push(String(args[0]));
-        };
+  it('has complete Chinese and English copy for every audience', async () => {
+    for (const lang of ['zh', 'en'] as const) {
+      await i18n.setLanguage(lang);
+      const audience = i18n[lang].promo.audience as Record<string, Record<string, string>>;
+      expect(Object.keys(audience)).toEqual(audienceKeys);
+      for (const key of audienceKeys) {
+        for (const field of copyFields) {
+          const value = audience[key][field];
+          expect(value, `${lang}.${key}.${field}`).toBeTruthy();
+          expect(value).not.toMatch(/^promo\./);
+        }
+        expect(audience[key].caption).toContain('{{url}}');
       }
-    });
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ctx as any);
-    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(function (this: HTMLCanvasElement, callback: BlobCallback) {
-      canvases.push(this);
-      callback(new Blob(['png'], { type: 'image/png' }));
-    });
-
-    const themes = ['dark', 'light', 'contrast', 'matrix', 'neon', 'starship', 'aurora', 'amber', 'deepsea', 'vermilion'];
-    for (let variant = 0; variant < promo.PROMO_VARIANT_COUNT; variant++) {
-      mocks.theme = themes[variant % themes.length];
-      const result = await promo.generatePromo(variant);
-      expect(result.variant).toBe(variant);
-      expect(result.filename).toMatch(new RegExp(`^roametch-promo-${variant + 1}-\\d+\\.png$`));
-      expect(result.caption).toBe(promo.promoCaption(variant));
-      expect(result.blob.type).toBe('image/png');
-      expect(canvases.at(-1)?.width).toBe(1080);
-      expect(canvases.at(-1)?.height).toBe(1350);
-      expect(texts).toContain('RoamEtch迹刻');
     }
-    expect(texts.some((text) => text.startsWith('promo.'))).toBe(false);
-    expect(await promo.generatePromo(8)).toMatchObject({ variant: 0 });
+  });
+
+  it('avoids absolute, unsupported and misleading advertising claims', async () => {
+    const zhBanned = /最|第一|唯一|100%|永不|绝对|极致|零风险|不上传|不留云端痕迹|散场即焚|无需安装任何软件|一键自托管|无缝/;
+    const enBanned = /\b(best|number one|absolute|zero-risk|seamless)\b|#1|100%|\bnever\b|nothing uploaded|no history kept/;
+    for (const lang of ['zh', 'en'] as const) {
+      await i18n.setLanguage(lang);
+      const banned = lang === 'zh' ? zhBanned : enBanned;
+      const captions = Array.from({ length: promo.PROMO_VARIANT_COUNT }, (_, variant) => promo.promoCaption(variant));
+      const audience = i18n[lang].promo.audience as Record<string, Record<string, string>>;
+      const audienceCopy = audienceKeys.flatMap((key) => copyFields.map((field) => audience[key][field]));
+      for (const text of [...captions, ...audienceCopy]) expect(text).not.toMatch(banned);
+    }
+  });
+
+  it('renders all 25 variants across all 10 themes with translated copy and normalized metadata', async () => {
+    await i18n.setLanguage('zh');
+    const { canvases, texts } = installCanvasMock();
+    const themes = ['dark', 'light', 'contrast', 'matrix', 'neon', 'starship', 'aurora', 'amber', 'deepsea', 'vermilion'];
+    for (const theme of themes) {
+      mocks.theme = theme;
+      for (let variant = 0; variant < promo.PROMO_VARIANT_COUNT; variant++) {
+        const textStart = texts.length;
+        const result = await promo.generatePromo(variant);
+        expect(result.variant).toBe(variant);
+        expect(result.filename).toMatch(new RegExp(`^roametch-promo-${promo.promoVariantSlug(variant)}-\\d+\\.png$`));
+        expect(result.caption).toBe(promo.promoCaption(variant));
+        expect(result.blob.type).toBe('image/png');
+        expect(canvases.at(-1)?.width).toBe(1080);
+        expect(canvases.at(-1)?.height).toBe(1350);
+        expect(texts.slice(textStart).some((text) => text.startsWith('promo.'))).toBe(false);
+      }
+    }
+    expect(canvases).toHaveLength(250);
+    expect(texts).toContain('RoamEtch迹刻');
+    expect(await promo.generatePromo(25)).toMatchObject({ variant: 0 });
+    expect(await promo.generatePromo(-1)).toMatchObject({ variant: 24 });
   });
 });

@@ -122,12 +122,15 @@ test('every theme reaches canvas artwork and the offline viewer; videos retain d
     }
 
     const promos: Record<string, number[]> = {};
+    const audiencePromos: Record<string, { pixel: number[]; dimensions: number[] }> = {};
     const posters: Record<string, { pixel: number[]; dimensions: number[] }> = {};
     const footprints: Record<string, { pixel: number[]; dimensions: number[] }> = {};
     for (const theme of input.all) {
       lt.theme.setThemeModeOverride(theme);
       const promo = await generatePromo(0);
       promos[theme] = (await sample(promo.blob)).pixel;
+      const audiencePromo = await generatePromo(8);
+      audiencePromos[theme] = await sample(audiencePromo.blob);
       if (input.representative.includes(theme)) {
         const poster = await generatePoster(full, { vectorOnly: true });
         const footprint = await generateFootprintImage({
@@ -166,7 +169,7 @@ test('every theme reaches canvas artwork and the offline viewer; videos retain d
     frame.remove();
     lt.theme.setThemeModeOverride(null);
     return {
-      backgroundHashes, promos, posters, footprints,
+      backgroundHashes, promos, audiencePromos, posters, footprints,
       video: { size: video.blob.size, width: video.width, height: video.height, mime: video.mime },
       html: {
         initial: html.html.includes('data-theme="neon"'),
@@ -183,6 +186,8 @@ test('every theme reaches canvas artwork and the offline viewer; videos retain d
 
   expect(new Set(Object.values(result.backgroundHashes)).size).toBe(ALL_THEMES.length);
   expect(new Set(Object.values(result.promos).map((pixel) => pixel.join(','))).size).toBe(ALL_THEMES.length);
+  expect(new Set(Object.values(result.audiencePromos).map((sample) => sample.pixel.join(','))).size).toBe(ALL_THEMES.length);
+  for (const theme of ALL_THEMES) expect(result.audiencePromos[theme].dimensions).toEqual([1080, 1350]);
   for (const theme of REPRESENTATIVE) {
     expect(result.posters[theme].dimensions).toEqual([1080, 1920]);
     expect(result.footprints[theme].dimensions).toEqual([1080, 1620]);

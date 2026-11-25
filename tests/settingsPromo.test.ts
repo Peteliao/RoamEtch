@@ -42,7 +42,12 @@ vi.mock('../src/ui/backupFlow', () => ({
   exportBackupFlow: vi.fn(), restoreBackupFlow: vi.fn(), lastBackupLabel: () => 'never', backupDue: () => false
 }));
 vi.mock('../src/core/simulator', () => ({ startPlayback: vi.fn(), stopPlayback: vi.fn(), isPlaying: () => false }));
-vi.mock('../src/core/promo', () => ({ generatePromo: mocks.generatePromo, nextVariant: (variant: number) => (variant + 1) % 8 }));
+vi.mock('../src/core/promo', () => ({
+  generatePromo: mocks.generatePromo,
+  nextVariant: (variant: number) => (variant + 1) % 25,
+  PROMO_VARIANT_COUNT: 25,
+  promoVariantLabel: (variant: number) => `Variant ${variant + 1}`
+}));
 vi.mock('../src/core/rewalk', () => ({ setRewalkVoice: vi.fn() }));
 vi.mock('../src/core/version', () => ({ APP_VERSION: 'test' }));
 vi.mock('../src/core/shareEnv', () => ({ exportImage: mocks.exportImage }));
@@ -124,15 +129,15 @@ afterEach(() => {
 describe('promo preview variant switcher', () => {
   it('cycles sequentially and keeps image, save, copy, share and object URL state together', async () => {
     const initial = await openPreview();
-    const second = promoResult(0, 'second');
-    const third = promoResult(1, 'third');
+    const second = promoResult(8, 'second');
+    const third = promoResult(9, 'third');
     mocks.generatePromo.mockResolvedValueOnce(second).mockResolvedValueOnce(third);
     const img = document.querySelector<HTMLImageElement>('.promo-preview-img')!;
     const next = button(document.body, 'settings.promoNext');
 
     next.click();
-    await vi.waitFor(() => expect(img.dataset.variant).toBe('0'));
-    expect(mocks.generatePromo).toHaveBeenNthCalledWith(2, 0);
+    await vi.waitFor(() => expect(img.dataset.variant).toBe('8'));
+    expect(mocks.generatePromo).toHaveBeenNthCalledWith(2, 8);
     expect(img.src).toBe('blob:promo-2');
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:promo-1');
     expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:promo-2');
@@ -148,8 +153,8 @@ describe('promo preview variant switcher', () => {
     expect(shared.files[0].name).toBe(second.filename);
 
     next.click();
-    await vi.waitFor(() => expect(img.dataset.variant).toBe('1'));
-    expect(mocks.generatePromo).toHaveBeenNthCalledWith(3, 1);
+    await vi.waitFor(() => expect(img.dataset.variant).toBe('9'));
+    expect(mocks.generatePromo).toHaveBeenNthCalledWith(3, 9);
     expect(img.src).toBe('blob:promo-3');
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:promo-2');
     expect(URL.revokeObjectURL).not.toHaveBeenCalledWith('blob:promo-3');
@@ -157,6 +162,38 @@ describe('promo preview variant switcher', () => {
     mocks.modal.mock.results[0].value.close();
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:promo-3');
     expect(initial.variant).toBe(7);
+  });
+
+  it('lists all 25 designs and switches directly to an audience variant', async () => {
+    await openPreview(promoResult(0, 'initial'));
+    const select = document.querySelector<HTMLSelectElement>('.promo-variant-select')!;
+    expect(select.options).toHaveLength(25);
+    expect(select.querySelectorAll('option')[8].textContent).toContain('Variant 9');
+    expect(document.querySelector('.promo-variant-index')?.textContent).toBe('settings.promoVariantIndex');
+
+    const audience = promoResult(8, 'audience');
+    mocks.generatePromo.mockResolvedValueOnce(audience);
+    select.value = '8';
+    select.dispatchEvent(new Event('change'));
+    await vi.waitFor(() => expect(document.querySelector<HTMLImageElement>('.promo-preview-img')?.dataset.variant).toBe('8'));
+    expect(mocks.generatePromo).toHaveBeenLastCalledWith(8);
+    expect(select.value).toBe('8');
+    expect(select.disabled).toBe(false);
+
+    button(document.body, 'settings.promoDownload').click();
+    await vi.waitFor(() => expect(mocks.exportImage).toHaveBeenCalledWith(audience.blob, audience.filename));
+    button(document.body, 'settings.promoCopy').click();
+    await vi.waitFor(() => expect(mocks.writeText).toHaveBeenCalledWith(audience.caption));
+  });
+
+  it('wraps from the final audience design back to the first feature design', async () => {
+    await openPreview(promoResult(24, 'final'));
+    const first = promoResult(0, 'first');
+    mocks.generatePromo.mockResolvedValueOnce(first);
+    button(document.body, 'settings.promoNext').click();
+    await vi.waitFor(() => expect(mocks.generatePromo).toHaveBeenLastCalledWith(0));
+    expect(document.querySelector<HTMLImageElement>('.promo-preview-img')?.dataset.variant).toBe('0');
+    expect(document.querySelector<HTMLSelectElement>('.promo-variant-select')?.value).toBe('0');
   });
 
   it('retains the current promo and URL when regeneration fails', async () => {

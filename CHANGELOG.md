@@ -4,6 +4,29 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.1.6] - 2026-11-25
+
+### Added
+
+- Added 17 audience-specific promotional designs and matching Chinese/English
+  captions for solo outdoors, road crews, travel creators, cross-border users,
+  frontend/open-source learners, endurance athletes, commuters, families,
+  overland travelers, event leaders, field researchers, track-data stewards,
+  yearly-memory keepers, night/OLED users, dog walkers, site visitors and loved
+  ones.
+- Expanded every explicit theme from 8 to 25 promo designs while retaining the
+  original feature artwork and applying each theme palette to all new artwork.
+- Added a 25-option promo preview selector alongside random and sequential
+  switching, with synchronized image, filename, caption, save and share state.
+
+### Changed
+
+- Rewrote existing promotional copy to remove absolute privacy claims and clarify
+  local storage, cached offline use, relay metadata, session cleanup, online
+  services and on-device video rendering.
+- Corrected README wording about yearly image dimensions and network-dependent
+  services.
+
 ## [3.1.5] - 2026-11-25
 
 ### Added

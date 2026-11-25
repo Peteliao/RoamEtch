@@ -12,7 +12,7 @@ import { exportDiagLog } from '../core/diag';
 import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
 import { startPlayback, stopPlayback, isPlaying } from '../core/simulator';
 import { setLanguage, currentLang } from '../core/i18n';
-import { generatePromo, nextVariant } from '../core/promo';
+import { generatePromo, nextVariant, PROMO_VARIANT_COUNT, promoVariantLabel } from '../core/promo';
 import { setRewalkVoice } from '../core/rewalk';
 import { APP_VERSION } from '../core/version';
 import { THEME_OPTIONS } from '../core/themeRegistry';
@@ -427,6 +427,16 @@ export function createSettingsView(navigate) {
     let closed = false;
     const img = el('img', { class: 'promo-preview-img', src: currentUrl, alt: t('settings.promoPreviewAlt') });
     img.dataset.variant = String(variant);
+    const variantSelect = el('select', { class: 'promo-variant-select', 'aria-label': t('settings.promoVariant') });
+    const featureGroup = el('optgroup', { label: t('settings.promoVariantGroup') });
+    const audienceGroup = el('optgroup', { label: t('settings.promoVariantAudienceGroup', { n: 17 }) });
+    for (let i = 0; i < PROMO_VARIANT_COUNT; i++) {
+      const option = el('option', { value: String(i) }, `${promoVariantLabel(i)} · ${i + 1}`);
+      (i < 8 ? featureGroup : audienceGroup).append(option);
+    }
+    variantSelect.append(featureGroup, audienceGroup);
+    variantSelect.value = String(variant);
+    const variantIndex = el('div', { class: 'small muted promo-variant-index' }, t('settings.promoVariantIndex', { n: variant + 1 }));
     const copyBtn = el('button', { class: 'btn' }, icon('copy', 16), t('settings.promoCopy'));
     const nextBtn = el('button', { class: 'btn' }, icon('refresh', 16), t('settings.promoNext'));
     const saveBtn = el('button', { class: `btn ${canShare ? '' : 'primary'}` }, icon('download', 16), t('settings.promoDownload'));
@@ -435,6 +445,7 @@ export function createSettingsView(navigate) {
       : null;
     const setBusy = (busy: boolean) => {
       nextBtn.disabled = busy;
+      variantSelect.disabled = busy;
       saveBtn.disabled = busy;
       if (shareBtn) shareBtn.disabled = busy;
     };
@@ -446,6 +457,8 @@ export function createSettingsView(navigate) {
       currentFile = nextFile;
       img.src = nextUrl;
       img.dataset.variant = String(result.variant);
+      variantSelect.value = String(result.variant);
+      variantIndex.textContent = t('settings.promoVariantIndex', { n: result.variant + 1 });
       currentUrl = nextUrl;
       URL.revokeObjectURL(previousUrl);
     };
@@ -453,6 +466,11 @@ export function createSettingsView(navigate) {
       title: t('settings.promoPreviewTitle'),
       body: el('div', {},
         el('div', { class: 'small muted promo-preview-note' }, t('settings.promoKeep')),
+        el('label', { class: 'promo-variant-picker' },
+          el('span', {}, t('settings.promoVariant')),
+          variantSelect,
+          el('span', { class: 'small faint' }, t('settings.promoVariantHint')),
+          variantIndex),
         img),
       footer: [nextBtn, copyBtn, saveBtn, shareBtn].filter(Boolean),
       onClose: () => {
@@ -461,10 +479,8 @@ export function createSettingsView(navigate) {
         URL.revokeObjectURL(currentUrl);
       }
     });
-    copyBtn.onclick = () => copyPromoCaption(current.caption);
-    nextBtn.onclick = async () => {
+    const renderVariant = async (requestedVariant: number) => {
       if (closed || nextBtn.disabled) return;
-      const requestedVariant = nextVariant(current.variant);
       setBusy(true);
       try {
         const result = await generatePromo(requestedVariant);
@@ -478,6 +494,9 @@ export function createSettingsView(navigate) {
         if (!closed) setBusy(false);
       }
     };
+    copyBtn.onclick = () => copyPromoCaption(current.caption);
+    nextBtn.onclick = () => renderVariant(nextVariant(current.variant));
+    variantSelect.onchange = () => renderVariant(Number(variantSelect.value));
     saveBtn.onclick = async () => {
       const res = await exportImage(current.blob, current.filename);
       if (res.mode === 'longpress') {
