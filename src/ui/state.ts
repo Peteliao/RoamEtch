@@ -11,8 +11,15 @@ export const appState = {
   activeTripFull: null,
   editMode: false,
   showTripInRecord: false,
+  tripDetail: { open: false, tripId: null, section: 'overview' },
   stats: null
 };
+
+export function isTripSectionActive(section) {
+  const detail = appState.tripDetail;
+  return detail.open && detail.section === section
+    && (appState.view === 'trips' || appState.view === 'analysis' || appState.view === 'export');
+}
 
 let recalcTimer = null;
 let activeTripRequest = 0;
@@ -21,7 +28,15 @@ let statsRequest = 0;
 export async function setActiveTrip(id, { fit = false } = {}) {
   const request = ++activeTripRequest;
   statsRequest++;
+  if (id !== appState.activeTripId) {
+    appState.activeTripFull = null;
+    appState.stats = null;
+    if (appState.tripDetail.tripId && appState.tripDetail.tripId !== id) {
+      appState.tripDetail = { open: false, tripId: null, section: 'overview' };
+    }
+  }
   appState.activeTripId = id;
+  if (fit) appState.showTripInRecord = true;
   set('lastTripId', id);
   if (!id) {
     appState.activeTripFull = null;

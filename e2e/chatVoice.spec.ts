@@ -83,6 +83,13 @@ test('team chat switches input modes and exchanges emoji and voice with a camera
     await expect(input).toBeVisible();
     await expect(voiceButton).toBeHidden();
 
+    await input.fill('未发送的草稿');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.meet-chat-modal')).toHaveCount(0);
+    await openChat(page);
+    await expect(page.locator('.meet-chat-input')).toHaveValue('未发送的草稿');
+    await page.locator('.meet-chat-input').fill('');
+
     await modeButton.click();
     await page.getByRole('button', { name: '表情', exact: true }).click();
     await expect(page.locator('.meet-chat-emoji-panel')).toBeVisible();
@@ -133,7 +140,7 @@ test('team chat switches input modes and exchanges emoji and voice with a camera
     await expect(page.locator('#toast-root')).toContainText('已取消语音');
     expect(await page.evaluate(() => window.__lt.meet.snapshot().messages.length)).toBe(beforeCancel);
 
-    await peer.locator('.meet-chat-modal').getByRole('button', { name: 'close', exact: true }).click();
+    await peer.locator('.meet-chat-modal').getByRole('button', { name: '关闭', exact: true }).click();
     await expect(peer.locator('.meet-chat-modal')).toHaveCount(0);
     await expect(peer.locator('.meet-chat-audio-host audio')).toHaveCount(0);
     expect(pageErrors).toEqual([]);

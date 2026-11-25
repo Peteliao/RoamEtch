@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { stat } from 'node:fs/promises';
 import { createRelayServer } from '../relay/server.mjs';
-import { blockExternal, configureWsRelay, gotoTab } from './utils';
+import { blockExternal, configureWsRelay, gotoTab, openRecordingCamera } from './utils';
 
 const ONE_PX_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -16,8 +16,7 @@ async function openSimRecord(page: Page) {
 
 async function openSimCamera(page: Page) {
   await openSimRecord(page);
-  await page.locator('.rec-btn.camera').click();
-  await expect(page.locator('.cam-overlay')).toBeVisible();
+  await openRecordingCamera(page);
   await expect(page.locator('.cam-shutter')).toBeEnabled({ timeout: 20_000 });
 }
 
@@ -98,10 +97,21 @@ async function enterOledLock(page: Page) {
   await expect(page.locator('.ps-cam-act')).toBeVisible();
 }
 
+test('camera traps focus and browser back closes the capture overlay', async ({ page }) => {
+  await openSimCamera(page);
+  const close = page.locator('.cam-close');
+  await expect(close).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  expect(await page.evaluate(() => document.querySelector('.cam-overlay')?.contains(document.activeElement))).toBe(true);
+  await page.goBack();
+  await expect(page.locator('.cam-overlay')).toHaveCount(0);
+  await expect(page.locator('#view-record.active')).toBeVisible();
+});
+
 test('camera tap maps cover-cropped coordinates and shows focus only after constraints apply', async ({ page }) => {
   await openSimRecord(page);
   await installCameraFocusMock(page);
-  await page.locator('.rec-btn.camera').click();
+  await openRecordingCamera(page);
   await expect(page.locator('.cam-shutter')).toBeEnabled({ timeout: 20_000 });
 
   const video = page.locator('.cam-video');
@@ -145,7 +155,7 @@ test('camera tap maps cover-cropped coordinates and shows focus only after const
 test('camera focus silently degrades when capabilities, constraints, or settings confirmation fail', async ({ page }) => {
   await openSimRecord(page);
   await installCameraFocusMock(page, { supported: false });
-  await page.locator('.rec-btn.camera').click();
+  await openRecordingCamera(page);
   await expect(page.locator('.cam-shutter')).toBeEnabled({ timeout: 20_000 });
   const video = page.locator('.cam-video');
 
@@ -310,8 +320,11 @@ test('waypoint editor accepts multi-select photos and a burst from the camera', 
 
   await page.locator('.rec-btn.node').click();
   await expect(page.locator('.modal-backdrop .modal')).toBeVisible();
+  await page.locator('.sheet-row').filter({ hasText: '添加节点' }).click();
+  const editor = page.locator('.modal-backdrop .modal');
+  await expect(editor).toBeVisible();
   const chooser = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: '选择图片（可多选）', exact: true }).click();
+  await editor.getByRole('button', { name: '选择图片（可多选）', exact: true }).click();
   await (await chooser).setFiles([
     { name: 'node-a.png', mimeType: 'image/png', buffer: ONE_PX_PNG },
     { name: 'node-b.png', mimeType: 'image/png', buffer: ONE_PX_PNG }
@@ -548,7 +561,7 @@ test('paused camera refreshes the fix at open and again at capture', async ({ pa
     window.__lt.recorder.rec.live.lon = 2;
   });
   await page.context().setGeolocation({ latitude: 39.9, longitude: 116.4, accuracy: 6 });
-  await page.locator('.rec-btn.camera').click();
+  await openRecordingCamera(page);
   await expect(page.locator('.cam-shutter')).toBeEnabled({ timeout: 20_000 });
   await page.context().setGeolocation({ latitude: 40.01, longitude: 116.51, accuracy: 5 });
   await page.locator('.cam-shutter').click();

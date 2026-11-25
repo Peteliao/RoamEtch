@@ -2,7 +2,6 @@
 import { t } from '../core/i18n';
 import { on } from '../core/events';
 import { listTrips, deleteTrip, updateTrip, loadTripFull, storageEstimate } from '../core/store';
-import { importGPX } from '../core/gpx';
 import { exportTripsZip, importTripFiles } from '../core/batch';
 import { startRewalk } from '../core/rewalk';
 import { importDemoTrip } from '../core/demo';
@@ -11,7 +10,7 @@ import { generateFootprintImage, generateFootprintVideo, footprintCaption } from
 import { resolveTripCities } from '../core/shareInfo';
 import { paintTrack, prepareMap } from '../core/mapPaint';
 import { videoSupported, videoIsWebmOnly } from '../core/videoCapture';
-import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
+import { exportBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
 import { openInstallGuide, isIOS, isStandaloneMode } from './install';
 import { triggerDownload } from '../core/gpx';
 import { fmtDistance, fmtDuration, simplify } from '../core/geo';
@@ -20,7 +19,10 @@ import { get } from '../core/settings';
 import { exportImage, exportFile, isWeChat, wechatFileGuidance } from '../core/shareEnv';
 import { appState, setActiveTrip } from './state';
 import { TrackMap } from './map';
-import { el, icon, toast, confirmModal, filePicker, filePickerMulti, modal } from './helpers';
+import { el, icon, toast, confirmModal, filePickerMulti, modal } from './helpers';
+import { createAnalysisView } from './analysis';
+import { createExportView } from './export';
+import { backFromUIState, currentUIState } from './history';
 
 function thumbnailPoints(segments) {
   const points = segments.flatMap((segment) => segment.points);
@@ -173,10 +175,41 @@ function openFootprintVideoPreview(fp) {
   });
 }
 
-export function createTripsView(navigate) {
+export function createTripsView(navigate, getRecordMap = () => null) {
   const view = el('div', { class: 'view', id: 'view-trips' });
   const scroll = el('div', { class: 'view-scroll' });
-  view.append(scroll);
+  const analysisView = createAnalysisView(navigate, { embedded: true });
+  const exportView = createExportView(getRecordMap, navigate);
+  for (const panel of [analysisView, exportView]) {
+    panel.view.classList.remove('view');
+    panel.view.classList.add('trip-detail-panel');
+  }
+  const detailTitle = el('h2', { class: 'page-title trip-detail-title' });
+  const detailDate = el('div', { class: 'small faint trip-detail-date' });
+  const detailSelect = el('select', { class: 'trip-detail-select', 'aria-label': t('trips.switchTrip') });
+  const detailTabs = el('div', { class: 'trip-detail-tabs', role: 'tablist' });
+  const detailActions = el('div', { class: 'trip-detail-actions' });
+  const detail = el('div', { class: 'trip-detail', id: 'trip-detail', 'data-section': 'overview' },
+    el('div', { class: 'trip-detail-head' },
+      el('div', { class: 'page-head-row' },
+        el('button', { class: 'iconbtn trip-detail-back', 'aria-label': t('common.back'), onclick: () => closeDetail() }, icon('chevronRight', 18)),
+        el('div', { class: 'trip-detail-heading' }, detailTitle, detailDate)),
+      el('div', { class: 'trip-detail-tools' }, detailSelect,
+        el('button', { class: 'btn sm primary', onclick: () => navigate('trips', { detail: true, tripId: appState.tripDetail.tripId, section: 'share' }) }, icon('share', 14), t('trips.detailShare'))),
+      detailTabs,
+      detailActions),
+    el('div', { class: 'trip-detail-panels' }, analysisView.view, exportView.view));
+  for (const section of ['overview', 'data', 'share']) {
+    detailTabs.append(el('button', {
+      role: 'tab', 'data-section': section, 'aria-controls': section === 'share' ? 'view-export' : 'view-analysis',
+      onclick: () => navigate('trips', { detail: true, tripId: appState.tripDetail.tripId, section })
+    }, t(`trips.detail${section[0].toUpperCase()}${section.slice(1)}`)));
+  }
+  detailSelect.onchange = () => {
+    const trip = allTrips.find((item) => item.id === detailSelect.value);
+    if (trip) void openTrip(trip, appState.tripDetail.section);
+  };
+  view.append(scroll, detail);
 
   const header = el('div', { class: 'page-head' },
     el('div', { class: 'page-head-row' },
@@ -209,7 +242,9 @@ export function createTripsView(navigate) {
   let searchTerm = '';
   let sortMode = 'recent';
   let allTrips = [];
+  let detailTrip = null;
   let footprintYear = new Date().getFullYear();
+  let footprintExpanded = false;
   const thumbNodes = new Map();
   let thumbRun = 0;
   const chipBar = el('div', { class: 'chip-bar' });
@@ -252,7 +287,11 @@ export function createTripsView(navigate) {
   const footprintMapBox = el('div', { class: 'footprint-map', 'aria-label': t('trips.footprintCityMap') });
   const footprintMapStatus = el('div', { class: 'footprint-map-status' });
   const footprintBody = el('div', {});
-  const footprintCard = el('div', { class: 'card footprint-card' }, footprintBody);
+  const footprintToggle = el('button', { class: 'footprint-toggle' });
+  const footprintContent = el('div', { class: 'footprint-content' });
+  footprintToggle.onclick = () => { footprintExpanded = !footprintExpanded; renderFootprint(); };
+  footprintContent.append(footprintBody);
+  const footprintCard = el('div', { class: 'card footprint-card' }, footprintToggle, footprintContent);
   const nudge = el('div', { class: 'backup-nudge', style: { display: 'none' } });
   const iosNudge = el('div', { class: 'backup-nudge ios-storage-nudge', style: { display: 'none' } });
   const IOS_NUDGE_KEY = 'roametch.iosStorageNudge.v1';
@@ -290,7 +329,7 @@ export function createTripsView(navigate) {
   }
   const storageBar = el('div', { class: 'small faint', style: { marginTop: '14px', textAlign: 'center' } });
   const listBox = el('div', {});
-  scroll.append(header, summary, nudge, iosNudge, footprintCard, searchBar, toolbar, listBox, storageBar);
+  scroll.append(header, searchBar, toolbar, listBox, summary, nudge, iosNudge, footprintCard, storageBar);
 
   function thumbSVG(points) {
     if (!points || points.length < 2) return '<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="4" fill="var(--text-faint)"/></svg>';
@@ -377,7 +416,14 @@ export function createTripsView(navigate) {
     if (!trips.length) {
       listBox.append(el('div', { class: 'empty-state' },
         el('div', { class: 'empty-title' }, t('trips.noMatch')),
-        el('div', { class: 'small' }, t('trips.noMatchHint'))));
+        el('div', { class: 'small' }, t('trips.noMatchHint')),
+        el('button', {
+          class: 'btn sm', style: { marginTop: '12px' }, onclick: () => {
+            searchTerm = ''; activityFilter = 'all'; favoriteOnly = false; searchInput.value = '';
+            for (const [key, btn] of chipButtons) btn.classList.toggle('active', key === 'all');
+            favoriteChip.classList.remove('active'); renderList();
+          }
+        }, t('trips.clearFilters'))));
       return;
     }
     for (const trip of trips) {
@@ -386,7 +432,14 @@ export function createTripsView(navigate) {
       const statusKey = trip.status === 'recording' ? 'statusRecording' : trip.status === 'paused' ? 'statusPaused' : 'statusFinished';
       const thumb = el('div', { class: 'thumb', html: thumbSVG(trip.thumbPoints) });
       thumbNodes.set(trip.id, thumb);
-      const item = el('div', { class: 'trip-item', onclick: () => openTrip(trip) },
+      const item = el('div', {
+        class: 'trip-item', role: 'button', tabindex: '0', onclick: () => openTrip(trip),
+        onkeydown: (e) => {
+          if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+          e.preventDefault();
+          openTrip(trip);
+        }
+      },
         el('div', { class: 'ti-row' },
           thumb,
           el('div', { class: 'info' },
@@ -407,12 +460,7 @@ export function createTripsView(navigate) {
         el('div', { class: 'ti-stats' },
           el('div', { class: 'ti-stat' }, el('div', { class: 'v' }, d ? `${d.v}${d.u}` : '--'), el('div', { class: 'k' }, t('analysis.distance'))),
           el('div', { class: 'ti-stat' }, el('div', { class: 'v' }, st ? fmtDuration(st.duration, { compact: true }) : '--'), el('div', { class: 'k' }, t('analysis.duration'))),
-          el('div', { class: 'ti-stat' }, el('div', { class: 'v' }, st ? `↑${Math.round(st.ascent)}m` : '--'), el('div', { class: 'k' }, t('analysis.ascent')))),
-        el('div', { class: 'ti-actions' },
-          el('button', { class: 'btn sm icon-only', title: t('trips.rewalk'), onclick: (e) => { e.stopPropagation(); onRewalk(trip); } }, icon('follow', 16)),
-          el('button', { class: 'btn sm icon-only', title: t('trips.viewAnalysis'), onclick: (e) => { e.stopPropagation(); openAnalysis(trip); } }, icon('analysis', 16)),
-          el('button', { class: 'btn sm icon-only', title: t('common.edit'), onclick: (e) => { e.stopPropagation(); editTrip(trip); } }, icon('edit', 16)),
-          el('button', { class: 'btn sm icon-only', title: t('common.delete'), onclick: (e) => { e.stopPropagation(); removeTrip(trip); } }, icon('trash', 16)))
+          el('div', { class: 'ti-stat' }, el('div', { class: 'v' }, st ? `↑${Math.round(st.ascent)}m` : '--'), el('div', { class: 'k' }, t('analysis.ascent'))))
       );
       listBox.append(item);
     }
@@ -576,16 +624,26 @@ export function createTripsView(navigate) {
   }
 
   function renderFootprint() {
-    if (viewDestroyed) return;
+    if (viewDestroyed || appState.tripDetail.open) { footprintCard.style.display = 'none'; return; }
     if (!allTrips.length) { footprintCard.style.display = 'none'; return; }
     const { years } = buildFootprints(allTrips);
     if (!years.length) { footprintCard.style.display = 'none'; return; }
     if (!years.some((y) => y.year === footprintYear)) footprintYear = years[0].year;
     const baseFp = years.find((y) => y.year === footprintYear) || years[0];
+    const units = get('units');
+    const baseDistance = fmtDistance(baseFp.distance, units);
+    footprintToggle.replaceChildren(icon('calendar', 18),
+      el('span', { class: 'footprint-toggle-copy' },
+        el('strong', {}, `${baseFp.year} · ${t('trips.footprintTitle')}`),
+        el('span', {}, `${baseFp.trips} ${t('trips.sumTrips')} · ${baseDistance.v}${baseDistance.u}`)),
+      icon(footprintExpanded ? 'chevron' : 'chevronRight', 16));
+    footprintToggle.setAttribute('aria-expanded', String(footprintExpanded));
+    footprintContent.style.display = footprintExpanded ? '' : 'none';
+    footprintCard.style.display = '';
+    if (!footprintExpanded) return;
     const trips = yearTrips(baseFp.year);
     const cityState = footprintStates.get(baseFp.year);
     const fp = withFootprintCities(baseFp, cityState?.cities || []);
-    const units = get('units');
     const d = fmtDistance(fp.distance, units);
     const yearSel = el('select', { class: 'footprint-year', 'aria-label': t('trips.footprintTitle') },
       ...years.map((y) => el('option', { value: String(y.year) }, String(y.year))));
@@ -663,6 +721,10 @@ export function createTripsView(navigate) {
     renderIosNudge();
     renderFootprint();
     renderList();
+    detailTrip = appState.tripDetail.open
+      ? appState.activeTripFull?.trip || allTrips.find((trip) => trip.id === appState.tripDetail.tripId) || null
+      : null;
+    syncDetail();
     if (!allTrips.length) { storageBar.textContent = ''; return; }
     storageBar.style.color = '';
     const est = await storageEstimate();
@@ -685,29 +747,82 @@ export function createTripsView(navigate) {
     m = modal({
       title: t('trips.more'),
       body: el('div', { class: 'sheet-list' },
-        row('batch', t('trips.batchImport'), t('trips.batchImportHint'), () => close(onBatchImport)),
-        row('download', t('trips.batchExport'), t('trips.batchExportHint'), () => close(onBatchExport)),
-        row('database', t('trips.backup'), t('trips.backupHint'), () => close(onBackup)),
-        row('file', t('trips.restore'), t('trips.restoreHint'), () => close(onRestore)))
+        row('download', t('trips.batchExport'), t('trips.batchExportHint'), () => close(onBatchExport)))
     });
   }
 
-  async function openTrip(trip) {
-    appState.showTripInRecord = true;
-    await setActiveTrip(trip.id);
-    navigate('record');
-    setTimeout(() => {
-      const full = appState.activeTripFull;
-      if (full) {
-        const ev = new CustomEvent('map:fitrequest');
-        window.dispatchEvent(ev);
+  function activeDetailPanel() {
+    return appState.tripDetail.section === 'share' ? exportView : analysisView;
+  }
+
+  function refreshDetailPanel() {
+    if (!appState.tripDetail.open || appState.view !== 'trips') return;
+    requestAnimationFrame(() => {
+      activeDetailPanel().resize?.();
+      activeDetailPanel().refresh?.();
+    });
+  }
+
+  function setDetailSection(section) {
+    if (!appState.tripDetail.open) return;
+    appState.tripDetail.section = section;
+    detail.dataset.section = section;
+    analysisView.view.classList.toggle('active', section !== 'share');
+    exportView.view.classList.toggle('active', section === 'share');
+    detailTabs.querySelectorAll('button').forEach((button) => {
+      const selected = button.dataset.section === section;
+      button.classList.toggle('active', selected);
+      button.setAttribute('aria-selected', String(selected));
+    });
+    refreshDetailPanel();
+  }
+
+  function syncDetail() {
+    const open = appState.tripDetail.open && !!detailTrip;
+    detail.classList.toggle('active', open);
+    scroll.style.display = open ? 'none' : '';
+    if (!open) return;
+    detailTitle.textContent = detailTrip.name || t('record.newTripName');
+    detailDate.textContent = `${new Date(detailTrip.createdAt).toLocaleDateString()} · ${t(`record.activities.${detailTrip.activity}`)}`;
+    detailSelect.replaceChildren(...allTrips.map((trip) => el('option', { value: trip.id }, trip.name || t('record.newTripName'))));
+    detailSelect.value = detailTrip.id;
+    detailActions.replaceChildren(
+      el('button', { class: 'btn sm', onclick: () => onRewalk(detailTrip) }, icon('follow', 14), t('trips.rewalk')),
+      el('button', { class: 'btn sm', onclick: () => openOnMap(detailTrip) }, icon('map', 14), t('trips.viewOnMap')),
+      el('button', { class: 'btn sm icon-only', title: t('common.edit'), 'aria-label': t('common.edit'), onclick: () => editTrip(detailTrip) }, icon('edit', 15)),
+      el('button', { class: 'btn sm icon-only danger', title: t('common.delete'), 'aria-label': t('common.delete'), onclick: () => removeTrip(detailTrip) }, icon('trash', 15)));
+    setDetailSection(appState.tripDetail.section);
+  }
+
+  function closeDetail(options: { history?: boolean } = {}) {
+    const state = currentUIState();
+    if (options.history !== false && state?.type === 'view' && state.view === 'trips' && state.detail) {
+      if (state.previous?.type === 'view' && state.previous.view === 'trips' && !state.previous.detail) {
+        backFromUIState(state.id);
+      } else {
+        navigate('trips', { detail: false });
       }
-    }, 150);
+    }
+    appState.tripDetail = { open: false, tripId: null, section: 'overview' };
+    detailTrip = null;
+    syncDetail();
+    renderFootprint();
   }
-  async function openAnalysis(trip) {
-    await setActiveTrip(trip.id);
-    navigate('analysis');
+
+  async function openTrip(trip, section = 'overview') {
+    const full = await setActiveTrip(trip.id);
+    if (!full) return;
+    detailTrip = full.trip;
+    appState.tripDetail = { open: true, tripId: full.trip.id, section };
+    syncDetail();
+    navigate('trips', { detail: true, tripId: full.trip.id, section });
   }
+
+  async function openOnMap(trip) {
+    await setActiveTrip(trip.id, { fit: true });
+    navigate('record', { tripId: trip.id, fit: true });
+  }
+
   async function toggleFavorite(trip) {
     await updateTrip(trip.id, { favorite: !trip.favorite });
     render();
@@ -751,6 +866,7 @@ export function createTripsView(navigate) {
     if (!ok) return;
     await deleteTrip(trip.id);
     if (appState.activeTripId === trip.id) await setActiveTrip(null);
+    if (detailTrip?.id === trip.id) closeDetail();
     toast(t('trips.deleted'), 'ok');
     render();
   }
@@ -761,8 +877,7 @@ export function createTripsView(navigate) {
     loadingDemo = true;
     try {
       const trip = await importDemoTrip();
-      await setActiveTrip(trip.id);
-      navigate('analysis');
+      await openTrip(trip, 'overview');
       toast(t('demo.loaded'), 'ok');
     } catch (e) {
       console.error(e);
@@ -773,14 +888,17 @@ export function createTripsView(navigate) {
   }
 
   async function onImport() {
-    const file = await filePicker('.gpx,application/gpx+xml,application/xml,text/xml');
-    if (!file) return;
+    const files = await filePickerMulti('.gpx,.xml,.zip,application/gpx+xml,application/xml,application/zip');
+    if (!files.length) return;
     try {
-      const text = await file.text();
-      const trip = await importGPX(text, file.name.replace(/\.gpx$/i, ''));
-      toast(t('trips.importOk', { name: trip.name }), 'ok');
-      await setActiveTrip(trip.id);
-      render();
+      const before = new Set(allTrips.map((trip) => trip.id));
+      const { ok, fail } = await importTripFiles(files);
+      if (ok) toast(fail ? t('trips.batchImportPartial', { ok, fail }) : t('trips.batchImportOk', { ok }), fail ? 'warn' : 'ok');
+      else toast(t('trips.importErr'), 'err');
+      const trips = await listTrips();
+      const imported = trips.find((trip) => !before.has(trip.id));
+      if (imported) await openTrip(imported, 'overview');
+      else await render();
     } catch (e) {
       console.error(e);
       toast(t('trips.importErr'), 'err');
@@ -814,15 +932,6 @@ export function createTripsView(navigate) {
     if (res === 'busy') { toast(t('rewalk.busy'), 'warn'); return; }
     if (res === 'empty') { toast(t('rewalk.empty'), 'warn'); return; }
     navigate('record');
-  }
-
-  async function onBatchImport() {
-    const files = await filePickerMulti('.gpx,.xml,.zip,application/gpx+xml,application/xml,application/zip');
-    if (!files.length) return;
-    const { ok, fail } = await importTripFiles(files);
-    if (ok) toast(fail ? t('trips.batchImportPartial', { ok, fail }) : t('trips.batchImportOk', { ok }), fail ? 'warn' : 'ok');
-    else toast(t('trips.importErr'), 'err');
-    render();
   }
 
   async function onBatchExport() {
@@ -867,26 +976,12 @@ export function createTripsView(navigate) {
     });
   }
 
-  async function onBackup() {
-    try {
-      await exportBackupFlow();
-      renderNudge();
-    } catch (e) {
-      console.error(e);
-      toast(t('backup.exportErr'), 'err');
+  on('trip:active', (full) => {
+    if (appState.tripDetail.open && full?.trip.id === appState.tripDetail.tripId) {
+      detailTrip = full.trip;
+      syncDetail();
     }
-  }
-
-  async function onRestore() {
-    const file = await filePicker('.trip,.zip,.enc,application/zip,application/octet-stream');
-    if (!file) return;
-    try {
-      await restoreBackupFlow(file, { onRestored: () => render() });
-    } catch (e) {
-      console.error(e);
-      toast(t('trips.restoreErr'), 'err');
-    }
-  }
+  });
 
   on('trip:stats', async (stats) => {
     const full = appState.activeTripFull;
@@ -919,9 +1014,31 @@ export function createTripsView(navigate) {
   return {
     view,
     refresh: render,
-    resize: () => footprintMap?.resize(),
+    closeDetail,
+    setSection: (section) => setDetailSection(section),
+    resize: () => {
+      if (appState.tripDetail.open) activeDetailPanel().resize?.();
+      else footprintMap?.resize();
+    },
+    focus: async (intent) => {
+      if (!intent?.detail && !intent?.tripId) return;
+      let trip = null;
+      if (intent.tripId) {
+        if (!allTrips.length) allTrips = await listTrips();
+        trip = allTrips.find((item) => item.id === intent.tripId) || null;
+        if (!trip) {
+          toast(t('trips.openNotFound'), 'err');
+          return;
+        }
+      } else {
+        trip = appState.activeTripFull?.trip || allTrips[0] || null;
+      }
+      if (trip) await openTrip(trip, intent.section || 'overview');
+    },
     destroy: () => {
       viewDestroyed = true;
+      analysisView.destroy();
+      exportView.destroy();
       window.removeEventListener('online', onTripsOnline);
       for (const controller of footprintAborts.values()) controller.abort();
       footprintAborts.clear();

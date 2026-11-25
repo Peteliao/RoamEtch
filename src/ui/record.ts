@@ -18,11 +18,11 @@ import { WP_ICONS } from '../core/waypointMeta';
 import { rewalk, stopRewalk, toggleMute, startSim, stopSim } from '../core/rewalk';
 import { appState, setActiveTrip, refreshActiveTrip } from './state';
 import { openWaypointModal, moveWaypoint, moveVertex, insertVertex, deleteVertex, undoEdit, redoEdit, histState } from './editor';
-import { el, icon, toast, modal, promptModal } from './helpers';
-import { confirmModal } from './helpers';
+import { el, icon, toast, modal, hasOpenOverlay } from './helpers';
 import { openCamera } from './camera';
+import { backFromUIState, currentUIState, pushUIState, pushOverlayState, removeOverlayState } from './history';
 
-export function createRecordView() {
+export function createRecordView(navigate: (name: 'analysis' | 'export') => void | Promise<void> = () => {}) {
   const view = el('div', { class: 'view', id: 'view-record' });
   const mapContainer = el('div', { id: 'map-container' });
   const layerPill = el('button', { class: 'map-layer-pill', onclick: openLayerSheet });
@@ -32,12 +32,24 @@ export function createRecordView() {
 
   let map = null;
   let psActive = false;
+  let powerLockBusy = false;
+  let powerLockExitPromise = null;
+  let powerLockEntry = null;
+  let stopFlowPromise = null;
+  let resultSheet = null;
   let unlockGuardUntil = 0;
   let unlockReleaseTimer = 0;
   const swallowUnlockGhostClick = (e) => {
-    if (performance.now() >= unlockGuardUntil) return;
+    if (e.detail === 0 || performance.now() >= unlockGuardUntil) return;
     e.preventDefault();
     e.stopPropagation();
+  };
+  const clearUnlockGuard = () => {
+    unlockGuardUntil = 0;
+    document.removeEventListener('pointerdown', clearUnlockGuard, true);
+    document.removeEventListener('pointerup', releaseUnlockGuard, true);
+    document.removeEventListener('pointercancel', releaseUnlockGuard, true);
+    clearTimeout(unlockReleaseTimer);
   };
   const releaseUnlockGuard = () => {
     unlockGuardUntil = performance.now() + 500;
@@ -46,11 +58,12 @@ export function createRecordView() {
     clearTimeout(unlockReleaseTimer);
   };
   function armUnlockGuard() {
+    clearUnlockGuard();
     unlockGuardUntil = Infinity;
+    document.addEventListener('pointerdown', clearUnlockGuard, true);
     document.addEventListener('pointerup', releaseUnlockGuard, true);
     document.addEventListener('pointercancel', releaseUnlockGuard, true);
-    clearTimeout(unlockReleaseTimer);
-    unlockReleaseTimer = window.setTimeout(releaseUnlockGuard, 6000);
+    unlockReleaseTimer = window.setTimeout(clearUnlockGuard, 6000);
   }
   document.addEventListener('click', swallowUnlockGhostClick, true);
   let oledThemeActive = false;
@@ -74,7 +87,17 @@ export function createRecordView() {
       onVertexInsert: (segId, idx, lon, lat) => insertVertex(segId, idx, lon, lat),
       onVertexDelete: (segId, idx) => deleteVertex(segId, idx)
     }).init(center, zoom);
+    syncPowerLockEntry();
     return map;
+  }
+  async function renderFinishedTrip(full, fit = true) {
+    const target = map;
+    if (!full || !target || target.destroyed) return;
+    target.endLive();
+    target.setTrackData(full.segments, full.waypoints);
+    // fitBounds is valid before the first style load, so offline tiles must not
+    // delay the result sheet or prevent the finished track from being framed.
+    if (fit) target.fitTrack();
   }
   buildMap();
 
@@ -145,10 +168,26 @@ export function createRecordView() {
     redoBtn.disabled = !s.canRedo;
   });
 
+  function canEnterPowerLock() {
+    return !!map && !map.destroyed && !powerLockBusy && !powerLockExitPromise
+      && (rec.status === 'recording' || rec.status === 'paused');
+  }
+  function syncPowerLockEntry() {
+    if (powerLockEntry) powerLockEntry.disabled = !canEnterPowerLock();
+  }
+  function enterPowerLock() {
+    if (!canEnterPowerLock()) {
+      toast(t('record.lockUnavailable'), 'warn');
+      return;
+    }
+    void setPowerLock(true).catch((e) => {
+      console.error('power lock entry failed', e);
+      toast(t('common.unavailable'), 'err', 4200);
+    });
+  }
+
   function openMoreSheet() {
     const canEdit = rec.status !== 'recording';
-    const canUndo = histState().canUndo;
-    const canRedo = histState().canRedo;
     let m;
     const close = (fn) => { m.close(); fn(); };
     const row = (opts) => el('button', { class: 'sheet-row' + (opts.active ? ' active' : '') + (opts.danger ? ' danger' : ''), disabled: opts.disabled, onclick: opts.onclick },
@@ -161,9 +200,10 @@ export function createRecordView() {
         active: appState.editMode, disabled: !canEdit,
         onclick: () => close(() => toggleEdit())
       }),
-      row({ iconKey: 'undo', title: t('edit.undo'), disabled: !appState.editMode || !canUndo, onclick: () => close(undoEdit) }),
-      row({ iconKey: 'redo', title: t('edit.redo'), disabled: !appState.editMode || !canRedo, onclick: () => close(redoEdit) }),
-      row({ iconKey: 'powerlock', title: t('record.powerLock'), desc: t('record.powerLockHint'), onclick: () => close(() => setPowerLock(true)) })
+      row({
+        iconKey: 'powerlock', title: t('record.powerLock'), desc: t('record.powerLockHint'),
+        disabled: !canEnterPowerLock(), onclick: () => close(enterPowerLock)
+      })
     );
     m = modal({ title: t('record.moreTools'), body });
   }
@@ -189,19 +229,27 @@ export function createRecordView() {
     if (rec.saveState.error === 'finalize') void onStop();
     else void retrySave();
   };
+  powerLockEntry = el('button', {
+    type: 'button', class: 'power-lock-entry iconbtn', disabled: true,
+    'aria-label': t('record.powerLock'), title: t('record.powerLock'),
+    style: { width: '44px', height: '44px' },
+    onclick: (e) => { e.stopPropagation(); enterPowerLock(); }
+  }, icon('powerlock', 18));
   const pHead = el('div', { class: 'lp-head', onclick: togglePanel },
-    pStatus, pSave, el('span', { class: 'rec-dot', id: 'panel-rec-dot' }), el('span', { class: 'chev' }, icon('chevron', 16)));
+    pStatus, pSave, powerLockEntry, el('span', { class: 'rec-dot', id: 'panel-rec-dot' }), el('span', { class: 'chev' }, icon('chevron', 16)));
   function togglePanel() {
     panel.classList.toggle('collapsed');
     set('panelCollapsed', panel.classList.contains('collapsed'));
   }
   const compact = el('div', { class: 'lp-compact' });
   function metric(key, hero = false) {
-    const v = el('div', { class: 'v' }, '--');
+    const num = el('span', { class: 'num' }, '--');
+    const unit = el('small', {});
+    const v = el('div', { class: 'v' }, num, unit);
     const k = el('div', { class: 'k' }, t(key));
     const c = el('div', { class: 'lp-metric' + (hero ? ' hero' : '') }, v, k);
     compact.append(c);
-    return { v, k, c };
+    return { v, k, c, num, unit };
   }
   const cDist = metric('panel.distance', true);
   const cDur = metric('panel.duration');
@@ -215,11 +263,13 @@ export function createRecordView() {
   };
   const moreGrid = el('div', { class: 'lp-more' });
   function moreCell(key) {
-    const v = el('div', { class: 'v' }, '--');
+    const num = el('span', { class: 'num' }, '--');
+    const unit = el('small', {});
+    const v = el('div', { class: 'v' }, num, unit);
     const k = el('div', { class: 'k' }, t(key));
     const c = el('div', { class: 'lp-more-cell' }, v, k);
     moreGrid.append(c);
-    return { v, k, c };
+    return { v, k, c, num, unit };
   }
   const cAvg = moreCell('panel.avgSpeed');
   const cCal = moreCell('panel.calories');
@@ -228,16 +278,24 @@ export function createRecordView() {
   const cDesc = moreCell('panel.descent');
   const cSig = moreCell('panel.signal');
   const detail = el('div', { class: 'lp-detail' });
+  const detailSlots = Array.from({ length: 7 }, () => el('span', {}));
+  detail.append(...detailSlots);
   panel.append(pHead, compact, moreGrid, detail);
 
   const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
-  function renderSignal(host, acc) {
-    const lv = signalLevel(acc);
-    host.innerHTML = '';
-    const bars = el('span', { class: `sig-bars lv${lv}` });
+  function createSignal(host) {
+    const bars = el('span', { class: 'sig-bars lv0' });
     for (let i = 0; i < 4; i++) bars.append(el('i'));
-    host.append(bars, el('small', { class: 'sig-txt' }, lv ? t(`panel.sig${SIG_KEYS[lv]}`) : '--'));
+    const text = el('small', { class: 'sig-txt' }, '--');
+    host.replaceChildren(bars, text);
+    return { bars, text };
   }
+  function renderSignal(output, acc) {
+    const lv = signalLevel(acc);
+    output.bars.className = `sig-bars lv${lv}`;
+    output.text.textContent = lv ? t(`panel.sig${SIG_KEYS[lv]}`) : '--';
+  }
+  const panelSignal = createSignal(cSig.v);
 
   let liveActivity = 'auto';
   function currentActivity() {
@@ -251,47 +309,64 @@ export function createRecordView() {
     return a === 'hike' || a === 'run' ? 'pace' : 'speed';
   }
 
+  const altTag = el('span', { class: 'tag', hidden: true });
+  cAlt.v.append(altTag);
   function renderPanel(L) {
     if (!L) return;
     const units = get('units');
     const d = fmtDistance(L.distance, units);
-    cDist.v.innerHTML = `${d.v}<small>${d.u}</small>`;
-    cDur.v.textContent = fmtDuration(L.duration);
+    cDist.num.textContent = d.v;
+    cDist.unit.textContent = d.u;
+    cDur.num.textContent = fmtDuration(L.duration);
+    cDur.unit.textContent = '';
     if (speedMode() === 'pace') {
       const p = fmtPace(L.speed, units);
-      cSpeed.v.innerHTML = `${p.v}<small>${p.u}</small>`;
+      cSpeed.num.textContent = p.v;
+      cSpeed.unit.textContent = p.u;
       cSpeed.k.textContent = t('panel.pace');
     } else {
       const s = fmtSpeed(L.speed, units);
-      cSpeed.v.innerHTML = `${s.v}<small>${s.u}</small>`;
+      cSpeed.num.textContent = s.v;
+      cSpeed.unit.textContent = s.u;
       cSpeed.k.textContent = t('panel.speed');
     }
     const avg = L.movingMs > 0 ? L.distance / (L.movingMs / 1000) : 0;
     const av = fmtSpeed(avg, units);
-    cAvg.v.innerHTML = `${av.v}<small>${av.u}</small>`;
+    cAvg.num.textContent = av.v;
+    cAvg.unit.textContent = av.u;
     const baseAct = currentActivity();
     const act = baseAct === 'auto' ? rec.activityGuess : baseAct;
     const cal = act ? estimateCalories(act, L.movingMs, avg, get('weightKg')) : null;
-    cCal.v.innerHTML = cal != null ? `${cal}<small> kcal</small>` : '—';
+    cCal.num.textContent = cal != null ? String(cal) : '—';
+    cCal.unit.textContent = cal != null ? 'kcal' : '';
     const a = fmtAltitude(L.alt, units);
-    cAlt.v.innerHTML = `${a.v}<small>${a.u}</small> <span class="tag ${altSourceTagClass(L.altSrc)}">${t(altSourceShortKey(L.altSrc))}</span>`;
-    cAsc.v.innerHTML = `${Math.round(L.ascent)}<small>m</small>`;
-    cDesc.v.innerHTML = `${Math.round(L.descent)}<small>m</small>`;
-    renderSignal(cSig.v, L.acc);
+    cAlt.num.textContent = a.v;
+    cAlt.unit.textContent = a.u;
+    altTag.hidden = !L.altSrc;
+    altTag.className = `tag ${altSourceTagClass(L.altSrc)}`;
+    altTag.textContent = L.altSrc ? t(altSourceShortKey(L.altSrc)) : '';
+    cAsc.num.textContent = String(Math.round(L.ascent));
+    cAsc.unit.textContent = 'm';
+    cDesc.num.textContent = String(Math.round(L.descent));
+    cDesc.unit.textContent = 'm';
+    renderSignal(panelSignal, L.acc);
     cSig.k.textContent = L.acc != null ? `${t('panel.signal')} ±${Math.round(L.acc)}m` : t('panel.signal');
     const slopeTxt = L.slope != null ? `${L.slope > 0 ? '+' : ''}${L.slope.toFixed(1)}%` : '--';
-    detail.innerHTML = '';
     const mx = fmtSpeed(L.maxSpeed || 0, units);
-    const items = [
-      el('span', {}, `${t('panel.slope')} ${slopeTxt}`),
-      el('span', {}, `${t('panel.maxSpeed')} ${mx.v}${mx.u}`),
-      el('span', {}, `${t('panel.moving')} ${fmtDuration(L.movingMs, { compact: true })}`),
-      el('span', {}, `${t('panel.still')} ${fmtDuration(L.stillMs, { compact: true })}`),
-      el('span', {}, `${t('panel.points')} ${L.pointCount}`)
+    const values = [
+      `${t('panel.slope')} ${slopeTxt}`,
+      `${t('panel.maxSpeed')} ${mx.v}${mx.u}`,
+      `${t('panel.moving')} ${fmtDuration(L.movingMs, { compact: true })}`,
+      `${t('panel.still')} ${fmtDuration(L.stillMs, { compact: true })}`,
+      `${t('panel.points')} ${L.pointCount}`,
+      L.segCount > 1 ? `${t('panel.segments')} ${L.segCount}` : '',
+      L.lat != null ? `${L.lat.toFixed(5)}, ${L.lon.toFixed(5)}` : ''
     ];
-    if (L.segCount > 1) items.push(el('span', {}, `${t('panel.segments')} ${L.segCount}`));
-    if (L.lat != null) items.push(el('span', { class: 'lp-coords' }, `${L.lat.toFixed(5)}, ${L.lon.toFixed(5)}`));
-    detail.append(...items);
+    detailSlots.forEach((slot, index) => {
+      slot.textContent = values[index];
+      slot.hidden = !values[index];
+      slot.classList.toggle('lp-coords', index === 6);
+    });
   }
 
   function renderSaveChip() {
@@ -328,6 +403,7 @@ export function createRecordView() {
     pStatus.className = `st ${rec.status}`;
     dot.className = `rec-dot ${rec.status}`;
     renderSaveChip();
+    syncPowerLockEntry();
     emit('recstatus:changed', rec.status);
   }
 
@@ -356,20 +432,21 @@ export function createRecordView() {
     if (liveActivity !== 'auto') rec.activityGuess = null;
     renderAutoTag();
   };
+  const autoTagIcon = icon('sparkles', 12);
+  const autoTagPulse = el('span', { class: 'la-pulse' });
+  const autoTagText = el('span', {});
   function renderAutoTag() {
     const mode = (rec.status === 'recording' || rec.status === 'paused') ? liveActivity : get('activity');
-    if (mode !== 'auto') { autoTag.style.display = 'none'; return; }
+    autoTag.hidden = mode !== 'auto';
     autoTag.style.display = '';
     autoTag.classList.toggle('detected', !!rec.activityGuess);
-    autoTag.innerHTML = '';
-    if (rec.activityGuess) {
-      autoTag.append(icon('sparkles', 12),
-        el('span', {}, t('record.autoDetectedShort', { a: t(`record.activities.${rec.activityGuess}`) })));
-    } else {
-      autoTag.append(el('span', { class: 'la-pulse' }), el('span', {}, t('record.autoDetecting')));
-    }
+    autoTag.replaceChildren(rec.activityGuess ? autoTagIcon : autoTagPulse, autoTagText);
+    autoTagText.textContent = rec.activityGuess
+      ? t('record.autoDetectedShort', { a: t(`record.activities.${rec.activityGuess}`) })
+      : t('record.autoDetecting');
   }
   renderAutoTag();
+  actRow.append(liveActWrap, autoTag);
 
   const bannerBox = el('div', {});
   const viewBar = el('div', { class: 'view-trip-bar', style: { display: 'none' } });
@@ -627,38 +704,103 @@ export function createRecordView() {
     });
   }
 
+  const startBtn = el('button', { class: 'rec-pill start', onclick: onStart }, icon('play', 17), t('record.start'));
+  const nodeBtn = el('button', { class: 'rec-btn node', onclick: openNodeActions }, icon('pin', 20), t('record.node'));
+  const pauseBtn = el('button', { class: 'rec-btn pause', onclick: () => runRecAction(pauseRecording()) }, icon('pause', 22), t('record.pause'));
+  const resumeBtn = el('button', {
+    class: 'rec-btn resume', onclick: () => { armKeepAlive(); runRecAction(resumeRecording()); }
+  }, icon('play', 22), t('record.resume'));
+  const stopBtn = el('button', {
+    type: 'button', class: 'rec-btn stop', title: t('record.stopGestureHint'),
+    'aria-label': `${t('record.stop')} · ${t('record.stopGestureHint')}`
+  }, icon('stop', 22), t('record.stop'));
+  btnRow.append(activitySel, startBtn, nodeBtn, pauseBtn, resumeBtn, stopBtn);
+
+  let stopGesture = null;
+  function resetStopGesture() {
+    if (!stopGesture) return;
+    cancelAnimationFrame(stopGesture.raf);
+    stopGesture = null;
+    stopBtn.classList.remove('holding', 'ready');
+    stopBtn.style.setProperty('--stop-progress', '0');
+  }
+  stopBtn.addEventListener('pointerdown', (e) => {
+    if (psActive || stopFlowPromise || (rec.status !== 'recording' && rec.status !== 'paused') || e.button !== 0) return;
+    e.preventDefault();
+    resetStopGesture();
+    try { stopBtn.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+    stopGesture = { id: e.pointerId, x: e.clientX, y: e.clientY, start: performance.now(), invalid: false, ready: false, raf: 0 };
+    stopBtn.classList.add('holding');
+    const tick = () => {
+      if (!stopGesture) return;
+      const progress = Math.min(1, (performance.now() - stopGesture.start) / 1200);
+      stopBtn.style.setProperty('--stop-progress', String(progress));
+      if (progress >= 1 && !stopGesture.ready) {
+        stopGesture.ready = true;
+        stopBtn.classList.add('ready');
+        navigator.vibrate?.(18);
+      }
+      stopGesture.raf = progress < 1 ? requestAnimationFrame(tick) : 0;
+    };
+    stopGesture.raf = requestAnimationFrame(tick);
+  });
+  stopBtn.addEventListener('pointermove', (e) => {
+    const gesture = stopGesture;
+    if (!gesture || gesture.id !== e.pointerId) return;
+    const dx = e.clientX - gesture.x;
+    const dy = e.clientY - gesture.y;
+    if (Math.abs(dy) > Math.abs(dx) + 18) gesture.invalid = true;
+    const swipe = dx >= 120 && Math.abs(dy) <= 90 && !gesture.invalid;
+    const ready = swipe || performance.now() - gesture.start >= 1200;
+    if (ready && !gesture.ready) navigator.vibrate?.(18);
+    gesture.ready = ready;
+    stopBtn.classList.toggle('ready', ready);
+    stopBtn.style.setProperty('--stop-progress', String(Math.max(swipe ? 1 : 0, Math.min(1, (performance.now() - gesture.start) / 1200))));
+  });
+  stopBtn.addEventListener('pointerup', (e) => {
+    if (!stopGesture || stopGesture.id !== e.pointerId) return;
+    const fire = stopGesture.ready && !stopGesture.invalid;
+    resetStopGesture();
+    if (fire) onStop();
+  });
+  stopBtn.addEventListener('pointercancel', resetStopGesture);
+  stopBtn.addEventListener('lostpointercapture', resetStopGesture);
+  stopBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+  stopBtn.addEventListener('click', (e) => {
+    if (e.detail === 0 && !psActive && !stopFlowPromise) onStop();
+  });
+
+  function openNodeActions() {
+    if (!rec.tripId || (rec.status !== 'recording' && rec.status !== 'paused')) return;
+    let m: ReturnType<typeof modal>;
+    const close = (action) => { m.close(); action(); };
+    m = modal({
+      title: t('record.node'),
+      body: el('div', { class: 'sheet-list' },
+        el('button', { class: 'sheet-row', onclick: () => close(openRecWaypoint) },
+          el('span', { class: 's-ic' }, icon('pin', 18)),
+          el('span', { class: 's-txt' }, el('div', { class: 's-t' }, t('record.addNode')), el('div', { class: 's-d' }, t('record.addNodeHint')))),
+        el('button', { class: 'sheet-row', onclick: () => close(openQuickCamera) },
+          el('span', { class: 's-ic' }, icon('camera', 18)),
+          el('span', { class: 's-txt' }, el('div', { class: 's-t' }, t('record.photo')), el('div', { class: 's-d' }, t('camera.titleQuick')))))
+    });
+  }
+
   function renderButtons() {
-    btnRow.innerHTML = '';
-    actRow.innerHTML = '';
+    const status = rec.status;
+    const active = status === 'recording' || status === 'paused';
+    activitySel.className = 'rec-pill select';
+    activitySel.hidden = active;
+    startBtn.hidden = active;
+    nodeBtn.hidden = !active;
+    pauseBtn.hidden = status !== 'recording';
+    resumeBtn.hidden = status !== 'paused';
+    stopBtn.hidden = !active;
+    stopBtn.disabled = !!stopFlowPromise;
+    actRow.hidden = !active;
+    if (active) liveActSel.value = liveActivity;
+    renderAutoTag();
     renderStatus();
-    if (rec.status === 'idle' || rec.status === 'finished') {
-      renderAutoTag();
-      activitySel.className = 'rec-pill select';
-      btnRow.append(
-        activitySel,
-        el('button', { class: 'rec-pill start', onclick: onStart }, icon('play', 17), t('record.start'))
-      );
-    } else if (rec.status === 'recording') {
-      renderAutoTag();
-      liveActSel.value = liveActivity;
-      actRow.append(liveActWrap, autoTag);
-      btnRow.append(
-        el('button', { class: 'rec-btn node', onclick: openRecWaypoint }, icon('pin', 20), t('record.node')),
-        el('button', { class: 'rec-btn pause', onclick: () => runRecAction(pauseRecording()) }, icon('pause', 22), t('record.pause')),
-        el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop')),
-        el('button', { class: 'rec-btn camera', onclick: openQuickCamera, title: t('camera.titleQuick') }, icon('camera', 22), t('record.photo'))
-      );
-    } else if (rec.status === 'paused') {
-      renderAutoTag();
-      liveActSel.value = liveActivity;
-      actRow.append(liveActWrap, autoTag);
-      btnRow.append(
-        el('button', { class: 'rec-btn node', onclick: openRecWaypoint }, icon('pin', 20), t('record.node')),
-        el('button', { class: 'rec-btn resume', onclick: () => { armKeepAlive(); runRecAction(resumeRecording()); } }, icon('play', 22), t('record.resume')),
-        el('button', { class: 'rec-btn stop', onclick: onStop }, icon('stop', 22), t('record.stop')),
-        el('button', { class: 'rec-btn camera', onclick: openQuickCamera, title: t('camera.titleQuick') }, icon('camera', 22), t('record.photo'))
-      );
-    }
     renderPsTop();
     updatePsCamera();
   }
@@ -689,6 +831,7 @@ export function createRecordView() {
   }
 
   async function onStart() {
+    if (resultSheet && !(await closeResultSheet('done'))) return;
     // Keep iOS media playback armed while the tap gesture is still valid.
     armKeepAlive();
     if (navigator.permissions?.query) {
@@ -721,35 +864,268 @@ export function createRecordView() {
     });
     return `${activity} · ${when}`;
   }
-  async function onStop() {
-    const ok = await confirmModal({ title: t('record.stop'), message: t('record.stopConfirm'), confirmText: t('record.stop') });
-    if (!ok) return;
-    const id = await stopRecording();
+  function setResultBusy(sheet, busy) {
+    sheet.input.disabled = busy;
+    sheet.closeButton.disabled = busy;
+    sheet.actions.forEach((button) => { button.disabled = busy; });
+  }
+  function showResultError(sheet, message = t('record.resultNameFail'), nameError = true) {
+    sheet.error.textContent = message;
+    sheet.error.style.display = '';
+    if (nameError) sheet.input.setAttribute('aria-invalid', 'true');
+    else sheet.input.removeAttribute('aria-invalid');
+  }
+  function clearResultError(sheet) {
+    sheet.error.textContent = '';
+    sheet.error.style.display = 'none';
+    sheet.input.removeAttribute('aria-invalid');
+  }
+  async function saveResultName(sheet) {
+    if (sheet.savePromise) return sheet.savePromise;
+    const name = sheet.input.value.trim().slice(0, 60);
+    sheet.input.value = name;
+    if (name === sheet.savedName) return true;
+    const save = Promise.resolve().then(async () => {
+      try {
+        await updateTrip(sheet.tripId, { name });
+        sheet.savedName = name;
+        if (viewingTrip?.trip.id === sheet.tripId) {
+          viewingTrip = { ...viewingTrip, trip: { ...viewingTrip.trip, name } };
+          renderViewBar();
+        }
+        if (appState.activeTripFull?.trip.id === sheet.tripId) {
+          appState.activeTripFull = { ...appState.activeTripFull, trip: { ...appState.activeTripFull.trip, name } };
+        }
+        try {
+          const full = await refreshActiveTrip(sheet.tripId);
+          if (full && viewingTrip?.trip.id === sheet.tripId) {
+            viewingTrip = full;
+            renderViewBar();
+          }
+        } catch (e) {
+          // The rename is already durable; a stale in-memory copy must not block dismissal.
+          console.warn('trip refresh after rename failed', e);
+        }
+        toast(t('record.tripNamed'), 'ok');
+        return true;
+      } catch (e) {
+        console.error('trip rename failed', e);
+        showResultError(sheet);
+        toast(t('record.resultNameFail'), 'err', 4200);
+        return false;
+      }
+    }).finally(() => {
+      sheet.savePromise = null;
+    });
+    sheet.savePromise = save;
+    return save;
+  }
+  function dismissResultSheet(sheet) {
+    if (sheet.closed) return;
+    sheet.closed = true;
+    sheet.node.remove();
+    if (resultSheet === sheet) resultSheet = null;
+  }
+  function closeResultSheet(action = 'done') {
+    const sheet = resultSheet;
+    if (!sheet || sheet.closed) return Promise.resolve(false);
+    if (sheet.closePromise) return sheet.closePromise;
+    setResultBusy(sheet, true);
+    const close = (async () => {
+      try {
+        if (!(await saveResultName(sheet))) return false;
+        if (action === 'analysis' || action === 'export') {
+          try {
+            if (appState.activeTripId !== sheet.tripId || !appState.activeTripFull) {
+              const full = await setActiveTrip(sheet.tripId);
+              if (!full) throw new Error('finished trip is unavailable');
+            }
+          } catch (e) {
+            console.error('result navigation failed', e);
+            showResultError(sheet, t('common.unavailable'), false);
+            toast(t('common.unavailable'), 'err', 4200);
+            return false;
+          }
+        }
+        await removeOverlayState(sheet.historyId);
+        if (action === 'analysis' || action === 'export') {
+          try {
+            await navigate(action);
+          } catch (e) {
+            sheet.historyId = pushOverlayState(() => dismissResultSheet(sheet));
+            console.error('result navigation failed', e);
+            showResultError(sheet, t('common.unavailable'), false);
+            toast(t('common.unavailable'), 'err', 4200);
+            return false;
+          }
+        }
+        dismissResultSheet(sheet);
+        return true;
+      } finally {
+        if (!sheet.closed) {
+          sheet.closePromise = null;
+          setResultBusy(sheet, false);
+        }
+      }
+    })();
+    sheet.closePromise = close;
+    return close;
+  }
+  function showResultSheet({ tripId, full, defaultName, savedName, initialError = false }) {
+    if (resultSheet) return false;
+    const titleId = 'record-result-title';
+    const inputId = 'record-result-name';
+    const hintId = 'record-result-name-hint';
+    const errorId = 'record-result-error';
+    const input = el('input', {
+      type: 'text', id: inputId, value: defaultName, maxlength: '60',
+      autocomplete: 'off', enterkeyhint: 'done', 'aria-describedby': hintId
+    });
+    const error = el('div', {
+      id: errorId, role: 'alert', 'aria-live': 'assertive',
+      style: { display: 'none', color: 'var(--danger)', fontSize: '12px', marginTop: '8px' }
+    });
+    const closeButton = el('button', {
+      type: 'button', class: 'iconbtn', 'data-result-close': '',
+      'aria-label': t('common.close'), style: { width: '38px', height: '38px' }
+    }, icon('x', 18));
+    const actions = [
+      el('button', {
+        type: 'button', class: 'btn primary', 'data-result-action': 'analysis',
+        style: { flex: '1 1 0' }, onclick: () => { void closeResultSheet('analysis'); }
+      }, icon('analysis', 17), t('analysis.title')),
+      el('button', {
+        type: 'button', class: 'btn', 'data-result-action': 'export',
+        style: { flex: '1 1 0' }, onclick: () => { void closeResultSheet('export'); }
+      }, icon('export', 17), t('export.title')),
+      el('button', {
+        type: 'button', class: 'btn ghost', 'data-result-action': 'done',
+        style: { flex: '1 1 0' }, onclick: () => { void closeResultSheet('done'); }
+      }, t('common.done'))
+    ];
+    const node = el('section', {
+      class: 'record-result-sheet', role: 'dialog', 'aria-modal': 'false',
+      'aria-labelledby': titleId,
+      style: {
+        position: 'fixed', left: '50%', bottom: 'calc(var(--tabbar-h) + var(--safe-b) + 12px)',
+        transform: 'translateX(-50%)', width: 'min(560px, calc(100vw - 24px))',
+        maxHeight: 'calc(100vh - var(--tabbar-h) - var(--safe-b) - 32px)',
+        overflowY: 'auto', zIndex: '350', padding: '14px',
+        background: 'var(--bg-elev)', color: 'var(--text)',
+        border: '1px solid var(--border-strong)', borderRadius: 'var(--radius-lg)',
+        boxShadow: 'var(--shadow-2)'
+      }
+    },
+      el('div', { style: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' } },
+        el('h3', { id: titleId, style: { margin: '0', flex: '1', fontSize: '16px', fontWeight: '650' } }, t('record.resultTitle')),
+        closeButton),
+      el('p', { class: 'small muted', style: { margin: '0 0 12px' } }, t('record.resultHint')),
+      el('div', { class: 'field' },
+        el('label', { for: inputId }, t('record.tripName')),
+        input,
+        el('div', { id: hintId, class: 'hint' }, t('record.nameTripHint')),
+        error),
+      el('div', { style: { display: 'flex', gap: '8px' } }, actions)
+    );
+    const sheet = {
+      tripId, full, node, input, error, closeButton, actions,
+      savedName, savePromise: null, closePromise: null, closed: false, historyId: 0
+    };
+    closeButton.onclick = () => { void closeResultSheet('done'); };
+    input.addEventListener('input', () => clearResultError(sheet));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        void closeResultSheet('done');
+      }
+    });
+    resultSheet = sheet;
+    view.append(node);
+    sheet.historyId = pushOverlayState(() => dismissResultSheet(sheet));
+    if (initialError) showResultError(sheet);
+    return true;
+  }
+  async function finishRecordingFlow() {
+    if (rec.status !== 'recording' && rec.status !== 'paused') return;
+    let id;
+    try {
+      id = await stopRecording();
+    } catch (e) {
+      console.error('stop recording failed', e);
+      id = null;
+    }
     if (!id) {
       toast(t('record.stopSaveFailed'), 'err', 5200);
       renderButtons();
       renderBanners();
       return;
     }
-    map.endLive();
-    map.setTrackData([], []);
-    const full = await loadTripFull(id);
-    const defaultName = suggestedTripName(full);
-    await updateTrip(id, { name: defaultName });
-    await setActiveTrip(id);
-    renderButtons();
-    toast(t('record.stopped'), 'ok');
-    const name = await promptModal({
-      title: t('record.nameTrip'),
-      label: t('record.tripName'),
-      value: defaultName,
-      hint: t('record.nameTripHint')
-    });
-    if (name && name !== defaultName) {
-      await updateTrip(id, { name });
-      await setActiveTrip(id);
-      toast(t('record.tripNamed'), 'ok');
+
+    const wasOled = psActive;
+    let full = null;
+    let loadFailed = false;
+    try {
+      full = await loadTripFull(id);
+    } catch (e) {
+      loadFailed = true;
+      console.error('finished trip load failed', e);
     }
+    if (!full) {
+      loadFailed = true;
+      try {
+        const trip = await getTrip(id);
+        if (trip) full = { trip, segments: [], waypoints: [], media: [] };
+      } catch (e) {
+        console.error('finished trip metadata load failed', e);
+      }
+    }
+    const defaultName = full ? suggestedTripName(full) : t('record.newTripName');
+    let savedName = full?.trip.name || '';
+    let initialNameError = false;
+    try {
+      await updateTrip(id, { name: defaultName });
+      savedName = defaultName;
+      if (full) full = { ...full, trip: { ...full.trip, name: defaultName } };
+    } catch (e) {
+      initialNameError = true;
+      console.error('default trip name save failed', e);
+    }
+    if (loadFailed) toast(t('common.unavailable'), 'err', 5200);
+
+    viewingTrip = full;
+    renderViewBar();
+    try {
+      const active = await setActiveTrip(id);
+      if (active) full = active;
+    } catch (e) {
+      console.error('finished trip activation failed', e);
+      toast(t('common.unavailable'), 'err', 5200);
+    }
+    viewingTrip = full;
+    if (wasOled) {
+      try {
+        await setPowerLock(false, { guardUnlockClick: false });
+      } catch (e) {
+        console.error('map restore after OLED stop failed', e);
+        toast(t('common.unavailable'), 'err', 5200);
+      }
+    } else if (full) {
+      await renderFinishedTrip(full);
+    }
+    renderButtons();
+    renderBanners();
+    renderViewBar();
+    toast(t('record.stopped'), 'ok');
+    showResultSheet({ tripId: id, full, defaultName, savedName, initialError: initialNameError });
+  }
+  function onStop() {
+    if (stopFlowPromise) return stopFlowPromise;
+    stopFlowPromise = finishRecordingFlow().finally(() => {
+      stopFlowPromise = null;
+      renderButtons();
+    });
+    return stopFlowPromise;
   }
 
   // ---------- waypoints mid-recording ----------
@@ -841,11 +1217,13 @@ export function createRecordView() {
   const psTop = el('div', { class: 'od-top' });
   const odGrid = el('div', { class: 'od-grid' });
   const psBottom = el('div', { class: 'od-bottom' });
+  const unlockStatus = el('div', { class: 'ps-lock-status' }, t('record.lockPassive'));
   function odCell(key, hero = false) {
-    const v = el('div', { class: 'v' }, '--');
-    const c = el('div', { class: 'od-cell' + (hero ? ' hero' : '') }, v, el('div', { class: 'k' }, t(key)));
+    const num = el('span', { class: 'num' }, '--');
+    const unit = el('small', {});
+    const c = el('div', { class: 'od-cell' + (hero ? ' hero' : '') }, el('div', { class: 'v' }, num, unit), el('div', { class: 'k' }, t(key)));
     odGrid.append(c);
-    return v;
+    return { num, unit };
   }
   const odDist = odCell('panel.distance', true);
   const odDur = odCell('panel.duration');
@@ -854,16 +1232,17 @@ export function createRecordView() {
   const odAlt = odCell('panel.altitude');
   const odAsc = odCell('panel.ascent');
   const odDesc = odCell('panel.descent');
+  const oledSignal = createSignal(odSig.num.parentElement);
   psBottom.innerHTML = `
     <div class="ps-actions">
       <div class="ps-act">
-        <div class="ps-ring ps-unlock" role="button" aria-label="${t('record.lockHint')}">
-          <svg width="104" height="104" viewBox="0 0 104 104">
+        <button type="button" class="ps-ring ps-unlock" aria-label="${t('record.lockHint')}">
+          <svg width="104" height="104" viewBox="0 0 104 104" aria-hidden="true">
             <circle class="bgc" cx="52" cy="52" r="46" fill="none" stroke-width="6"/>
             <circle class="fgc" cx="52" cy="52" r="46" fill="none" stroke-width="6" stroke-linecap="round"/>
           </svg>
-          <div class="ps-lock"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 11V7a4 4 0 0 1 8 0v4" stroke="currentColor" stroke-width="2" fill="none"/></svg></div>
-        </div>
+          <span class="ps-lock"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 11V7a4 4 0 0 1 8 0v4" stroke="currentColor" stroke-width="2" fill="none"/></svg></span>
+        </button>
         <div class="ps-hint">${t('record.lockHint')}</div>
       </div>
     </div>
@@ -878,6 +1257,7 @@ export function createRecordView() {
     </div>
     <div class="ps-hint">${t('record.camSwipe')}</div>`;
   psBottom.querySelector('.ps-actions').append(psCamAct);
+  psBottom.querySelector('.ps-actions').prepend(unlockStatus);
   ps.append(psTop, odGrid, psBottom);
   document.body.append(ps);
 
@@ -931,7 +1311,17 @@ export function createRecordView() {
     ringEl.addEventListener('pointercancel', reset);
     ringEl.addEventListener('pointerleave', reset);
   }
-  bindHold(unlockRing, unlockFg, 1500, () => setPowerLock(false));
+  const unlockPowerLock = () => {
+    if (!psActive) return;
+    void setPowerLock(false).catch((e) => {
+      console.error('power lock exit failed', e);
+      toast(t('common.unavailable'), 'err', 4200);
+    });
+  };
+  bindHold(unlockRing, unlockFg, 1500, unlockPowerLock);
+  unlockRing.addEventListener('click', (e) => {
+    if (e.detail === 0) unlockPowerLock();
+  });
   ps.addEventListener('contextmenu', (e) => e.preventDefault());
 
   function updatePsCamera() {
@@ -993,87 +1383,97 @@ export function createRecordView() {
     if (!L || !psActive) return;
     const units = get('units');
     const d = fmtDistance(L.distance, units);
-    odDist.innerHTML = `${d.v}<small> ${d.u}</small>`;
-    odDur.textContent = fmtDuration(L.duration);
+    odDist.num.textContent = d.v;
+    odDist.unit.textContent = d.u;
+    odDur.num.textContent = fmtDuration(L.duration);
+    odDur.unit.textContent = '';
     if (speedMode() === 'pace') {
       const p = fmtPace(L.speed, units);
-      odSpeed.innerHTML = `${p.v}<small>${p.u}</small>`;
+      odSpeed.num.textContent = p.v;
+      odSpeed.unit.textContent = p.u;
     } else {
       const s = fmtSpeed(L.speed, units);
-      odSpeed.innerHTML = `${s.v}<small>${s.u}</small>`;
+      odSpeed.num.textContent = s.v;
+      odSpeed.unit.textContent = s.u;
     }
     const a = fmtAltitude(L.alt, units);
-    odAlt.innerHTML = `${a.v}<small>${a.u}</small>`;
-    odAsc.innerHTML = `${Math.round(L.ascent)}<small>m</small>`;
-    odDesc.innerHTML = `${Math.round(L.descent)}<small>m</small>`;
-    renderSignal(odSig, L.acc);
+    odAlt.num.textContent = a.v;
+    odAlt.unit.textContent = a.u;
+    odAsc.num.textContent = String(Math.round(L.ascent));
+    odAsc.unit.textContent = 'm';
+    odDesc.num.textContent = String(Math.round(L.descent));
+    odDesc.unit.textContent = 'm';
+    renderSignal(oledSignal, L.acc);
   }
 
-  async function setPowerLock(on) {
-    if (on === psActive) return;
-    psActive = on;
+  async function setPowerLock(on, options: { guardUnlockClick?: boolean } = {}) {
     if (on) {
-      // Dark palette is applied before the black overlay so the transition reads
-      // as a theme switch, not an abrupt flash; the CSS fade reveals it underneath.
-      enterOledTheme();
-      // truly stop WebGL rendering while in power saver
-      const center = map.map.getCenter();
-      const zoom = map.map.getZoom();
-      const basemap = map.basemapId;
-      map.destroy();
-      map = null;
-      mapContainer.style.display = 'none';
-      ps._restore = { center, zoom, basemap };
-      document.documentElement.classList.add('oled-lock');
-      ps.setAttribute('aria-hidden', 'false');
-      ps.classList.add('active');
-      requestWakeLock();
-      renderPsTop();
-      updatePsCamera();
-      renderOled(rec.live);
-      updatePsSub();
-      setTimeout(() => { if (psActive) updatePsSub(); }, 1200);
-    } else {
+      if (!canEnterPowerLock()) {
+        toast(t('record.lockUnavailable'), 'warn');
+        return false;
+      }
+      if (psActive) return true;
+      if (powerLockBusy || powerLockExitPromise) return false;
+      powerLockBusy = true;
+      try {
+        const target = map;
+        if (!target || target.destroyed || (rec.status !== 'recording' && rec.status !== 'paused')) {
+          toast(t('record.lockUnavailable'), 'warn');
+          return false;
+        }
+        // Dark palette is applied before the black overlay so the transition reads
+        // as a theme switch, not an abrupt flash; the CSS fade reveals it underneath.
+        enterOledTheme();
+        target.pauseRendering();
+        mapContainer.style.display = 'none';
+        psActive = true;
+        document.documentElement.classList.add('oled-lock');
+        ps.setAttribute('aria-hidden', 'false');
+        ps.classList.add('active');
+        pushUIState({ type: 'oled' });
+        requestWakeLock();
+        renderPsTop();
+        updatePsCamera();
+        renderOled(rec.live);
+        updatePsSub();
+        setTimeout(() => { if (psActive) updatePsSub(); }, 1200);
+        return true;
+      } finally {
+        powerLockBusy = false;
+        syncPowerLockEntry();
+      }
+    }
+
+    if (!psActive && !powerLockExitPromise) return true;
+    if (powerLockExitPromise) return powerLockExitPromise;
+    const exit = (async () => {
       // A finger still on the glass can synthesize a click on whatever sits under
       // the ring after the overlay disappears; swallow that lift click, however
-      // long the user keeps holding.
-      armUnlockGuard();
+      // long the user keeps holding. Programmatic OLED stop must not consume the
+      // first tap on the result sheet.
+      if (options.guardUnlockClick !== false) armUnlockGuard();
+      psActive = false;
       // Restore the saved theme first, then fade the overlay to reveal it.
       leaveOledTheme();
       document.documentElement.classList.remove('oled-lock');
       ps.setAttribute('aria-hidden', 'true');
       ps.classList.remove('active');
+      const state = currentUIState();
+      if (state?.type === 'oled') backFromUIState(state.id);
       if (rec.status !== 'recording') releaseWakeLock();
       mapContainer.style.display = '';
-      buildMap();
-      const r = ps._restore;
-      if (r) {
-        map.map.once('load', () => {
-          if (r.basemap && map.basemapId !== r.basemap) map.setBasemap(r.basemap);
-          map.map.jumpTo({ center: r.center, zoom: r.zoom });
-          restoreTrackAfterRebuild();
-        });
-      }
-      renderMapLayer();
-    }
-  }
-
-  async function restoreTrackAfterRebuild() {
-    if (rewalk.active) {
-      const full = await loadTripFull(rewalk.tripId);
-      if (full) map.setTrackData(full.segments, full.waypoints);
-    } else if (rec.status === 'recording' || rec.status === 'paused') {
-      const full = await loadTripFull(rec.tripId);
-      if (full) {
-        map.setTrackData(full.segments, full.waypoints);
-        map.liveMode = true;
-        map._liveFeats = new Map();
-        const last = full.segments[full.segments.length - 1]?.points.slice(-1)[0];
-        if (last) map.updatePosition(last.lat, last.lon, last.acc, null);
-      }
-    } else if (viewingTrip) {
-      map.setTrackData(viewingTrip.segments, viewingTrip.waypoints);
-    }
+      const target = map;
+      if (target && !target.destroyed) target.resumeRendering();
+      return !!target && !target.destroyed;
+    })().catch((e) => {
+      console.error('power lock restore failed', e);
+      throw e;
+    }).finally(() => {
+      powerLockExitPromise = null;
+      syncPowerLockEntry();
+    });
+    powerLockExitPromise = exit;
+    return exit;
   }
 
   // ---------- recorder events ----------
@@ -1154,9 +1554,20 @@ export function createRecordView() {
 
   // keyboard shortcuts
   function onKeydown(e) {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && appState.editMode) { e.preventDefault(); e.shiftKey ? redoEdit() : undoEdit(); }
-    if (e.key === ' ' && appState.view === 'record') {
+    if (e.repeat || e.isComposing || e.defaultPrevented || appState.view !== 'record' || hasOpenOverlay()) return;
+    const target = e.target;
+    if (target instanceof Element && target.closest(
+      'input, textarea, select, button, a, label, summary, [contenteditable]:not([contenteditable="false"]), '
+      + '[role="button"], [role="link"], [role="menuitem"], [role="option"], [role="checkbox"], '
+      + '[role="radio"], [role="switch"], [role="tab"], [tabindex]:not([tabindex="-1"])'
+    )) return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && appState.editMode) {
+      e.preventDefault();
+      if (e.shiftKey) redoEdit();
+      else undoEdit();
+      return;
+    }
+    if (e.key === ' ') {
       e.preventDefault();
       if (rec.status === 'recording') runRecAction(pauseRecording());
       else if (rec.status === 'paused') runRecAction(resumeRecording());
@@ -1231,16 +1642,31 @@ export function createRecordView() {
   return {
     view,
     getMap: () => map,
+    isPowerLockActive: () => psActive,
     resize: () => { map?.resize(); renderMapLayer(); },
     refresh: () => { renderButtons(); renderBanners(); renderViewBar(); renderRewalk(); },
+    focus: (intent) => {
+      if (!intent) return;
+      requestAnimationFrame(() => {
+        if (intent.fit && map && !psActive && !map.destroyed) map.fitTrack();
+        if (intent.anchor) document.querySelector(`[data-anchor="${intent.anchor}"]`)?.scrollIntoView({ block: 'center' });
+      });
+    },
     destroy: () => {
       document.removeEventListener('keydown', onKeydown);
       document.removeEventListener('visibilitychange', onVisibility);
       document.removeEventListener('click', swallowUnlockGhostClick, true);
+      document.removeEventListener('pointerdown', clearUnlockGuard, true);
       document.removeEventListener('pointerup', releaseUnlockGuard, true);
       document.removeEventListener('pointercancel', releaseUnlockGuard, true);
       clearTimeout(unlockReleaseTimer);
       offBroadcast();
+      if (resultSheet) {
+        resultSheet.closed = true;
+        resultSheet.node.remove();
+        removeOverlayState(resultSheet.historyId);
+        resultSheet = null;
+      }
       leaveOledTheme();
       document.documentElement.classList.remove('oled-lock');
       if (psActive) {

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { blockExternal, gotoTab } from './utils';
+import { blockExternal, gotoTripSection } from './utils';
 
 const ONE_PX_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -14,6 +14,7 @@ test('new node text and photo export without reselecting the trip and reach vide
 
   const tripId = await page.evaluate(() => window.__lt.recorder.rec.tripId);
   await page.locator('.rec-btn.node').click();
+  await page.locator('.sheet-row').filter({ hasText: '添加节点' }).click();
   const editor = page.locator('.modal-backdrop .modal');
   await expect(editor).toBeVisible();
   await editor.locator('.m-body input[type="text"]').fill('节点文字验收');
@@ -32,20 +33,24 @@ test('new node text and photo export without reselecting the trip and reach vide
     return { name: node?.name, desc: node?.desc, photos: media.filter(Boolean).length };
   }, tripId)).toEqual({ name: '节点文字验收', desc: '节点描述验收', photos: 1 });
 
-  await page.locator('.rec-btn.stop').click();
-  await page.locator('.modal-backdrop .m-foot .btn.primary').click();
-  const nameModal = page.locator('.modal-backdrop .modal').filter({ hasText: '行程名称' });
-  await expect(nameModal).toBeVisible();
-  await nameModal.locator('.m-foot .btn.primary').click();
-  await expect(page.locator('.rec-pill.start')).toBeVisible();
+  await page.locator('.rec-btn.stop').press('Enter');
+  const result = page.locator('.record-result-sheet');
+  await expect(result).toBeVisible();
+  await result.locator('input[type="text"]').fill('节点文字验收行程');
+  await result.locator('[data-result-action="analysis"]').click();
+  await expect(page.locator('#view-trips.active')).toBeVisible();
+  await expect(page.locator('#trip-detail.active')).toBeVisible();
+  await expect(page.locator('.trip-detail-title')).toHaveText('节点文字验收行程');
+  await expect(page.locator('.trip-detail-select')).toHaveValue(tripId!);
 
-  await gotoTab(page, 'export');
+  await gotoTripSection(page, 'share');
   const exportView = page.locator('#view-export');
   await expect(exportView.locator('select').first()).toHaveValue(tripId!);
+  await exportView.locator('.privacy-adjust').click();
   const radius = exportView.locator('input[type="number"]');
   await radius.fill('0');
   await radius.press('Tab');
-  const privacyCard = exportView.locator('.card').filter({ hasText: '纯矢量模式' });
+  const privacyCard = exportView.locator('.card').filter({ hasText: '隐私脱敏' });
   await privacyCard.locator('.switch').last().click();
 
   const posterCard = exportView.locator('.card').filter({ hasText: '图片海报' });

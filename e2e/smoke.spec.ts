@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
-import { blockExternal, gotoTab, openDemo } from './utils';
+import { blockExternal, gotoTab, gotoTripSection, openDemo } from './utils';
 
 test('RoamEtch record view starts directly without manual creation', async ({ page }) => {
   await blockExternal(page);
@@ -36,18 +36,43 @@ test('demo trip renders charts and privacy crop feedback', async ({ page }) => {
   await expect(legend).toContainText('速度');
   await expect(chartCard.locator('.chart-wrap canvas').first()).toBeVisible();
 
-  await gotoTab(page, 'export');
+  await gotoTripSection(page, 'share');
+  await page.locator('#view-export .privacy-adjust').click();
   const radius = page.locator('#view-export input[type="number"]');
   await radius.fill('5000');
   await radius.press('Tab');
   await expect(page.locator('#view-export')).toContainText(/隐私圈隐藏 [1-9]\d* 个轨迹点/);
 });
 
+test('trip rows keep nested controls independent and deleting detail returns to the list', async ({ page }) => {
+  await blockExternal(page);
+  await openDemo(page);
+  await page.locator('.trip-detail-back').click();
+  await expect(page.locator('#trip-detail')).not.toHaveClass(/active/);
+
+  const row = page.locator('.trip-item').first();
+  const favorite = row.locator('.fav-toggle');
+  await favorite.focus();
+  await favorite.press('Space');
+  await expect(favorite).toHaveClass(/active/);
+  await expect(page.locator('#trip-detail')).not.toHaveClass(/active/);
+
+  await row.click();
+  await expect(page.locator('#trip-detail')).toHaveClass(/active/);
+  await page.locator('.trip-detail-actions .danger').click();
+  const confirmation = page.locator('.modal-backdrop .modal');
+  await confirmation.getByRole('button', { name: '删除', exact: true }).click();
+  await expect(page.locator('#trip-detail')).not.toHaveClass(/active/);
+  await expect(page.locator('.trip-item')).toHaveCount(0);
+  await expect(page.locator('#view-trips')).toContainText('还没有行程');
+});
+
 test('vector-only poster renders a preview at export resolution', async ({ page }) => {
   await blockExternal(page);
   await openDemo(page);
-  await gotoTab(page, 'export');
+  await gotoTripSection(page, 'share');
 
+  await page.locator('#view-export .privacy-adjust').click();
   const privacyCard = page.locator('#view-export .card').filter({ hasText: '纯矢量模式' });
   await privacyCard.locator('.switch').last().click();
 
@@ -63,7 +88,7 @@ test('vector-only poster renders a preview at export resolution', async ({ page 
 test('text-only self-contained HTML export downloads without photos', async ({ page }) => {
   await blockExternal(page);
   await openDemo(page);
-  await gotoTab(page, 'export');
+  await gotoTripSection(page, 'share');
 
   const card = page.locator('#view-export .card').filter({ hasText: '自包含网页' });
   await card.getByRole('button', { name: '纯文字（无照片）' }).click();
@@ -82,6 +107,72 @@ test('text-only self-contained HTML export downloads without photos', async ({ p
   const html = readFileSync(path!, 'utf8');
   expect(html).toContain('<canvas');
   expect(html.length).toBeGreaterThan(20_000);
+});
+
+test('shared-link imports stay deduplicated without localStorage cache', async ({ page }) => {
+  await blockExternal(page);
+  await openDemo(page);
+  await page.locator('#trip-detail button[data-section="share"]').click();
+  const link = await page.locator('.link-input').inputValue();
+  expect(link).toContain('#t=');
+  expect(await page.evaluate(() => window.__lt.store.listTrips())).toHaveLength(1);
+
+  await page.evaluate(() => localStorage.clear());
+  await page.goto(link);
+  await expect(page.locator('#trip-detail.active')).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => page.evaluate(() => history.state?.lt?.type)).toBe('view');
+  expect(await page.evaluate(() => window.__lt.store.listTrips())).toHaveLength(2);
+  expect(await page.evaluate(() => window.__lt.store.db.shareImports.count())).toBe(1);
+
+  await page.goto(link);
+  await expect(page.locator('#trip-detail.active')).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => page.evaluate(() => history.state?.lt?.type)).toBe('view');
+  expect(await page.evaluate(() => window.__lt.store.listTrips())).toHaveLength(2);
+  expect(await page.evaluate(() => window.__lt.store.db.shareImports.count())).toBe(1);
+});
+
+test('requested pre-restore snapshot failure blocks restore', async ({ page }) => {
+  await blockExternal(page);
+  await openDemo(page);
+  await gotoTab(page, 'settings');
+  await page.getByRole('button', { name: '整库备份' }).click();
+  const exportModal = page.locator('.modal-backdrop .modal');
+  await exportModal.locator('input[type="checkbox"]').uncheck();
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    exportModal.getByRole('button', { name: '开始导出' }).click()
+  ]);
+  const backupPath = await download.path();
+  expect(backupPath).toBeTruthy();
+  await page.evaluate(() => window.__lt.store.eraseAll());
+
+  const restore = async () => {
+    const chooserPromise = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: '恢复备份' }).click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles(backupPath!);
+    const preview = page.locator('.modal-backdrop .modal').filter({ hasText: '恢复备份' });
+    await expect(preview).toBeVisible();
+    return preview;
+  };
+
+  await page.evaluate(() => {
+    (window as any).__originalUserAgent = navigator.userAgent;
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => 'MicroMessenger E2E' });
+  });
+  const blockedPreview = await restore();
+  await blockedPreview.locator('.backup-snapshot-toggle').click();
+  await blockedPreview.locator('.m-foot').getByRole('button', { name: '恢复', exact: true }).click();
+  await expect(page.locator('#toast-root .toast.err').last()).toContainText('快照导出失败');
+  expect(await page.evaluate(() => window.__lt.store.listTrips())).toHaveLength(0);
+
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => (window as any).__originalUserAgent });
+  });
+  const preview = await restore();
+  await preview.locator('.m-foot').getByRole('button', { name: '恢复', exact: true }).click();
+  await expect(page.locator('#toast-root .toast.ok').last()).toContainText(/已恢复 1 条行程/);
+  expect(await page.evaluate(() => window.__lt.store.listTrips())).toHaveLength(1);
 });
 
 test('encrypted backup export, wipe and restore round-trip', async ({ page }) => {
@@ -122,7 +213,7 @@ test('encrypted backup export, wipe and restore round-trip', async ({ page }) =>
   const preview = page.locator('.modal-backdrop .modal').filter({ hasText: '恢复备份' });
   await expect(preview).toContainText('加密');
   await expect(preview).toContainText('SHA-256 校验通过');
-  await preview.locator('.backup-snapshot input[type="checkbox"]').uncheck();
+  await expect(preview.locator('.backup-snapshot-toggle')).toHaveAttribute('aria-pressed', 'false');
   await preview.locator('.m-foot').getByRole('button', { name: '恢复', exact: true }).click();
 
   await expect(page.locator('#toast-root .toast.ok').last()).toContainText(/已恢复 1 条行程/);

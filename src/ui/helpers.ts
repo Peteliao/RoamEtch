@@ -1,6 +1,7 @@
 // Small DOM / toast / modal helpers.
 import { t } from '../core/i18n';
 import { on } from '../core/events';
+import { backFromUIState, currentUIState, onUIPop, pushUIState } from './history';
 
 export function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -90,7 +91,7 @@ export function icon(name, size = 20) {
 let toastRoot = null;
 export function toast(msg, type = 'info', ms = 3200) {
   if (!toastRoot) {
-    toastRoot = el('div', { id: 'toast-root' });
+    toastRoot = el('div', { id: 'toast-root', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'false' });
     document.body.append(toastRoot);
   }
   const ic = type === 'ok' ? 'check' : type === 'warn' ? 'warn' : type === 'err' ? 'x' : 'info';
@@ -106,20 +107,109 @@ export function toast(msg, type = 'info', ms = 3200) {
 on('toast', ({ msg, type }) => toast(msg, type));
 
 // ---------- modal ----------
+const modalStack = [];
+let modalSequence = 0;
+
+onUIPop((state) => {
+  const top = modalStack[modalStack.length - 1];
+  if (!top || (state?.type === 'modal' && state.modalId === top.id)) return false;
+  top.closeFromHistory();
+  return true;
+});
+
+export function hasOpenOverlay() {
+  return !!document.querySelector('.modal-backdrop, .cam-overlay, .qr-scan-overlay, .record-result-sheet, #oled-dash.active');
+}
+
+export function trapFocus(container, { onEscape = null, initial = null } = {}) {
+  const previousFocus = document.activeElement;
+  const keydown = (e) => {
+    if (e.key === 'Escape' && onEscape) {
+      e.preventDefault();
+      e.stopPropagation();
+      onEscape();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    const focusable = [...container.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])')]
+      .filter((node) => node.getClientRects().length > 0);
+    if (!focusable.length) { e.preventDefault(); container.focus(); return; }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!container.contains(document.activeElement)) {
+      e.preventDefault();
+      first.focus();
+    } else if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  document.addEventListener('keydown', keydown, true);
+  const frame = requestAnimationFrame(() => {
+    if (initial instanceof HTMLElement && initial.isConnected) initial.focus({ preventScroll: true });
+    else container.focus({ preventScroll: true });
+  });
+  return () => {
+    cancelAnimationFrame(frame);
+    document.removeEventListener('keydown', keydown, true);
+    if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true });
+  };
+}
+
 export function modal({ title, body, footer = null, onClose = null, wide = false }) {
   const backdrop = el('div', { class: 'modal-backdrop' });
-  const box = el('div', { class: 'modal', style: wide ? { maxWidth: '760px' } : {} });
-  const close = () => { backdrop.remove(); onClose?.(); document.removeEventListener('keydown', esc); };
-  const esc = (e) => { if (e.key === 'Escape') close(); };
+  const titleId = `modal-title-${++modalSequence}`;
+  const previousFocus = document.activeElement;
+  const box = el('div', {
+    class: 'modal', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': titleId,
+    tabindex: '-1', style: wide ? { maxWidth: '760px' } : {}
+  });
+  let closed = false;
+  const id = ++modalSequence;
+  const finishClose = (fromHistory: boolean) => {
+    if (closed) return;
+    closed = true;
+    const index = modalStack.indexOf(entry);
+    if (index >= 0) modalStack.splice(index, 1);
+    backdrop.remove();
+    document.removeEventListener('keydown', keydown, true);
+    if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true });
+    if (!fromHistory) backFromUIState(entry.historyId);
+    onClose?.();
+  };
+  const close = () => finishClose(false);
+  const keydown = (e) => {
+    if (modalStack[modalStack.length - 1] !== entry) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+    if (e.key !== 'Tab') return;
+    const focusable = [...box.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])')]
+      .filter((node) => node.getClientRects().length > 0);
+    if (!focusable.length) { e.preventDefault(); box.focus(); return; }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && (document.activeElement === first || document.activeElement === box)) {
+      e.preventDefault(); last.focus();
+    } else if (!e.shiftKey && (document.activeElement === last || document.activeElement === box)) {
+      e.preventDefault(); first.focus();
+    }
+  };
+  const entry = { id, backdrop, box, close, closeFromHistory: () => finishClose(true), historyId: id };
   box.append(
-    el('div', { class: 'm-head' }, el('h3', {}, title), el('button', { class: 'iconbtn', onclick: close, 'aria-label': 'close' }, icon('x'))),
+    el('div', { class: 'm-head' }, el('h3', { id: titleId }, title), el('button', { class: 'iconbtn', onclick: close, 'aria-label': t('common.close') }, icon('x'))),
     el('div', { class: 'm-body' }, body)
   );
   if (footer) box.append(el('div', { class: 'm-foot' }, footer));
   backdrop.append(box);
-  backdrop.addEventListener('pointerdown', (e) => { if (e.target === backdrop) close(); });
-  document.addEventListener('keydown', esc);
+  backdrop.addEventListener('pointerdown', (e) => { if (e.target === backdrop && modalStack[modalStack.length - 1] === entry) close(); });
   document.body.append(backdrop);
+  modalStack.push(entry);
+  const historyId = pushUIState({ type: 'modal', modalId: id }).id;
+  entry.historyId = historyId;
+  document.addEventListener('keydown', keydown, true);
+  box.focus({ preventScroll: true });
   return { close, box, backdrop };
 }
 

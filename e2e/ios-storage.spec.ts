@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { blockExternal, gotoTab, openDemo } from './utils';
+import { blockExternal, openDemo } from './utils';
 
 test.use({
   userAgent:
@@ -12,7 +12,13 @@ test.use({
 test('iOS browser shows a closable storage eviction warning', async ({ page }) => {
   await blockExternal(page);
   await openDemo(page);
-  await gotoTab(page, 'trips');
+  const installGuide = page.locator('.modal-backdrop .modal').filter({ hasText: '把 RoamEtch迹刻放到手机桌面' });
+  await expect(installGuide).toBeVisible();
+  await installGuide.getByRole('button', { name: '知道了', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => history.state?.lt?.type)).toBe('view');
+  await page.locator('.trip-detail-back').click();
+  await expect(page.locator('#trip-detail')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => history.state?.lt?.detail)).toBe(false);
 
   const nudge = page.locator('.ios-storage-nudge');
   await expect(nudge).toBeVisible();
@@ -24,8 +30,10 @@ test('iOS browser shows a closable storage eviction warning', async ({ page }) =
   await expect(nudge).toBeHidden();
 
   await page.reload();
-  await expect(page.locator('#view-analysis.active')).toBeVisible({ timeout: 30_000 });
-  await gotoTab(page, 'trips');
+  await expect(page.locator('#view-trips.active')).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('#trip-detail.active')).toBeVisible({ timeout: 30_000 });
+  await page.locator('.trip-detail-back').click();
+  await expect(page.locator('#trip-detail')).toBeHidden();
   await expect(page.locator('.ios-storage-nudge')).toBeHidden();
   expect(await page.evaluate(() => localStorage.getItem('roametch.iosStorageNudge.v1'))).toBeTruthy();
 });

@@ -3,7 +3,7 @@ import Dexie from 'dexie';
 import { uuid } from './geo';
 
 export const db = new Dexie('localtrace') as Dexie & {
-  trips: any; segments: any; trackChunks: any; waypoints: any; media: any; elevCache: any;
+  trips: any; segments: any; trackChunks: any; waypoints: any; media: any; elevCache: any; shareImports: any;
 };
 db.version(1).stores({
   trips: 'id, updatedAt, status',
@@ -12,6 +12,9 @@ db.version(1).stores({
   waypoints: 'id, tripId, time',
   media: 'id, tripId',
   elevCache: 'key, fetchedAt'
+});
+db.version(2).stores({
+  shareImports: 'fingerprint, tripId, createdAt'
 });
 
 export const CHUNK_SIZE = 400;
@@ -39,13 +42,23 @@ export async function updateTrip(id, patch, { touch = true }: { touch?: boolean 
   });
 }
 export async function deleteTrip(id) {
-  await db.transaction('rw', [db.trips, db.segments, db.trackChunks, db.waypoints, db.media], async () => {
+  await db.transaction('rw', [db.trips, db.segments, db.trackChunks, db.waypoints, db.media, db.shareImports], async () => {
     await db.trackChunks.where('tripId').equals(id).delete();
     await db.segments.where('tripId').equals(id).delete();
     await db.waypoints.where('tripId').equals(id).delete();
     await db.media.where('tripId').equals(id).delete();
+    await db.shareImports.where('tripId').equals(id).delete();
     await db.trips.delete(id);
   });
+}
+
+// ---------- shared-link imports ----------
+export const getShareImport = (fingerprint: string) => db.shareImports.get(fingerprint);
+export async function rememberShareImport(fingerprint: string, tripId: string) {
+  await db.shareImports.put({ fingerprint, tripId, createdAt: Date.now() });
+}
+export async function forgetShareImport(fingerprint: string) {
+  await db.shareImports.delete(fingerprint);
 }
 
 // ---------- segments & chunks ----------
@@ -203,7 +216,7 @@ export async function storageEstimate() {
 export async function eraseAll() {
   await Promise.all([
     db.trips.clear(), db.segments.clear(), db.trackChunks.clear(),
-    db.waypoints.clear(), db.media.clear(), db.elevCache.clear()
+    db.waypoints.clear(), db.media.clear(), db.elevCache.clear(), db.shareImports.clear()
   ]);
 }
 

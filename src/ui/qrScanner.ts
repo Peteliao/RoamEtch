@@ -2,7 +2,8 @@
 // sheet never leaves a hidden capture session running.
 import { t } from '../core/i18n';
 import { decodeQrVideoFrame } from '../core/qr';
-import { el, icon } from './helpers';
+import { el, icon, trapFocus } from './helpers';
+import { pushOverlayState, removeOverlayState } from './history';
 
 export function openQrScanner(onResult: (text: string) => void) {
   let closed = false;
@@ -22,7 +23,10 @@ export function openQrScanner(onResult: (text: string) => void) {
   const closeBtn = el('button', {
     class: 'qr-scan-close', type: 'button', 'aria-label': t('common.close'), onclick: () => close()
   }, icon('x', 22));
-  const overlay = el('div', { class: 'qr-scan-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': t('meet.scanTitle') },
+  const overlay = el('div', {
+    class: 'qr-scan-overlay', role: 'dialog', 'aria-modal': 'true',
+    'aria-label': t('meet.scanTitle'), tabindex: '-1'
+  },
     video,
     el('div', { class: 'qr-scan-shade' }, el('div', { class: 'qr-scan-frame' })),
     el('div', { class: 'qr-scan-top' }, el('div', { class: 'qr-scan-title' }, t('meet.scanTitle')), closeBtn),
@@ -31,6 +35,8 @@ export function openQrScanner(onResult: (text: string) => void) {
   document.body.append(overlay);
 
   const api = { close };
+  let historyId = 0;
+  let releaseFocus = () => {};
 
   function stop() {
     clearInterval(timer);
@@ -45,18 +51,17 @@ export function openQrScanner(onResult: (text: string) => void) {
     video.srcObject = null;
   }
 
-  function close() {
+  function close(fromHistory = false) {
     if (closed) return;
     closed = true;
     stop();
-    document.removeEventListener('keydown', onKey);
+    releaseFocus();
     overlay.remove();
+    removeOverlayState(historyId, { history: !fromHistory });
   }
 
-  function onKey(e: KeyboardEvent) {
-    if (e.key === 'Escape') { e.preventDefault(); close(); }
-  }
-  document.addEventListener('keydown', onKey);
+  historyId = pushOverlayState(() => close(true));
+  releaseFocus = trapFocus(overlay, { onEscape: () => close(), initial: closeBtn });
 
   function finish(text: string) {
     if (closed) return;

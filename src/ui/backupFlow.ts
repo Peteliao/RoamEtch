@@ -169,7 +169,21 @@ export async function restoreBackupFlow(file, { onRestored = null } = {}) {
       ? t('backup.verifyFailed')
       : t('backup.legacy');
 
-  const snapshot = el('input', { type: 'checkbox', checked: true });
+  let snapshotBeforeRestore = false;
+  const snapshotState = el('span', { class: 'backup-snapshot-state' }, t('backup.snapshotOff'));
+  const snapshotToggle = el('button', {
+    type: 'button', class: 'btn ghost block backup-snapshot-toggle', 'aria-pressed': 'false',
+    style: { justifyContent: 'space-between', marginTop: '12px', textAlign: 'left' }
+  },
+    el('span', {}, icon('shield', 15), t('backup.snapshotBefore')),
+    snapshotState);
+  snapshotToggle.onclick = () => {
+    snapshotBeforeRestore = !snapshotBeforeRestore;
+    snapshotToggle.setAttribute('aria-pressed', String(snapshotBeforeRestore));
+    snapshotToggle.classList.toggle('primary', snapshotBeforeRestore);
+    snapshotToggle.classList.toggle('ghost', !snapshotBeforeRestore);
+    snapshotState.textContent = t(snapshotBeforeRestore ? 'backup.snapshotOn' : 'backup.snapshotOff');
+  };
   const choice = await new Promise<{ strategy: string } | null>((resolve) => {
     let settled = false;
     const done = (v) => { if (!settled) { settled = true; resolve(v); } };
@@ -203,17 +217,23 @@ export async function restoreBackupFlow(file, { onRestored = null } = {}) {
           ? el('div', { class: 'backup-warning ok' }, icon('shield', 14), t('backup.encryptedNote'))
           : el('div', { class: 'backup-warning' }, icon('warn', 14), t('backup.plaintextWarning')),
         integrity.ok === false ? el('div', { class: 'backup-error' }, icon('warn', 15), t('backup.corruptHint')) : null,
-        el('label', { class: 'backup-snapshot' }, snapshot,
-          el('span', {}, icon('shield', 15), t('backup.snapshotBefore')))),
+        snapshotToggle),
       footer: buttons,
       onClose: () => done(null)
     });
   });
   if (!choice) return false;
-  if (snapshot.checked) {
+  if (snapshotBeforeRestore) {
+    let exported = false;
     try {
-      await exportBackupFlow({ silentOnWeChat: true, promptEncryption: false, password: encrypted ? password : '' });
-    } catch (e) { console.error(e); }
+      exported = await exportBackupFlow({ silentOnWeChat: true, promptEncryption: false, password: encrypted ? password : '' });
+    } catch (e) {
+      console.error('pre-restore snapshot export failed', e);
+    }
+    if (!exported) {
+      toast(t('backup.snapshotFailed'), 'err', 5200);
+      return false;
+    }
   }
   try {
     const n = await restoreBackup(file, choice.strategy, inspected);

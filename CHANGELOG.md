@@ -4,6 +4,34 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.1.0] - 2026-11-25
+
+### Changed
+
+- Reduced the main navigation to Record, Trips, Team, and Settings. Trip
+  Overview, Data, and Share now live under one trip detail with a single active
+  trip selection.
+- Kept finished tracks visible after recording and added an inline result sheet
+  for naming and opening analysis or sharing. OLED pocket lock is now passive:
+  recording continues without pause, resume, or finish controls, and a 1.5-second
+  hold unlocks it.
+- Moved the trip list ahead of yearly footprints, consolidated import and data
+  management actions, and reorganized Settings into six sections with team and
+  basemap controls under Advanced and seven-tap developer-tool unlock.
+- Preserved generated exports across same-trip refreshes, invalidated stale work
+  only after real trip changes, added dynamic privacy summaries and shared empty
+  states with record, sample, and import actions, and limited share prewarming to
+  the visible Share section.
+- Added team unread badges, a live team-status indicator, a clickable recording
+  indicator, retained ephemeral chat drafts, accessible modal focus management,
+  camera/QR focus traps, and live-region toasts.
+- Added browser-history handling for trip detail, dialogs, the result sheet,
+  camera, and QR scanner, plus normalized and validated cross-view navigation.
+- Added chart legend toggles, touch scrubbing readouts, expandable timeline rows,
+  chart render caching, and stable recorder metric nodes.
+- Made requested pre-restore snapshots mandatory for restore and moved shared-link
+  deduplication into a durable transactional IndexedDB index.
+
 ## [3.0.0] - 2026-11-24
 
 ### Added

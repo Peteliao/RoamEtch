@@ -1,10 +1,14 @@
 import { test, expect, type Page } from '@playwright/test';
 import { stat } from 'node:fs/promises';
 import { createRelayServer } from '../relay/server.mjs';
-import { blockExternal, configureWsRelay, gotoTab } from './utils';
+import { blockExternal, configureWsRelay, gotoTab, revealSettingsBlock } from './utils';
 
 function p2pSwitch(page: Page) {
   return page.locator('.setting-row').filter({ hasText: '原图点对点传输' }).locator('input[type="checkbox"]');
+}
+
+async function openP2PSettings(page: Page) {
+  await revealSettingsBlock(page, p2pSwitch(page).locator('xpath=ancestor::div[contains(@class,"relay-settings-block")]'));
 }
 
 async function enableP2P(page: Page) {
@@ -31,7 +35,7 @@ async function openChat(page: Page) {
 }
 
 async function closeChat(page: Page) {
-  await page.locator('.meet-chat-modal').getByRole('button', { name: 'close', exact: true }).click();
+  await page.locator('.meet-chat-modal').getByRole('button', { name: '关闭', exact: true }).click();
   await expect(page.locator('.meet-chat-modal')).toBeHidden();
 }
 
@@ -164,7 +168,7 @@ test('WebRTC transfers an HD original on demand and privacy refusal leaves chat 
     expect((await stat(downloadPath!)).size).toBe(sent.size);
 
     await peer.locator('.modal-backdrop').filter({ has: peer.locator('.chat-image-viewer') })
-      .getByRole('button', { name: 'close', exact: true }).click();
+      .getByRole('button', { name: '关闭', exact: true }).click();
     await closeChat(peer);
     await closeChat(page);
     await expect.poll(() => page.evaluate(() => window.__lt.meet.imageCooldownLeft()), { timeout: 7_000 }).toBe(0);
@@ -310,6 +314,7 @@ test('P2P settings keep the default off and persist custom STUN and TURN values'
   await page.goto('/');
   await expect.poll(() => page.evaluate(() => !!window.__lt)).toBe(true);
   await gotoTab(page, 'settings');
+  await openP2PSettings(page);
   await expect(p2pSwitch(page)).not.toBeChecked();
 
   const stun = page.locator('.field').filter({ hasText: 'STUN 地址' }).locator('textarea');
@@ -332,6 +337,7 @@ test('P2P settings keep the default off and persist custom STUN and TURN values'
   await page.reload();
   await expect.poll(() => page.evaluate(() => !!window.__lt)).toBe(true);
   await gotoTab(page, 'settings');
+  await openP2PSettings(page);
   await expect(p2pSwitch(page)).not.toBeChecked();
   await expect(stun).toHaveValue('stun:stun.example.com:3478\nstuns:stun.example.com:5349');
   await expect(turn).toHaveValue('turn:turn.example.com:3478\nturns:turn.example.com:5349');

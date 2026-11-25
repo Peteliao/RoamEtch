@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { buildShareLink, parseShareFragment } from '../src/core/shareLink';
+import { buildShareLink, parseShareFragment, shareFragmentFingerprint } from '../src/core/shareLink';
 import { computeStats } from '../src/core/stats';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -72,5 +72,41 @@ describe('compact share links', () => {
     expect(parseShareFragment('#t=!')).toBeNull();
     expect(parseShareFragment('#t=zAAAA')).toBeNull();
     expect(parseShareFragment('#nope')).toBeNull();
+  });
+});
+
+describe('share fragment fingerprints', () => {
+  function fragmentFor(full = makeFull()) {
+    vi.stubGlobal('location', { href: 'https://example.com/RoamEtch/' });
+    const { url } = buildShareLink(full, { radius: 0, hideSensitive: true });
+    return url.slice(url.indexOf('#'));
+  }
+
+  it('is stable for repeated reads of the same fragment', async () => {
+    const fragment = fragmentFor();
+    const first = await shareFragmentFingerprint(fragment);
+    expect(first).toEqual(expect.any(String));
+    expect(await shareFragmentFingerprint(fragment)).toBe(first);
+  });
+
+  it('changes when imported trip content changes', async () => {
+    const base = await shareFragmentFingerprint(fragmentFor());
+    const renamed = makeFull();
+    renamed.trip.name = 'Different ridge';
+    const moved = makeFull();
+    moved.segments[0].points[30].lat += 0.01;
+    const waypoint = makeFull();
+    waypoint.waypoints[0].name = 'Different viewpoint';
+
+    expect(await shareFragmentFingerprint(fragmentFor(renamed))).not.toBe(base);
+    expect(await shareFragmentFingerprint(fragmentFor(moved))).not.toBe(base);
+    expect(await shareFragmentFingerprint(fragmentFor(waypoint))).not.toBe(base);
+  });
+
+  it('returns null for malformed fragments', async () => {
+    await expect(shareFragmentFingerprint('')).resolves.toBeNull();
+    await expect(shareFragmentFingerprint('#t=!')).resolves.toBeNull();
+    await expect(shareFragmentFingerprint('#t=zAAAA')).resolves.toBeNull();
+    await expect(shareFragmentFingerprint('#nope')).resolves.toBeNull();
   });
 });

@@ -26,8 +26,11 @@ test('city footprint asks for consent, lights the map and reaches the share imag
   await page.getByRole('button', { name: '国内方案', exact: true }).click();
   await expect.poll(() => page.evaluate(() => window.__lt.region.effective)).toBe('cn');
   await gotoTab(page, 'trips');
+  await page.locator('.trip-detail-back').click();
+  await expect(page.locator('#trip-detail')).toBeHidden();
 
   const card = page.locator('.footprint-card');
+  await card.locator('.footprint-toggle').click();
   await expect(card.locator('.footprint-map')).toBeVisible();
   await expect(card.locator('.city-footprint-marker')).toHaveCount(0);
   await expect(card).not.toContainText('null');

@@ -13,44 +13,69 @@ import { cleanGpsTrack } from '../core/trackCleanup';
 import { TrackMap } from './map';
 import { WP_ICONS } from '../core/waypointMeta';
 import { canvasPalette } from '../core/palette';
+import { effectiveTheme } from '../core/theme';
 import { buildProfile, altitudeUnit, distanceUnit, speedUnit } from '../core/profileChart';
-import { appState, setActiveTrip, refreshActiveTrip } from './state';
+import { appState, setActiveTrip, refreshActiveTrip, isTripSectionActive } from './state';
 import { el, icon, confirmModal, toast } from './helpers';
+import { renderTripEmptyState } from './tripEmptyState';
 
-export function createAnalysisView() {
+export function createAnalysisView(navigate, { embedded = false } = {}) {
   const view = el('div', { class: 'view', id: 'view-analysis' });
   const scroll = el('div', { class: 'view-scroll' });
   view.append(scroll);
 
-  const tripSel = el('select', {});
-  const head = el('div', { class: 'page-head' },
-    el('h2', { class: 'page-title' }, t('analysis.title')),
-    el('div', { class: 'search-bar', style: { margin: '10px 0 14px' } }, icon('analysis', 18), tripSel));
+  const tripSel = el('select', { 'aria-label': t('analysis.selectTrip') });
+  const shareBtn = el('button', { class: 'btn sm', onclick: () => navigate('export') }, icon('share', 14), t('tabs.export'));
+  const head = el('div', { class: 'page-head analysis-head' },
+    el('div', { class: 'page-head-row' },
+      el('h2', { class: 'page-title' }, t('analysis.title')),
+      embedded ? null : shareBtn),
+    embedded ? null : el('div', { class: 'search-bar', style: { margin: '10px 0 14px' } }, icon('analysis', 18), tripSel));
   tripSel.onchange = async () => { if (tripSel.value) await setActiveTrip(tripSel.value); };
+  const emptyBox = el('div', { class: 'empty-state analysis-empty', style: { display: 'none' } });
 
-  const statsBox = el('div', { class: 'stat-summary card' });
-  const qualityBox = el('div', {});
-  const advisory = el('div', {});
+  const statsBox = el('div', { class: 'stat-summary card analysis-overview' });
+  const qualityBox = el('div', { class: 'analysis-data' });
+  const advisory = el('div', { class: 'analysis-overview' });
   const gapBody = el('div', {});
-  const gapCard = el('div', { class: 'card', style: { display: 'none' } },
+  const gapCard = el('div', { class: 'card analysis-data', style: { display: 'none' } },
     el('h3', {}, icon('routeFwd', 18), t('analysis.gapTitle')), gapBody);
-  const miniMapBox = el('div', { class: 'analysis-map' });
+  const miniMapBox = el('div', { class: 'analysis-map analysis-overview' });
   const chartWrap = el('div', { class: 'chart-wrap', 'aria-label': t('analysis.chartTitle') });
-  const chartLegend = el('div', { class: 'chart-legend' });
-  const chartCard = el('div', { class: 'card chart-card' },
+  const scrubBubble = el('div', { class: 'chart-scrub-bubble', role: 'status', 'aria-live': 'polite', style: { display: 'none' } });
+  const chartLegend = el('div', { class: 'chart-legend', role: 'group', 'aria-label': t('analysis.chartTitle') });
+  const chartCard = el('div', { class: 'card chart-card analysis-overview' },
     el('div', { class: 'chart-head' }, el('h3', {}, t('analysis.chartTitle')), chartLegend),
     el('div', { class: 'small faint', style: { marginBottom: '2px' } }, t('analysis.hoverHint')),
     chartWrap);
-  const slopeCard = el('div', { class: 'card' }, el('h3', {}, t('analysis.slopeDist')), el('canvas', { id: 'slope-canvas', style: { width: '100%', height: '120px' } }));
-  const segCard = el('div', { class: 'card' }, el('h3', {}, t('analysis.segTable')), el('div', { id: 'seg-table' }));
-  const tlCard = el('div', { class: 'card' }, el('h3', {}, t('analysis.timeline')), el('div', { id: 'timeline' }));
+  const slopeCard = el('div', { class: 'card analysis-data' }, el('h3', {}, t('analysis.slopeDist')), el('canvas', { id: 'slope-canvas', style: { width: '100%', height: '120px' } }));
+  const segCard = el('div', { class: 'card analysis-data' }, el('h3', {}, t('analysis.segTable')), el('div', { id: 'seg-table' }));
+  const tlCard = el('div', { class: 'card analysis-data' }, el('h3', {}, t('analysis.timeline')), el('div', { id: 'timeline' }));
   const disclaimer = el('div', { class: 'small faint', style: { padding: '4px 2px 20px' } }, '⚠ ' + t('analysis.disclaimer'));
 
-  scroll.append(head, advisory, statsBox, qualityBox, gapCard, miniMapBox, chartCard, slopeCard, segCard, tlCard, disclaimer);
+  scroll.append(head, emptyBox, advisory, statsBox, miniMapBox, chartCard, gapCard, qualityBox, slopeCard, segCard, tlCard, disclaimer);
 
   let miniMap = null;
   let chart = null;
   let flatPoints = [];
+  let mapTrackKey = '';
+  let renderSequence = 0;
+  let chartSeries = { altitude: true, speed: true };
+  let chartProfile = null;
+  let chartStats = null;
+  let chartRenderKey = '';
+  const legendButtons = {};
+
+  function analysisActive() {
+    return isTripSectionActive('overview') || isTripSectionActive('data');
+  }
+
+  function renderEmpty() {
+    renderTripEmptyState(emptyBox, navigate, {
+      iconKey: 'analysis', titleKey: 'analysis.emptyTitle', hintKey: 'analysis.emptyHint'
+    });
+    shareBtn.disabled = true;
+  }
 
   function ensureMiniMap() {
     if (miniMap) return;
@@ -186,63 +211,102 @@ export function createAnalysisView() {
     }
   }
 
-  function chartOpts(height, profile): any {
+  function chartOpts(height, profile, visible): any {
     const P = canvasPalette();
     const speedColor = `rgb(${P.lut[1].join(',')})`;
+    const series: any[] = [{ label: distanceUnit(profile.units) }];
+    const axes: any[] = [
+      { stroke: P.muted, grid: { stroke: P.grid }, size: 42, font: '12px system-ui', label: [] }
+    ];
+    if (visible.altitude) {
+      series.push({ label: `${t('panel.altitude')} (${altitudeUnit(profile.units)})`, stroke: P.accent, width: 1.8, fill: P.accentSoft, points: { show: false } });
+      axes.push({ scale: 'y', stroke: P.accent, grid: { stroke: P.grid }, size: 46, font: '12px system-ui', label: [] });
+    }
+    if (visible.speed) {
+      series.push({ label: `${t('panel.speed')} (${speedUnit(profile.units)})`, stroke: speedColor, width: 2, scale: 'y1', fill: null, points: { show: false } });
+      axes.push({ scale: 'y1', stroke: speedColor, grid: { show: false }, size: 52, font: '12px system-ui', side: 1, label: [] });
+    }
     return {
       width: Math.max(280, scroll.clientWidth - 60),
       height,
       scales: {
         x: { time: false, range: () => [0, profile.maxX] },
-        y: profile.hasAlt ? { range: () => [profile.altRange.min, profile.altRange.max] } : {},
-        y1: profile.hasSpeed ? { range: () => [profile.speedRange.min, profile.speedRange.max] } : {}
+        ...(visible.altitude ? { y: { range: () => [profile.altRange.min, profile.altRange.max] } } : {}),
+        ...(visible.speed ? { y1: { range: () => [profile.speedRange.min, profile.speedRange.max] } } : {})
       },
-      series: [
-        { label: distanceUnit(profile.units) },
-        { label: `${t('panel.altitude')} (${altitudeUnit(profile.units)})`, stroke: P.accent, width: 1.8, fill: P.accentSoft, points: { show: false }, show: profile.hasAlt },
-        { label: `${t('panel.speed')} (${speedUnit(profile.units)})`, stroke: speedColor, width: 2, scale: 'y1', fill: null, points: { show: false }, show: profile.hasSpeed }
-      ],
-      axes: [
-        { stroke: P.muted, grid: { stroke: P.grid }, size: 42, font: '11px system-ui', label: [] },
-        { stroke: P.accent, grid: { stroke: P.grid }, size: 46, font: '11px system-ui', label: [], show: profile.hasAlt },
-        { stroke: speedColor, grid: { show: false }, size: 52, font: '11px system-ui', side: 1, label: [], show: profile.hasSpeed }
-      ],
+      series,
+      axes,
       cursor: { drag: { x: false, y: false }, points: { show: false } },
       legend: { show: false }
     };
   }
 
-  function hoverHook(profile, units) {
-    return (u) => {
-      const idx = u.cursor.idx;
-      const sourceIdx = idx == null ? null : profile.sourceIndices[idx];
-      if (sourceIdx == null || !flatPoints[sourceIdx] || !miniMap) { miniMap?.clearHover(); return; }
-      const parts = [];
-      const rawAlt = appState.stats?.series.alt?.[sourceIdx];
-      const rawSpeed = appState.stats?.series.speed?.[sourceIdx];
+  function cursorReadout(stats, profile, units, idx, visible, includeDistance = false) {
+    const sourceIdx = idx == null ? null : profile.sourceIndices[idx];
+    if (sourceIdx == null) return '';
+    const parts = [];
+    if (includeDistance) {
+      const d = fmtDistance(stats?.series?.d?.[sourceIdx], units);
+      parts.push(`${t('analysis.segDist')} ${typeof d === 'string' ? d : `${d.v} ${d.u}`}`);
+    }
+    if (visible.altitude) {
+      const rawAlt = stats?.series?.alt?.[sourceIdx];
       if (rawAlt != null) {
         const a = fmtAltitude(rawAlt, units);
         parts.push(`${t('panel.altitude')} ${a.v} ${a.u}`);
       }
+    }
+    if (visible.speed) {
+      const rawSpeed = stats?.series?.speed?.[sourceIdx];
       if (rawSpeed != null) {
         const s = fmtSpeed(rawSpeed, units);
         parts.push(`${t('panel.speed')} ${s.v} ${s.u}`);
       }
-      miniMap.showHover(flatPoints[sourceIdx].lat, flatPoints[sourceIdx].lon, parts.join(' · ') || null);
+    }
+    return parts.join(' · ');
+  }
+
+  function hoverHook(stats, profile, units, visible) {
+    return (u) => {
+      const idx = u.cursor.idx;
+      const sourceIdx = idx == null ? null : profile.sourceIndices[idx];
+      if (sourceIdx == null || !flatPoints[sourceIdx] || !miniMap) { miniMap?.clearHover(); return; }
+      const label = cursorReadout(stats, profile, units, idx, visible);
+      miniMap.showHover(flatPoints[sourceIdx].lat, flatPoints[sourceIdx].lon, label || null);
     };
   }
 
-  function attachScrub(u) {
+  function attachScrub(u, stats, profile, units, visible) {
     const over = u.over;
     let pointerId = null;
+    chartWrap.append(scrubBubble);
+    scrubBubble.textContent = '';
+    scrubBubble.style.display = 'none';
+
+    const showReadout = (e) => {
+      const text = cursorReadout(stats, profile, units, u.cursor.idx, visible, true);
+      if (!text) { scrubBubble.style.display = 'none'; return; }
+      scrubBubble.textContent = text;
+      scrubBubble.style.display = 'block';
+      const rect = chartWrap.getBoundingClientRect();
+      const edge = 8, gap = 12;
+      const maxLeft = Math.max(edge, rect.width - scrubBubble.offsetWidth - edge);
+      const maxTop = Math.max(edge, rect.height - scrubBubble.offsetHeight - edge);
+      const left = Math.max(edge, Math.min(maxLeft, e.clientX - rect.left + gap));
+      let top = e.clientY - rect.top - scrubBubble.offsetHeight - gap;
+      if (top < edge) top = e.clientY - rect.top + gap;
+      scrubBubble.style.left = `${left}px`;
+      scrubBubble.style.top = `${Math.max(edge, Math.min(maxTop, top))}px`;
+    };
     const scrub = (e) => {
       const rect = over.getBoundingClientRect();
       const left = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
       const top = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
       u.setCursor({ left, top });
+      showReadout(e);
     };
     over.addEventListener('pointerdown', (e) => {
-      if (e.pointerType === 'mouse') return;
+      if (e.pointerType === 'mouse' || pointerId != null) return;
       pointerId = e.pointerId;
       try { over.setPointerCapture(pointerId); } catch { /* capture unsupported */ }
       scrub(e);
@@ -253,36 +317,109 @@ export function createAnalysisView() {
     const end = (e) => {
       if (e.pointerId !== pointerId) return;
       pointerId = null;
+      scrubBubble.style.display = 'none';
       try { over.releasePointerCapture(e.pointerId); } catch { /* already released */ }
     };
     over.addEventListener('pointerup', end);
     over.addEventListener('pointercancel', end);
+    over.addEventListener('pointerleave', end);
+    over.addEventListener('lostpointercapture', end);
+  }
+
+  function destroyChart() {
+    chart?.destroy();
+    chart = null;
+    chartStats = null;
+    chartRenderKey = '';
+    chartWrap.replaceChildren();
+  }
+
+  function syncSeriesVisibility(profile) {
+    if (!profile.hasAlt) chartSeries.altitude = false;
+    if (!profile.hasSpeed) chartSeries.speed = false;
+    if (!chartSeries.altitude && !chartSeries.speed) {
+      chartSeries.altitude = profile.hasAlt;
+      chartSeries.speed = profile.hasSpeed;
+    }
+  }
+
+  function toggleSeries(key) {
+    if (!chartProfile || !(key === 'altitude' ? chartProfile.hasAlt : chartProfile.hasSpeed)) return;
+    const other = key === 'altitude' ? 'speed' : 'altitude';
+    if (chartSeries[key] && !chartSeries[other]) return;
+    chartSeries[key] = !chartSeries[key];
+    renderCharts(appState.stats);
+  }
+
+  function renderLegend(profile, units) {
+    const P = canvasPalette();
+    const specs = [
+      { key: 'altitude', label: t('panel.altitude'), unit: altitudeUnit(units), color: P.accent, available: profile.hasAlt, hint: t('analysis.noAlt') },
+      { key: 'speed', label: t('panel.speed'), unit: speedUnit(units), color: `rgb(${P.lut[1].join(',')})`, available: profile.hasSpeed, hint: t('analysis.noTimeData') }
+    ];
+    for (const spec of specs) {
+      let button = legendButtons[spec.key];
+      if (!button) {
+        button = el('button', {
+          type: 'button', class: 'chart-legend-toggle', 'data-series': spec.key,
+          'aria-pressed': 'false', disabled: true
+        }, el('span', {}, el('i', { 'aria-hidden': 'true' }), el('span', { class: 'chart-legend-label' })));
+        button.onclick = () => toggleSeries(spec.key);
+        legendButtons[spec.key] = button;
+        chartLegend.append(button);
+      }
+      button.disabled = !spec.available;
+      button.setAttribute('aria-pressed', String(spec.available && chartSeries[spec.key]));
+      button.title = spec.available ? '' : spec.hint;
+      button.querySelector('i').style.background = spec.color;
+      button.querySelector('.chart-legend-label').textContent = `${spec.label} · ${spec.unit}`;
+    }
   }
 
   function renderCharts(stats) {
-    flatPoints = appState.activeTripFull?.segments.flatMap((s) => s.points) || [];
-    chartWrap.innerHTML = '';
-    chart?.destroy();
-    chart = null;
-    if (!stats || !flatPoints.length) { chartCard.style.display = 'none'; return; }
-
+    const full = appState.activeTripFull;
+    flatPoints = full?.segments.flatMap((s) => s.points) || [];
+    const trackKey = full ? `${full.trip.id}:${full.trip.updatedAt || 0}` : '';
     const units = get('units');
+    if (!stats || !flatPoints.length) {
+      destroyChart();
+      chartProfile = null;
+      renderLegend({ hasAlt: false, hasSpeed: false }, units);
+      chartCard.style.display = 'none';
+      return;
+    }
+
     const profile = buildProfile(stats, units, 1800);
-    if (!profile.hasAlt && !profile.hasSpeed) {
+    syncSeriesVisibility(profile);
+    const visible = {
+      altitude: profile.hasAlt && chartSeries.altitude,
+      speed: profile.hasSpeed && chartSeries.speed
+    };
+    chartProfile = profile;
+    renderLegend(profile, units);
+    if (!visible.altitude && !visible.speed) {
+      destroyChart();
       chartCard.style.display = 'none';
       renderSlope(stats);
       return;
     }
-    const P = canvasPalette();
-    chartLegend.innerHTML = [
-      profile.hasAlt ? `<span><i style="background:${P.accent}"></i>${t('panel.altitude')} · ${altitudeUnit(units)}</span>` : '',
-      profile.hasSpeed ? `<span><i style="background:rgb(${P.lut[1].join(',')})"></i>${t('panel.speed')} · ${speedUnit(units)}</span>` : ''
-    ].join('');
+
+    const renderKey = `${trackKey}:${units}:${effectiveTheme()}:${visible.altitude ? 1 : 0}${visible.speed ? 1 : 0}`;
+    if (chart && chartStats === stats && chartRenderKey === renderKey) {
+      chartCard.style.display = '';
+      return;
+    }
+    destroyChart();
     chartCard.style.display = '';
-    const opts = chartOpts(220, profile);
-    opts.hooks = { setCursor: [hoverHook(profile, units)] };
-    chart = new uPlot(opts, [profile.x, profile.alt, profile.speed], chartWrap);
-    attachScrub(chart);
+    const opts = chartOpts(220, profile, visible);
+    const data: any[] = [profile.x];
+    if (visible.altitude) data.push(profile.alt);
+    if (visible.speed) data.push(profile.speed);
+    opts.hooks = { setCursor: [hoverHook(stats, profile, units, visible)] };
+    chart = new uPlot(opts, data, chartWrap);
+    chartStats = stats;
+    chartRenderKey = renderKey;
+    attachScrub(chart, stats, profile, units, visible);
     renderSlope(stats);
   }
 
@@ -346,15 +483,41 @@ export function createAnalysisView() {
     const wps = (appState.activeTripFull?.waypoints || []).slice().sort((a, b) => (a.time || 0) - (b.time || 0));
     if (!wps.length) { tlCard.style.display = 'none'; return; }
     tlCard.style.display = '';
-    for (const w of wps) {
-      const row = el('div', { class: 'setting-row', style: { cursor: 'pointer' }, onclick: () => miniMap?.flyTo(w.lat, w.lon, 15) },
-        el('span', { style: { fontSize: '18px' } }, WP_ICONS[w.type] || '📍'),
-        el('div', { class: 'txt' },
-          el('div', { class: 't' }, w.name || t(`wp.types.${w.type}`)),
-          el('div', { class: 'd' }, [w.time ? new Date(w.time).toLocaleString() : '', w.desc].filter(Boolean).join(' · '))),
-        w.hidden ? el('span', { class: 'tag' }, '🚫') : null);
-      box.append(row);
-    }
+    const detail = (label, value) => el('div', { class: 'timeline-detail small' },
+      el('strong', {}, label), el('span', {}, value));
+    wps.forEach((w, i) => {
+      const detailsId = `timeline-details-${w.id || i}`;
+      const row = el('button', {
+        type: 'button', class: 'setting-row timeline-row',
+        'aria-expanded': 'false', 'aria-controls': detailsId
+      },
+      el('span', { style: { fontSize: '18px' }, 'aria-hidden': 'true' }, WP_ICONS[w.type] || '📍'),
+      el('div', { class: 'txt' },
+        el('div', { class: 't' }, w.name || t(`wp.types.${w.type}`)),
+        el('div', { class: 'd' }, [w.time ? new Date(w.time).toLocaleString() : '', w.desc].filter(Boolean).join(' · '))),
+      w.hidden ? el('span', { class: 'tag', title: t('wp.hidden'), 'aria-label': t('wp.hidden') }, '🚫') : null);
+      const details = el('div', { class: 'timeline-details', id: detailsId, hidden: true },
+        detail(t('wp.desc'), w.desc || t('common.none')),
+        detail(t('wp.time'), w.time ? new Date(w.time).toLocaleString() : t('common.none')),
+        detail(t('wp.hidden'), t(w.hidden ? 'common.yes' : 'common.no')),
+        el('button', {
+          type: 'button', class: 'btn sm timeline-view-map',
+          onclick: () => {
+            ensureMiniMap();
+            if (embedded && appState.tripDetail.open && appState.tripDetail.section !== 'overview') navigate('analysis');
+            requestAnimationFrame(() => {
+              miniMap?.resize();
+              miniMap?.flyTo(w.lat, w.lon, 15);
+            });
+          }
+        }, icon('map', 14), t('trips.viewOnMap')));
+      row.onclick = () => {
+        const expanded = row.getAttribute('aria-expanded') === 'true';
+        row.setAttribute('aria-expanded', String(!expanded));
+        details.hidden = expanded;
+      };
+      box.append(el('div', { class: 'timeline-item' }, row, details));
+    });
   }
 
   function renderGaps() {
@@ -404,28 +567,28 @@ export function createAnalysisView() {
   }
 
   async function renderAll() {
-    await refreshTripList();
+    const sequence = ++renderSequence;
+    if (!embedded) await refreshTripList();
     if (!appState.activeTripId && tripSel.options.length > 1) await setActiveTrip(tripSel.options[1].value);
+    if (sequence !== renderSequence) return;
     const full = appState.activeTripFull;
     const stats = appState.stats;
-    if (!full) {
-      statsBox.innerHTML = '';
-      qualityBox.innerHTML = '';
-      advisory.innerHTML = '';
-      gapCard.style.display = 'none';
-      chartCard.style.display = 'none';
-      slopeCard.style.display = 'none';
-      segCard.style.display = 'none';
-      tlCard.style.display = 'none';
-      miniMapBox.style.display = 'none';
+    if (!full || full.trip.id !== appState.activeTripId) {
+      renderEmpty();
       return;
     }
+    emptyBox.style.display = 'none';
+    shareBtn.disabled = false;
     chartCard.style.display = '';
     slopeCard.style.display = '';
     miniMapBox.style.display = '';
     ensureMiniMap();
-    miniMap.setTrackData(full.segments, full.waypoints);
-    setTimeout(() => miniMap.fitTrack(30), 120);
+    const trackKey = `${full.trip.id}:${full.trip.updatedAt || 0}`;
+    if (trackKey !== mapTrackKey) {
+      mapTrackKey = trackKey;
+      miniMap.setTrackData(full.segments, full.waypoints);
+      setTimeout(() => { if (mapTrackKey === trackKey) miniMap?.fitTrack(30); }, 120);
+    }
     renderGaps();
     renderStats(stats);
     renderQuality();
@@ -434,16 +597,16 @@ export function createAnalysisView() {
     renderTimeline();
   }
 
-  on('trip:active', () => { if (appState.view === 'analysis') renderAll(); });
+  on('trip:active', () => { if (analysisActive()) void renderAll(); });
   on('trip:stats', (stats) => {
-    if (appState.view !== 'analysis') return;
+    if (!analysisActive()) return;
     renderStats(stats);
     renderQuality();
     renderCharts(stats);
     renderSegments(stats);
   });
   on('theme:applied', () => {
-    if (appState.view === 'analysis' && appState.stats) { renderCharts(appState.stats); }
+    if (analysisActive() && appState.stats) { renderCharts(appState.stats); }
   });
 
   return {

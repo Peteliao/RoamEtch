@@ -9,6 +9,7 @@ import { isOfflineSim, regionState } from '../core/region';
 import { simplify, haversine } from '../core/geo';
 import { on, emit } from '../core/events';
 import { diag } from '../core/diag';
+import { t } from '../core/i18n';
 import { WP_ICONS } from '../core/waypointMeta';
 
 const LIVE_FILL = 'rgba(90,167,240,0.14)';
@@ -47,6 +48,8 @@ export class TrackMap {
   declare _indexMaps: Map<string, any>;
   declare _moveTimer: any;
   declare destroyed: boolean;
+  declare _renderingPaused: boolean;
+  declare _pausedRepaintDescriptor: PropertyDescriptor | undefined;
   declare map: any;
   declare _offRegion: any;
   declare _offProbe: any;
@@ -84,6 +87,8 @@ export class TrackMap {
     this._indexMaps = new Map();
     this._moveTimer = null;
     this.destroyed = false;
+    this._renderingPaused = false;
+    this._pausedRepaintDescriptor = undefined;
   }
 
   init(center = [116.4, 39.9], zoom = 10) {
@@ -225,7 +230,7 @@ export class TrackMap {
     this._fallbackEl.innerHTML = '';
     const box = document.createElement('div');
     box.style.cssText = 'pointer-events:auto;background:var(--bg-elev);border:1px solid var(--border);border-radius:12px;padding:10px 14px;font-size:12.5px;color:var(--text-dim);position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:8px;align-items:center;white-space:nowrap';
-    box.textContent = '⚠ ' + (this.opts.fallbackText || '底图不可达 · 纯矢量模式');
+    box.textContent = '⚠ ' + (this.opts.fallbackText || t('map.fallback'));
     const retry = document.createElement('button');
     retry.className = 'btn sm';
     retry.textContent = '↻';
@@ -770,6 +775,30 @@ export class TrackMap {
 
   getCanvas() { return this.map.getCanvas(); }
   resize() { this.map?.resize(); }
+
+  pauseRendering() {
+    const m = this.map;
+    if (!m || this.destroyed || m._removed || this._renderingPaused) return;
+    this._renderingPaused = true;
+    this._pausedRepaintDescriptor = Object.getOwnPropertyDescriptor(m, 'triggerRepaint');
+    // MapLibre 6 renders on demand, so stop() alone does not stop repaint requests.
+    m.triggerRepaint = () => {};
+    m.stop();
+    m._frameRequest?.abort?.();
+    m._frameRequest = null;
+  }
+
+  resumeRendering() {
+    const m = this.map;
+    if (!m || this.destroyed || m._removed || !this._renderingPaused) return;
+    if (this._pausedRepaintDescriptor) Object.defineProperty(m, 'triggerRepaint', this._pausedRepaintDescriptor);
+    else delete m.triggerRepaint;
+    this._pausedRepaintDescriptor = undefined;
+    this._renderingPaused = false;
+    m.resize();
+    m.redraw();
+  }
+
   destroy() {
     this.destroyed = true;
     this._offRegion?.();

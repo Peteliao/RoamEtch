@@ -3,6 +3,7 @@
 import { deflateSync, inflateSync } from 'fflate';
 import { simplify, measureTrackStep, trackDistance } from './geo';
 import { applyPrivacy } from './privacy';
+import { sha256Hex, stableStringify } from './integrity';
 
 const LIMIT = 1500;
 
@@ -153,5 +154,28 @@ export function parseShareFragment(hash) {
     };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Stable identity for the content a shared-trip link will import. Equivalent
+ * raw/compressed encodings share a fingerprint; malformed fragments do not.
+ */
+export async function shareFragmentFingerprint(hash) {
+  const shared = parseShareFragment(hash);
+  if (!shared) return null;
+  const content = stableStringify({
+    name: shared.name,
+    activity: shared.activity,
+    segments: shared.segments.map((points) => points.map((point) => [point.lat, point.lon])),
+    waypoints: shared.waypoints.map((waypoint) => [waypoint.name, waypoint.type, waypoint.lat, waypoint.lon]),
+    reportedDistance: shared.reportedDistance
+  });
+  try {
+    return await sha256Hex(content);
+  } catch {
+    // Keep imports usable on hosts without Web Crypto. The canonical content is
+    // collision-free and remains bounded by the share-fragment size cap.
+    return `raw:${content}`;
   }
 }

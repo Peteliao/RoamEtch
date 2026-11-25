@@ -5,7 +5,8 @@ import { get, set, patch, resetSettings, MEET_P2P_NOTICE_VERSION } from '../core
 import { meet } from '../core/meet';
 import { on } from '../core/events';
 import { regionState, setRegionMode, runProbe } from '../core/region';
-import { storageEstimate, eraseAll, isolateDamaged } from '../core/store';
+import { storageEstimate, eraseAll, isolateDamaged, listTrips } from '../core/store';
+import { appState, setActiveTrip } from './state';
 import { triggerDownload } from '../core/gpx';
 import { exportDiagLog } from '../core/diag';
 import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
@@ -31,6 +32,12 @@ export function createSettingsView(navigate) {
   }
   function card(iconKey, title, ...rows) {
     return el('div', { class: 'card' }, el('h3', {}, icon(iconKey, 18), title), ...rows);
+  }
+  function collapsible(title, ...rows) {
+    const details = el('details', { class: 'settings-collapse' },
+      el('summary', {}, icon('chevronRight', 14), title),
+      el('div', { class: 'settings-collapse-body' }, ...rows));
+    return { details, open: () => { details.open = true; } };
   }
   function segRow(label, options, current, onPick, note = '') {
     const toggle = el('div', { class: 'seg-toggle' });
@@ -224,17 +231,17 @@ export function createSettingsView(navigate) {
       el('div', { class: 'txt' }, el('div', { class: 't' }, t('settings.meetP2P')), el('div', { class: 'd' }, t('settings.meetP2PHint'))),
       el('label', { class: 'switch' }, p2pToggle, el('span', { class: 'slider' }))),
     el('div', { class: 'small faint', style: { marginTop: '8px' } }, t('settings.meetP2PPrivacy')));
-  const meetCard = card('meet', t('settings.meetGroup'),
+  const meetAdvanced = collapsible(t('settings.meetAdvanced'),
     relaySection,
-    el('div', { class: 'sep' }),
-    textRow(t('settings.meetNick'), t('settings.meetNickHint'), 'meetName', t('meet.namePlaceholder')),
     p2pSection,
     el('div', { class: 'settings-subhead' }, icon('globe', 15), t('settings.meetIce')),
     textAreaRow(t('settings.meetStun'), t('settings.meetStunHint'), 'meetStun', 'stun:stun.cloudflare.com:3478'),
     textAreaRow(t('settings.meetTurn'), t('settings.meetTurnHint'), 'meetTurnUrl', 'turn:turn.example.com:3478'),
     textRow(t('settings.meetTurnUser'), '', 'meetTurnUser'),
-    textRow(t('settings.meetTurnPass'), t('settings.meetIceHint'), 'meetTurnPass', '', 'password')
-  );
+    textRow(t('settings.meetTurnPass'), t('settings.meetIceHint'), 'meetTurnPass', '', 'password'));
+  const meetCard = card('meet', t('settings.meetGroup'),
+    textRow(t('settings.meetNick'), t('settings.meetNickHint'), 'meetName', t('meet.namePlaceholder')),
+    meetAdvanced.details);
 
   // ---- debug ----
   const simSel = el('select', { style: { width: '170px' } });
@@ -321,7 +328,12 @@ export function createSettingsView(navigate) {
     const f = await filePicker('.trip,.zip,.enc,application/zip,application/octet-stream');
     if (!f) return;
     try {
-      await restoreBackupFlow(f, { onRestored: () => refreshStorage() });
+      await restoreBackupFlow(f, { onRestored: async () => {
+        const trips = await listTrips();
+        const nextId = trips.some((trip) => trip.id === appState.activeTripId) ? appState.activeTripId : trips[0]?.id || null;
+        await setActiveTrip(nextId);
+        await refreshStorage();
+      } });
     } catch { toast(t('trips.restoreErr'), 'err'); }
   };
   const eraseBtn = el('button', { class: 'btn danger block' }, icon('trash', 14), t('settings.clearAll'));
@@ -331,6 +343,7 @@ export function createSettingsView(navigate) {
     const again = await confirmModal({ title: t('settings.dangerTitle'), message: t('settings.clearConfirm2'), danger: true, confirmText: t('common.confirm') });
     if (!again) return;
     await eraseAll();
+    await setActiveTrip(null);
     toast(t('settings.cleared'), 'ok');
     refreshStorage();
   };
@@ -526,22 +539,34 @@ export function createSettingsView(navigate) {
   );
 
   // ---- about ----
+  const debugSlot = el('div', { class: 'settings-debug', style: { display: 'none' } }, debugCard);
+  let debugTaps = 0;
+  let debugTimer = 0;
+  const aboutVersion = el('button', { class: 'about-version' }, t('settings.aboutText', { version: APP_VERSION }));
+  aboutVersion.onclick = () => {
+    debugTaps++;
+    clearTimeout(debugTimer);
+    if (debugTaps >= 7) {
+      debugTaps = 0;
+      debugSlot.style.display = '';
+      debugSlot.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    debugTimer = window.setTimeout(() => { debugTaps = 0; }, 2200);
+  };
   const aboutCard = card('info', t('settings.about'),
-    el('div', { class: 'small muted' }, t('settings.aboutText', { version: APP_VERSION })),
+    aboutVersion,
     el('div', { class: 'small faint', style: { marginTop: '6px' } }, '⚠ ' + t('settings.disclaimer')));
+  const mapAdvanced = collapsible(t('settings.advanced'), advCard, meetCard);
 
   scroll.append(
     el('div', { class: 'page-head' }, el('h2', { class: 'page-title' }, t('settings.title'))),
     section(t('settings.appearanceGroup')), langCard,
     section(t('settings.recordGroup')), recCard,
     section(t('settings.privacyGroup')), privacyCard,
-    section(t('settings.mapGroup')), regionCard, advCard,
-    section(t('settings.meetGroup')), meetCard,
+    section(t('settings.mapGroup')), regionCard, mapAdvanced.details,
     section(t('settings.dataGroup')), dataCard,
-    section(t('settings.shareGroup')), promoCard,
-    section(t('settings.installGroup')), installCard,
-    section(t('settings.debugGroup')), debugCard,
-    section(t('settings.aboutGroup')), aboutCard
+    section(t('settings.aboutGroup')), aboutCard, installCard, promoCard, debugSlot
   );
 
   return {
@@ -549,8 +574,11 @@ export function createSettingsView(navigate) {
     refresh: () => { renderProbe(); renderSimBanner(); refreshStorage(); },
     resize: () => {},
     focus: (intent) => {
-      if (intent !== 'relay') return;
+      const anchor = typeof intent === 'string' ? intent : intent?.anchor;
+      if (anchor !== 'relay') return;
       requestAnimationFrame(() => {
+        mapAdvanced.open();
+        meetAdvanced.open();
         relaySection.scrollIntoView({ behavior: 'smooth', block: 'center' });
         meetCard.classList.remove('settings-focus');
         void meetCard.offsetWidth;

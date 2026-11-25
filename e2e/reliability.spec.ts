@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { blockExternal, gotoTab, openDemo } from './utils';
+import { blockExternal, openDemo } from './utils';
 
 test('historical trip thumbnails are rebuilt from saved segments', async ({ page }) => {
   await blockExternal(page);
@@ -28,7 +28,9 @@ test('historical trip thumbnails are rebuilt from saved segments', async ({ page
     ]);
   });
 
-  await gotoTab(page, 'trips');
+  await page.locator('.trip-detail-back').click();
+  await expect(page.locator('#trip-detail')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => history.state?.lt?.detail)).toBe(false);
   const thumbnails = page.locator('.trip-item .thumb img');
   await expect(thumbnails).toHaveCount(2);
   await expect(thumbnails.first()).toBeVisible();
@@ -58,7 +60,9 @@ test('trip thumbnails retry their basemap when connectivity returns', async ({ p
   tileRequests = 0;
   await page.context().setOffline(true);
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
-  await gotoTab(page, 'trips');
+  await page.locator('.trip-detail-back').click();
+  await expect(page.locator('#trip-detail')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => history.state?.lt?.detail)).toBe(false);
   const thumbnail = page.locator('.trip-item .thumb img').first();
   await expect(thumbnail).toBeVisible();
   const offlineSrc = await thumbnail.getAttribute('src');

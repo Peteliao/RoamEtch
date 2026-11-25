@@ -16,46 +16,92 @@ import { listTrips, loadTripFull } from '../core/store';
 import { prepareMap } from '../core/mapPaint';
 import { routePlaceNames } from '../core/shareInfo';
 import { loadBrandFonts } from '../core/brand';
-import { appState } from './state';
+import { appState, setActiveTrip, isTripSectionActive } from './state';
 import { el, icon, toast, modal } from './helpers';
+import { renderTripEmptyState } from './tripEmptyState';
 
-export function createExportView(getRecordMap) {
-  const view = el('div', { class: 'view', id: 'view-export' });
+export function createExportView(getRecordMap: () => any, navigate = () => {}) {
+  const view: HTMLElement = el('div', { class: 'view', id: 'view-export' });
   const scroll = el('div', { class: 'view-scroll' });
   view.append(scroll);
 
   const head = el('div', { class: 'page-head' },
     el('h2', { class: 'page-title' }, t('export.title')),
     el('div', { class: 'small muted', style: { marginTop: '3px' } }, t('export.subtitle')));
+
+  // Selection belongs to appState. curFull is only the latest snapshot cache.
   let curFull = null;
-  let tripVersion = 0;
+  let selectedId = '';
+  let snapshotRequest = 0;
+  let tripListRequest = 0;
+  let outputVersion = 0;
+  let destroyed = false;
+  let posterBusy = false;
+  let videoBusy = false;
+  let htmlBusy = false;
+
   const tripSel = el('select', { style: { width: '100%' } });
   const tripLabel = el('div', { class: 'small muted', style: { marginTop: '6px' } });
-  const tripCard = el('div', { class: 'card' }, el('h3', {}, icon('pin', 18), t('export.tripPick')), tripSel, tripLabel);
-  tripSel.onchange = () => pickTrip(tripSel.value);
+  const tripCard = el('div', { class: 'card share-trip-card' }, el('h3', {}, icon('pin', 18), t('export.tripPick')), tripSel, tripLabel);
+  tripSel.onchange = async () => {
+    const id = tripSel.value;
+    try {
+      const pending = setActiveTrip(id);
+      // setActiveTrip changes activeTripId synchronously. Drop the old cache/output
+      // immediately, then adopt the database snapshot emitted by the active event.
+      syncActiveSelection();
+      await pending;
+    } catch (e) {
+      console.error(e);
+      toast(String(e?.message || e), 'err');
+    }
+    if (!destroyed) {
+      syncActiveSelection();
+      syncTripSelector();
+      syncAvailability();
+    }
+  };
 
   // ---- privacy ----
   const radiusInput = el('input', { type: 'number', min: '0', max: '5000', step: '50', value: get('privacyRadius') });
-  radiusInput.onchange = () => { set('privacyRadius', Math.max(0, +radiusInput.value || 0)); updateCropInfo(); updateLink(true); updateHtmlEstimate(); warmExport(curFull); };
+  radiusInput.onchange = () => {
+    radiusInput.value = String(Math.max(0, +radiusInput.value || 0));
+    set('privacyRadius', +radiusInput.value);
+    updatePrivacySummary(); updateLink(true); updateHtmlEstimate(); warmExport(curFull);
+  };
+  radiusInput.oninput = () => updatePrivacySummary();
   const hideCb = el('input', { type: 'checkbox' });
   hideCb.checked = true;
-  hideCb.onchange = () => { updateCropInfo(); updateLink(true); updateHtmlEstimate(); warmExport(curFull); };
+  hideCb.onchange = () => { updatePrivacySummary(); updateLink(true); updateHtmlEstimate(); warmExport(curFull); };
   const vectorCb = el('input', { type: 'checkbox' });
-  vectorCb.onchange = () => { updateCropInfo(); warmExport(curFull); };
-  const cropInfo = el('div', { class: 'small', style: { color: 'var(--warn)', marginTop: '8px' } });
-  const privacyCard = el('div', { class: 'card' },
-    el('h3', {}, icon('shield', 18), t('export.privacy')),
+  vectorCb.onchange = () => { updatePrivacySummary(); warmExport(curFull); };
+  const privacySummary = el('div', { class: 'privacy-summary small muted', role: 'status', 'aria-live': 'polite' });
+  const privacyCrop = el('div', { class: 'privacy-crop small faint', style: { marginTop: '8px' } });
+  const privacyControls = el('div', { class: 'privacy-controls', id: 'export-privacy-controls', hidden: true, style: { display: 'none' } },
     el('div', { class: 'setting-row' },
       el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.privacyRadius')), el('div', { class: 'd' }, t('export.privacyRadiusHint'))),
       el('div', { class: 'inline-num' }, radiusInput, el('span', { class: 'small faint' }, 'm'))),
     el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.hideSensitive'))), labelSwitch(hideCb)),
     el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.vectorOnly'))), labelSwitch(vectorCb)),
-    cropInfo,
-    el('div', { class: 'privacy-checks' },
-      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 13)), t('export.checkCircle')),
-      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 13)), t('export.checkNodes')),
-      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 13)), t('export.checkExif')),
-      el('div', { class: 'privacy-check' }, el('span', { class: 'ok' }, icon('check', 13)), t('export.checkCoords')))
+    privacyCrop
+  );
+  const privacyAdjust = el('button', {
+    type: 'button', class: 'btn ghost sm privacy-adjust',
+    'aria-expanded': 'false', 'aria-controls': privacyControls.id
+  }, t('export.privacyAdjust'));
+  privacyAdjust.onclick = () => {
+    const expanded = privacyAdjust.getAttribute('aria-expanded') !== 'true';
+    privacyAdjust.setAttribute('aria-expanded', String(expanded));
+    privacyControls.hidden = !expanded;
+    privacyControls.style.display = expanded ? '' : 'none';
+  };
+  const privacyCard = el('div', { class: 'card privacy-card' },
+    el('div', { class: 'privacy-summary-row', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' } },
+      el('div', { class: 'privacy-summary-copy', style: { flex: '1', minWidth: '0' } },
+        el('h3', { style: { margin: '0 0 4px' } }, icon('shield', 18), t('export.privacy')),
+        privacySummary),
+      privacyAdjust),
+    privacyControls
   );
 
   function labelSwitch(input) {
@@ -83,19 +129,38 @@ export function createExportView(getRecordMap) {
   function privacyOpts() {
     return { radius: Math.max(0, +radiusInput.value || 0), hideSensitive: hideCb.checked };
   }
-  function updateCropInfo() {
+  function updatePrivacySummary() {
     const full = curFull;
-    if (!full) { cropInfo.textContent = ''; return; }
-    const c = applyPrivacy(full, privacyOpts());
-    cropInfo.textContent = t('export.cropNote', { n: c.croppedPoints, m: c.croppedWaypoints });
+    if (!full || full.trip.id !== appState.activeTripId) {
+      privacySummary.textContent = '';
+      privacyCrop.textContent = '';
+      return;
+    }
+    const privacy = privacyOpts();
+    const c = applyPrivacy(full, privacy);
+    privacySummary.textContent = [
+      privacy.radius > 0 ? `${t('export.checkCircle')} · ${privacy.radius} m` : t('export.privacyRadiusOff'),
+      hideCb.checked ? t('export.sensitiveHidden') : t('export.sensitiveVisible'),
+      t(vectorCb.checked ? 'export.vectorOnlyOn' : 'export.vectorOnlyOff')
+    ].join(' · ');
+    privacyCrop.textContent = t('export.cropNote', { n: c.croppedPoints, m: c.croppedWaypoints });
   }
 
-  // Warm tiles / place names / fonts while the user reviews the options, so
-  // clicking generate only pays for the actual composition.
+  function shareSectionActive() {
+    return appState.view === 'export' || isTripSectionActive('share');
+  }
+
+  // Warm tiles / place names / fonts only while Share is actually visible.
   let warmTimer = 0;
   let warmKey = '';
   function warmExport(full) {
-    if (!full || !navigator.onLine) return;
+    if (destroyed || !shareSectionActive() || !full || !navigator.onLine) {
+      clearTimeout(warmTimer);
+      warmTimer = 0;
+      warmKey = '';
+      return;
+    }
+    if (full.trip.id !== appState.activeTripId || curFull?.trip.id !== full.trip.id || curFull.trip.updatedAt !== full.trip.updatedAt) return;
     const privacy = privacyOpts();
     const base = getRecordMap?.()?.basemapId || '';
     const key = [full.trip.id, full.trip.updatedAt, base, privacy.radius, privacy.hideSensitive, vectorCb.checked].join('|');
@@ -103,6 +168,12 @@ export function createExportView(getRecordMap) {
     warmKey = key;
     clearTimeout(warmTimer);
     warmTimer = window.setTimeout(async () => {
+      warmTimer = 0;
+      if (destroyed || !shareSectionActive()) {
+        warmKey = '';
+        return;
+      }
+      if (key !== warmKey || curFull?.trip.id !== full.trip.id || curFull.trip.updatedAt !== full.trip.updatedAt) return;
       try {
         const cropped = applyPrivacy(full, privacy);
         const common = {
@@ -121,7 +192,9 @@ export function createExportView(getRecordMap) {
 
   // ---- poster ----
   let posterBlob = null;
+  let posterUrl = null;
   let posterSize = 'vertical';
+  const sizeButtons = [];
   const sizeToggle = el('div', { class: 'seg-toggle sm' });
   for (const s of ['vertical', 'square']) {
     const b = el('button', { class: s === posterSize ? 'active' : '' }, t(s === 'vertical' ? 'export.posterVShort' : 'export.posterSShort'));
@@ -131,6 +204,7 @@ export function createExportView(getRecordMap) {
       b.classList.add('active');
     };
     sizeToggle.append(b);
+    sizeButtons.push(b);
   }
   const previewBox = el('div', { class: 'poster-preview', style: { display: 'none' } });
   const genBtn = el('button', { class: 'btn primary sm' }, icon('photo', 15), t('export.generateShort'));
@@ -139,23 +213,32 @@ export function createExportView(getRecordMap) {
   posterShareBtn.onclick = () => { if (posterBlob) shareMedia(posterBlob, `roametch-poster-${Date.now()}.png`, 'image'); };
   const posterNote = el('div', { class: 'small faint', style: { marginTop: '6px' } });
   genBtn.onclick = async () => {
-    if (!curFull || !currentTripId()) { toast(t('analysis.noTrip'), 'warn'); return; }
-    genBtn.disabled = true;
+    if (!hasCurrentTrip() || posterBusy || videoBusy || htmlBusy) return;
+    const startId = appState.activeTripId;
+    const startVersion = outputVersion;
+    let generating = null;
+    posterBusy = true;
+    syncAvailability();
     genBtn.textContent = t('common.loading');
     try {
       const loaded = await reloadCurrentTrip();
       if (!loaded) return;
       const { full, version } = loaded;
+      generating = { full, version };
       const { blob, usedVectorFallback } = await generatePoster(full, {
         size: posterSize,
         privacy: privacyOpts(),
         vectorOnly: vectorCb.checked,
         basemapId: getRecordMap?.()?.basemapId || '',
-        onProgress: (p) => { genBtn.textContent = `${t('common.loading')} ${Math.round(p * 100)}%`; }
+        onProgress: (p) => {
+          if (isSnapshotCurrent(generating)) genBtn.textContent = `${t('common.loading')} ${Math.round(p * 100)}%`;
+        }
       });
-      if (version !== tripVersion) return;
-      posterBlob = blob;
+      if (!isSnapshotCurrent(generating)) { notifyStale(); return; }
       const url = URL.createObjectURL(blob);
+      revokePosterUrl();
+      posterBlob = blob;
+      posterUrl = url;
       previewBox.innerHTML = '';
       previewBox.append(el('img', { src: url }));
       previewBox.style.display = '';
@@ -163,12 +246,16 @@ export function createExportView(getRecordMap) {
       posterShareBtn.style.display = '';
       posterNote.textContent = usedVectorFallback && !vectorCb.checked ? '⚠ ' + t('export.posterVectorFallback') : '';
     } catch (e) {
-      console.error(e);
-      toast(String(e.message || e), 'err');
+      if (destroyed) return;
+      if (generating ? !isSnapshotCurrent(generating) : appState.activeTripId !== startId || outputVersion !== startVersion) notifyStale();
+      else { console.error(e); toast(String(e?.message || e), 'err'); }
     } finally {
-      genBtn.disabled = false;
-      genBtn.innerHTML = '';
-      genBtn.append(icon('photo', 15), t('export.generateShort'));
+      posterBusy = false;
+      if (!destroyed) {
+        genBtn.innerHTML = '';
+        genBtn.append(icon('photo', 15), t('export.generateShort'));
+        syncAvailability();
+      }
     }
   };
   dlBtn.onclick = async () => {
@@ -176,12 +263,12 @@ export function createExportView(getRecordMap) {
     const name = `roametch-poster-${Date.now()}.png`;
     const r = await exportImage(posterBlob, name);
     if (r.mode === 'longpress') {
-      modal({
+      const m = modal({
         title: t('export.poster'),
         body: el('div', { class: 'wechat-save-overlay' },
           el('img', { src: r.dataUrl }),
           el('div', { class: 'hint' }, '👆 ' + t('export.wechatHint'))),
-        footer: [el('button', { class: 'btn ghost', onclick: (e) => e.target.closest('.modal-backdrop').remove() }, t('common.close'))]
+        footer: [el('button', { class: 'btn ghost', onclick: () => m.close() }, t('common.close'))]
       });
     } else {
       toast(t('export.exported'), 'ok');
@@ -198,8 +285,10 @@ export function createExportView(getRecordMap) {
   const videoOk = videoSupported();
   const videoWebmOnly = videoOk && videoIsWebmOnly(musicSupported());
   let videoBlob = null, videoExt = 'webm', videoAbort = null, videoUrl = null;
+  let videoReadyNote = '';
   let videoSeconds = 15;
   const durToggle = el('div', { class: 'seg-toggle sm' });
+  const durationButtons = [];
   for (const s of [10, 15, 30]) {
     const b = el('button', { class: s === videoSeconds ? 'active' : '' }, t('export.videoSeconds', { s }));
     b.onclick = () => {
@@ -208,6 +297,7 @@ export function createExportView(getRecordMap) {
       b.classList.add('active');
     };
     durToggle.append(b);
+    durationButtons.push(b);
   }
   const vGenBtn = el('button', { class: 'btn primary sm' }, icon('play', 15), t('export.generateShort'));
   const vCancelBtn = el('button', { class: 'btn ghost sm icon-only', title: t('common.cancel'), 'aria-label': t('common.cancel'), style: { display: 'none' } }, icon('x', 16));
@@ -229,22 +319,21 @@ export function createExportView(getRecordMap) {
     : null;
   vCancelBtn.onclick = () => videoAbort?.abort();
   vGenBtn.onclick = async () => {
-    if (!curFull || !currentTripId()) { toast(t('analysis.noTrip'), 'warn'); return; }
+    if (!hasCurrentTrip() || videoBusy || posterBusy || htmlBusy) return;
+    const startId = appState.activeTripId;
+    const startVersion = outputVersion;
+    let generating = null;
     const abort = new AbortController();
     videoAbort = abort;
-    vGenBtn.disabled = true;
-    tripSel.disabled = true;
-    durToggle.querySelectorAll('button').forEach((x) => { x.disabled = true; });
-    musicSel.disabled = true;
-    vCancelBtn.style.display = '';
-    vDlBtn.style.display = 'none';
-    vShareBtn.style.display = 'none';
-    vPreview.style.display = 'none';
+    videoBusy = true;
+    syncAvailability();
     vNote.textContent = t('export.videoKeepVisible');
     try {
       const loaded = await reloadCurrentTrip(abort.signal);
       if (!loaded) return;
       const { full, version } = loaded;
+      generating = { full, version };
+      vNote.textContent = t('export.videoKeepVisible');
       const r = await generateTrackVideo(full, {
         privacy: privacyOpts(),
         vectorOnly: vectorCb.checked,
@@ -252,13 +341,16 @@ export function createExportView(getRecordMap) {
         seconds: videoSeconds,
         music: musicSel.value,
         signal: abort.signal,
-        onProgress: (p) => { vGenBtn.textContent = t('export.videoRendering', { p: Math.round(p * 100) }); }
+        onProgress: (p) => {
+          if (isSnapshotCurrent(generating)) vGenBtn.textContent = t('export.videoRendering', { p: Math.round(p * 100) });
+        }
       });
-      if (version !== tripVersion) return;
+      if (!isSnapshotCurrent(generating)) { notifyStale(); return; }
+      const url = URL.createObjectURL(r.blob);
+      if (videoUrl) URL.revokeObjectURL(videoUrl);
       videoBlob = r.blob;
       videoExt = r.mime.includes('mp4') ? 'mp4' : 'webm';
-      if (videoUrl) URL.revokeObjectURL(videoUrl);
-      videoUrl = URL.createObjectURL(r.blob);
+      videoUrl = url;
       if (r.cover) vPreview.poster = r.cover; else vPreview.removeAttribute('poster');
       vPreview.src = videoUrl;
       vPreview.style.display = '';
@@ -269,20 +361,25 @@ export function createExportView(getRecordMap) {
       const webmLabel = videoExt === 'webm' ? ` · ${t('export.videoWebmShort')}` : '';
       vNote.textContent = (r.usedVectorFallback && !vectorCb.checked ? '⚠ ' + t('export.posterVectorFallback') + ' · ' : '') +
         t('export.videoReady', { size: (r.blob.size / 1048576).toFixed(1) + 'MB' }) + musicLabel + webmLabel;
+      videoReadyNote = vNote.textContent;
     } catch (e) {
-      if (e.name === 'AbortError') vNote.textContent = '';
-      else if (e.message === 'no-track') toast(t('export.videoNoTrack'), 'warn');
-      else if (e.message === 'video-unsupported') toast(t('export.videoUnsupported'), 'warn');
-      else { console.error(e); toast(String(e.message || e), 'err'); }
+      if (destroyed) return;
+      const stale = generating ? !isSnapshotCurrent(generating) : appState.activeTripId !== startId || outputVersion !== startVersion;
+      if (stale) notifyStale();
+      else if (e?.name === 'AbortError') vNote.textContent = videoBlob ? videoReadyNote : '';
+      else if (e?.message === 'no-track') toast(t('export.videoNoTrack'), 'warn');
+      else if (e?.message === 'video-unsupported') toast(t('export.videoUnsupported'), 'warn');
+      else { console.error(e); toast(String(e?.message || e), 'err'); }
     } finally {
-      if (videoAbort === abort) videoAbort = null;
-      vGenBtn.disabled = !videoOk;
-      tripSel.disabled = false;
-      musicSel.disabled = false;
-      vGenBtn.innerHTML = '';
-      vGenBtn.append(icon('play', 15), t('export.generateShort'));
-      vCancelBtn.style.display = 'none';
-      durToggle.querySelectorAll('button').forEach((x) => { x.disabled = false; });
+      if (videoAbort === abort) {
+        videoAbort = null;
+        videoBusy = false;
+        if (!destroyed) {
+          vGenBtn.innerHTML = '';
+          vGenBtn.append(icon('play', 15), t('export.generateShort'));
+          syncAvailability();
+        }
+      }
     }
   };
   vDlBtn.onclick = () => {
@@ -290,7 +387,6 @@ export function createExportView(getRecordMap) {
     exportFile(videoBlob, `roametch-video-${Date.now()}.${videoExt}`);
     toast(t('export.exported'), 'ok');
   };
-  if (!videoOk) vGenBtn.disabled = true;
   const videoCard = el('div', { class: 'card' },
     el('h3', {}, icon('play', 18), t('export.video')),
     el('div', { class: 'small faint', style: { marginBottom: '8px' } }, t('export.videoHint')),
@@ -308,31 +404,36 @@ export function createExportView(getRecordMap) {
     const loaded = await reloadCurrentTrip();
     if (!loaded) return null;
     const c = applyPrivacy(loaded.full, privacyOpts());
-    return { ...loaded.full, segments: c.segments, waypoints: c.waypoints };
+    return { full: { ...loaded.full, segments: c.segments, waypoints: c.waypoints }, snapshot: loaded };
   }
+  const fileButtons = [];
   const fileBtn = (label, hint, fn) => {
     const b = el('button', { class: 'btn block', style: { justifyContent: 'flex-start', marginBottom: '8px' } }, icon('download', 16),
       el('span', { style: { textAlign: 'left' } }, el('div', {}, label), el('div', { class: 'small faint', style: { fontWeight: 400 } }, hint)));
     b.onclick = fn;
+    fileButtons.push(b);
     return b;
   };
   const filesCard = el('div', { class: 'card' },
     el('h3', {}, icon('download', 18), t('common.export')),
     fileBtn(t('export.gpx'), t('export.gpxHint'), async () => {
-      const f = await croppedFull();
-      if (!f) return toast(t('analysis.noTrip'), 'warn');
+      const result = await croppedFull();
+      if (!result || !requireCurrentSnapshot(result.snapshot)) return;
+      const f = result.full;
       exportFile(new Blob([buildGPX(f)], { type: 'application/gpx+xml' }), `${f.trip.name || 'trip'}.gpx`);
       toast(t('export.exported'), 'ok');
     }),
-    fileBtn(t('export.geojson'), 'WGS-84 · RFC 7946', async () => {
-      const f = await croppedFull();
-      if (!f) return toast(t('analysis.noTrip'), 'warn');
+    fileBtn(t('export.geojson'), t('export.geojsonHint'), async () => {
+      const result = await croppedFull();
+      if (!result || !requireCurrentSnapshot(result.snapshot)) return;
+      const f = result.full;
       exportFile(new Blob([JSON.stringify(buildGeoJSON(f), null, 1)], { type: 'application/geo+json' }), `${f.trip.name || 'trip'}.geojson`);
       toast(t('export.exported'), 'ok');
     }),
-    fileBtn(t('export.kml'), 'Google Earth / 奥维', async () => {
-      const f = await croppedFull();
-      if (!f) return toast(t('analysis.noTrip'), 'warn');
+    fileBtn(t('export.kml'), t('export.kmlHint'), async () => {
+      const result = await croppedFull();
+      if (!result || !requireCurrentSnapshot(result.snapshot)) return;
+      const f = result.full;
       exportFile(new Blob([buildKML(f)], { type: 'application/vnd.google-earth.kml+xml' }), `${f.trip.name || 'trip'}.kml`);
       toast(t('export.exported'), 'ok');
     })
@@ -350,6 +451,7 @@ export function createExportView(getRecordMap) {
       tierToggle.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
       b.classList.add('active');
       syncHtmlTierControls();
+      syncAvailability();
     };
     tierToggle.append(b);
     tierButtons.push(b);
@@ -361,7 +463,6 @@ export function createExportView(getRecordMap) {
   function syncHtmlTierControls() {
     const none = htmlTier === 'none';
     htmlPhotosCb.checked = none ? false : htmlPhotosPref;
-    htmlPhotosCb.disabled = none;
     htmlPhotosRow.style.opacity = none ? '0.55' : '';
     updateHtmlEstimate();
   }
@@ -377,35 +478,43 @@ export function createExportView(getRecordMap) {
   }
   htmlPhotosCb.onchange = () => { htmlPhotosPref = htmlPhotosCb.checked; updateHtmlEstimate(); };
   htmlBtn.onclick = async () => {
-    if (!curFull) return toast(t('analysis.noTrip'), 'warn');
-    htmlBtn.disabled = true;
-    htmlPhotosCb.disabled = true;
-    tierButtons.forEach((b) => { b.disabled = true; });
+    if (!hasCurrentTrip() || htmlBusy || posterBusy || videoBusy) return;
+    const startId = appState.activeTripId;
+    const startVersion = outputVersion;
+    let generating = null;
+    htmlBusy = true;
+    syncAvailability();
     htmlBtn.textContent = t('export.htmlBuilding');
     try {
       const loaded = await reloadCurrentTrip();
       if (!loaded) return;
       const { full, version } = loaded;
+      generating = { full, version };
       const { html, size, photos } = await buildSelfContainedHTML(full, {
         tier: htmlTier,
         privacy: privacyOpts(),
         includePhotos: htmlTier !== 'none' && htmlPhotosCb.checked,
-        onProgress: (p) => { htmlBtn.textContent = `${t('export.htmlBuilding')} ${Math.round(p * 100)}%`; }
+        onProgress: (p) => {
+          if (isSnapshotCurrent(generating)) htmlBtn.textContent = `${t('export.htmlBuilding')} ${Math.round(p * 100)}%`;
+        }
       });
-      if (version !== tripVersion) return;
+      if (!requireCurrentSnapshot(generating)) return;
       if (size > 1_500_000) toast(t('export.htmlWarn', { size: (size / 1048576).toFixed(1) + 'MB' }), 'warn', 4000);
       exportFile(new Blob([html], { type: 'text/html' }), `${full.trip.name || 'trip'}.html`);
       toast(`${t('export.exported')} · ${(size / 1024).toFixed(0)} KB${photos ? ` · ${photos} ${t('wp.photos')}` : ''}`, 'ok');
     } catch (e) {
-      console.error(e);
-      toast(String(e?.message || e), 'err');
+      if (destroyed) return;
+      if (generating ? !isSnapshotCurrent(generating) : appState.activeTripId !== startId || outputVersion !== startVersion) notifyStale();
+      else { console.error(e); toast(String(e?.message || e), 'err'); }
+    } finally {
+      htmlBusy = false;
+      if (!destroyed) {
+        htmlBtn.innerHTML = '';
+        htmlBtn.append(icon('export', 16), t('export.html'));
+        syncAvailability();
+        updateHtmlEstimate();
+      }
     }
-    htmlBtn.disabled = false;
-    htmlPhotosCb.disabled = htmlTier === 'none';
-    tierButtons.forEach((b) => { b.disabled = false; });
-    htmlBtn.innerHTML = '';
-    htmlBtn.append(icon('export', 16), t('export.html'));
-    updateHtmlEstimate();
   };
   const htmlCard = el('div', { class: 'card' },
     el('h3', {}, icon('globe', 18), t('export.html')),
@@ -417,15 +526,16 @@ export function createExportView(getRecordMap) {
   syncHtmlTierControls();
 
   // ---- share link (compact import URL, fragment only) ----
+  // The link is rebuilt automatically on refresh/options changes and by Copy or
+  // Share, so a separate Generate button would duplicate those actions.
   const linkInput = el('input', { type: 'text', readonly: true, class: 'link-input' });
-  const linkBtn = el('button', { class: 'btn sm' }, icon('share', 14), t('export.linkBuild'));
   const copyBtn = el('button', { class: 'btn sm' }, t('common.copy'));
   const linkNote = el('div', { class: 'small faint', style: { marginTop: '6px' } });
   function updateLink(quiet = true) {
     const full = curFull;
     linkInput.value = '';
     linkNote.textContent = '';
-    if (!full) return false;
+    if (!full || full.trip.id !== appState.activeTripId) return false;
     try {
       const { url, size } = buildShareLink(full, privacyOpts());
       linkInput.value = url;
@@ -442,28 +552,28 @@ export function createExportView(getRecordMap) {
       return false;
     }
   }
-  linkBtn.onclick = async () => {
-    if (!await reloadCurrentTrip()) return;
-    updateLink(false);
-  };
   copyBtn.onclick = async () => {
-    if (!await reloadCurrentTrip() || !updateLink(true)) {
-      toast(t('analysis.noTrip'), 'warn');
-      return;
-    }
+    let loaded = null;
     try {
+      loaded = await reloadCurrentTrip();
+      if (!loaded || !requireCurrentSnapshot(loaded) || !updateLink(true)) return;
       await navigator.clipboard.writeText(linkInput.value);
+      if (!requireCurrentSnapshot(loaded)) return;
       toast(t('common.copied'), 'ok');
     } catch {
-      linkInput.select();
-      toast(t('toast.copyFail'), 'warn');
+      if (destroyed) return;
+      if (loaded ? !isSnapshotCurrent(loaded) : appState.activeTripId && !curFull) notifyStale();
+      else {
+        linkInput.select();
+        toast(t('toast.copyFail'), 'warn');
+      }
     }
   };
   const shareBtn = el('button', { class: 'btn sm' }, icon('share', 14), t('export.shareNative'));
   shareBtn.style.display = navigator.share ? '' : 'none';
   shareBtn.onclick = async () => {
     const loaded = await reloadCurrentTrip();
-    if (!loaded) return;
+    if (!loaded || !requireCurrentSnapshot(loaded)) return;
     updateLink(true);
     const ok = await nativeShare({
       title: loaded.full.trip.name,
@@ -475,27 +585,37 @@ export function createExportView(getRecordMap) {
   const linkCard = el('div', { class: 'card' },
     el('h3', {}, icon('share', 18), t('export.link')),
     el('div', { class: 'small faint', style: { marginBottom: '9px', lineHeight: 1.5 } }, t('export.linkHint')),
-    el('div', { class: 'row wrap', style: { marginBottom: '8px' } }, linkBtn, copyBtn, shareBtn),
+    el('div', { class: 'row wrap', style: { marginBottom: '8px' } }, copyBtn, shareBtn),
     linkInput, linkNote
   );
 
   const wechatBanner = isWeChat()
     ? el('div', { class: 'debug-banner' }, '⚠ ' + t('export.openInBrowser'))
     : null;
+  const emptyState = el('div', { class: 'empty-state export-empty', style: { display: 'none' } });
 
   const secPrivacy = el('div', { class: 'section-label' }, t('export.groupPrivacy'));
   const secShare = el('div', { class: 'section-label' }, t('export.groupShare'));
   const secFiles = el('div', { class: 'section-label' }, t('export.groupFiles'));
+  const outputSections = [secPrivacy, secShare, secFiles];
+  const outputCards = [privacyCard, posterCard, videoCard, linkCard, filesCard, htmlCard];
   scroll.append(...[
-    head, tripCard, wechatBanner,
+    head, tripCard, wechatBanner, emptyState,
     secPrivacy, privacyCard,
     secShare, posterCard, videoCard, linkCard,
     secFiles, filesCard, htmlCard
   ].filter(Boolean));
 
-  function resetOutputs() {
+  function revokePosterUrl() {
+    if (posterUrl) { URL.revokeObjectURL(posterUrl); posterUrl = null; }
+  }
+  function resetOutputs(preserveSignal = null) {
+    outputVersion++;
+    if (videoAbort && videoAbort.signal !== preserveSignal) videoAbort.abort();
     posterBlob = null;
     videoBlob = null;
+    videoReadyNote = '';
+    revokePosterUrl();
     previewBox.innerHTML = '';
     previewBox.style.display = 'none';
     dlBtn.style.display = 'none';
@@ -512,56 +632,170 @@ export function createExportView(getRecordMap) {
     linkNote.textContent = '';
   }
   function currentTripId() {
-    return tripSel.value || curFull?.trip.id || '';
+    return appState.activeTripId || '';
   }
-  function replaceCurrentFull(full) {
+  function hasCurrentTrip() {
+    return !destroyed && !!currentTripId() && selectedId === currentTripId() && curFull?.trip.id === currentTripId();
+  }
+  function isSnapshotCurrent(snapshot) {
+    return !!snapshot && hasCurrentTrip() && snapshot.full.trip.id === currentTripId() &&
+      curFull.trip.updatedAt === snapshot.full.trip.updatedAt && snapshot.version === outputVersion;
+  }
+  function notifyStale() {
+    if (!destroyed) toast(t('export.tripChanged'), 'warn');
+  }
+  function requireCurrentSnapshot(snapshot) {
+    if (isSnapshotCurrent(snapshot)) return true;
+    notifyStale();
+    return false;
+  }
+  function syncTripSelector() {
+    const id = currentTripId();
+    if (!id || [...tripSel.options].some((option) => option.value === id)) tripSel.value = id;
+  }
+  function adoptSnapshot(full, preserveSignal = null) {
+    if (destroyed) return;
+    const id = currentTripId();
+    const previous = curFull;
+    const changed = selectedId !== id ||
+      (!!full && previous?.trip.id === id && previous.trip.updatedAt !== full.trip.updatedAt) ||
+      (!!previous && !full);
+    selectedId = id;
     curFull = full;
-    tripSel.value = full?.trip.id || '';
-    resetOutputs();
+    snapshotRequest++;
+    if (changed) resetOutputs(preserveSignal);
+    syncTripSelector();
     refresh();
   }
-  async function pickTrip(id) {
-    const version = ++tripVersion;
-    tripSel.value = id;
-    const full = id ? await loadTripFull(id) : null;
-    if (version !== tripVersion || currentTripId() !== id) return null;
-    replaceCurrentFull(full);
-    return full;
+  function syncActiveSelection(full = appState.activeTripFull) {
+    const id = currentTripId();
+    adoptSnapshot(full?.trip.id === id ? full : null);
   }
   async function reloadCurrentTrip(signal = null) {
     const id = currentTripId();
     if (!id) return null;
-    const version = ++tripVersion;
+    const request = ++snapshotRequest;
+    const version = outputVersion;
     const full = await loadTripFull(id);
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    if (version !== tripVersion || currentTripId() !== id) return null;
-    replaceCurrentFull(full);
-    return full ? { full, version } : null;
+    if (destroyed) return null;
+    if (appState.activeTripId !== id || version !== outputVersion) { notifyStale(); return null; }
+    if (!full) {
+      if (request === snapshotRequest) adoptSnapshot(null);
+      notifyStale();
+      return null;
+    }
+    if (full.trip.id !== id) { notifyStale(); return null; }
+    if (curFull?.trip.id === id && (curFull.trip.updatedAt || 0) > (full.trip.updatedAt || 0)) { notifyStale(); return null; }
+    // Only the newest response may replace the cache. A same-identity event or
+    // action must not invalidate this generation, however.
+    if (request === snapshotRequest) adoptSnapshot(full, signal);
+    if (curFull && (curFull.trip.id !== id || curFull.trip.updatedAt !== full.trip.updatedAt)) { notifyStale(); return null; }
+    return { full, version: outputVersion };
   }
   async function refreshTripList() {
+    if (destroyed) return;
+    const request = ++tripListRequest;
     const trips = await listTrips();
-    const keep = tripSel.value || appState.activeTripId || trips[0]?.id || '';
+    if (destroyed || request !== tripListRequest) return;
+    const active = currentTripId();
+    const activeExists = trips.some((tr) => tr.id === active);
     tripSel.innerHTML = '';
     tripSel.append(el('option', { value: '' }, '—'));
     for (const tr of trips) tripSel.append(el('option', { value: tr.id }, tr.name || new Date(tr.createdAt).toLocaleString()));
-    tripSel.value = trips.some((tr) => tr.id === keep) ? keep : '';
-    if (tripSel.value !== (curFull?.trip.id || '')) await pickTrip(tripSel.value);
-    else refresh();
+    tripSel.value = activeExists ? active : '';
+    if (active && !activeExists) {
+      await setActiveTrip(null);
+      return;
+    }
+    if (!active && trips[0]?.id) {
+      await setActiveTrip(trips[0]?.id);
+      return;
+    }
+    if (curFull?.trip.id !== active) {
+      if (appState.activeTripFull?.trip.id === active) syncActiveSelection(appState.activeTripFull);
+      else if (active) await reloadCurrentTrip();
+      else syncActiveSelection(null);
+    } else {
+      syncTripSelector();
+      refresh();
+      syncAvailability();
+    }
   }
   function refresh() {
+    if (destroyed) return;
     tripLabel.textContent = curFull
       ? `${curFull.trip.name || t('record.newTripName')} · ${t(`record.activities.${curFull.trip.activity}`)}`
       : t('analysis.noTrip');
-    updateCropInfo();
+    updatePrivacySummary();
     updateLink(true);
     updateHtmlEstimate();
+    syncAvailability();
     warmExport(curFull);
   }
-  on('trip:active', (full) => {
-    tripVersion++;
-    replaceCurrentFull(full);
+  function syncAvailability() {
+    const available = hasCurrentTrip();
+    const generating = posterBusy || videoBusy || htmlBusy;
+    if (!available && !emptyState.childElementCount) {
+      renderTripEmptyState(emptyState, navigate, {
+        iconKey: 'share', titleKey: 'export.emptyTitle', hintKey: 'export.emptyHint'
+      });
+    }
+    emptyState.style.display = available ? 'none' : '';
+    outputSections.forEach((node) => { node.style.display = available ? '' : 'none'; });
+    outputCards.forEach((node) => { node.style.display = available ? '' : 'none'; });
+    tripSel.disabled = videoBusy;
+    radiusInput.disabled = !available || generating;
+    hideCb.disabled = !available || generating;
+    vectorCb.disabled = !available || generating;
+    privacyAdjust.disabled = !available || generating;
+    sizeButtons.forEach((b) => { b.disabled = !available || generating; });
+    genBtn.disabled = !available || generating;
+    dlBtn.disabled = !posterBlob;
+    posterShareBtn.disabled = !posterBlob;
+    durationButtons.forEach((b) => { b.disabled = !available || generating; });
+    musicSel.disabled = !available || generating;
+    vGenBtn.disabled = !available || !videoOk || generating;
+    vCancelBtn.disabled = !videoBusy;
+    vCancelBtn.style.display = videoBusy ? '' : 'none';
+    vDlBtn.disabled = !videoBlob;
+    vShareBtn.disabled = !videoBlob;
+    fileButtons.forEach((b) => { b.disabled = !available || generating; });
+    tierButtons.forEach((b) => { b.disabled = !available || generating; });
+    htmlPhotosCb.disabled = !available || generating || htmlTier === 'none';
+    htmlBtn.disabled = !available || generating;
+    copyBtn.disabled = !available || videoBusy;
+    shareBtn.disabled = !available || videoBusy;
+    linkInput.disabled = !available;
+  }
+  const unsubscribe = on('trip:active', (full) => {
+    if (destroyed) return;
+    if (full && full.trip.id !== currentTripId()) return;
+    if (!full && currentTripId()) return;
+    adoptSnapshot(full);
+    if (full && ![...tripSel.options].some((option) => option.value === full.trip.id)) void refreshTripList();
   });
+  syncAvailability();
   refreshTripList();
 
-  return { view, refresh: refreshTripList, resize: () => {} };
+  return {
+    view,
+    refresh: refreshTripList,
+    resize: () => {},
+    destroy: () => {
+      if (destroyed) return;
+      destroyed = true;
+      snapshotRequest++;
+      tripListRequest++;
+      clearTimeout(warmTimer);
+      warmKey = '';
+      unsubscribe();
+      videoAbort?.abort();
+      videoAbort = null;
+      posterBusy = false;
+      videoBusy = false;
+      htmlBusy = false;
+      resetOutputs();
+    }
+  };
 }

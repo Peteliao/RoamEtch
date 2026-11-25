@@ -15,11 +15,11 @@ Browser APIs                       Core modules                     UI (native D
 ────────────                       ────────────                     ───────────────
 geolocation  ──► recorder ──► Dexie / IndexedDB ──► stats worker ──► views
 wake lock         │                 │                                 record
-fullscreen        │                 ├── trips / segments / chunks      meet
-visibility        │                 ├── waypoints / media / elevCache  trips
-                  │                 └── settings (localStorage)        analysis
-                  ├── rewalk / simulator                            export
-                  ├── poster / replay + footprint video / promo     settings
+fullscreen        │                 ├── trips / segments / chunks      trips ── detail (analysis / share)
+visibility        │                 ├── waypoints / media / elevCache  meet
+                  │                 └── settings (localStorage)        settings
+                  ├── rewalk / simulator
+                  ├── poster / replay + footprint video / promo
                   └── meetup crypto ──► MQTT WSS or WS relay
 ```
 
@@ -40,16 +40,16 @@ Key principles:
 | Path | Responsibility |
 | --- | --- |
 | `src/main.ts` | Bootstrap: i18n, theme, region probe, damaged-row isolation, deep links (`#meet=`, `#t=`), `?demo=1`, `?sim=1`, and the `window.__lt` diagnostics handle. |
-| `src/ui/shell.ts` | Top bar, region chip, tab bar, view lifecycle, language rebuild. |
-| `src/ui/state.ts` | Active trip and current view state shared by views. |
+| `src/ui/shell.ts` | Top bar, region chip, four-tab navigation, view lifecycle, language rebuild, and recording/team status shortcuts. |
+| `src/ui/state.ts` | Active trip, nested trip-detail section, and current view state shared by views. |
 | `src/core/store.ts` | Dexie schema and CRUD: trips, segments, 400-point track chunks, waypoints, media, elevation cache. |
 | `src/core/recorder.ts` | GPS watch, fix validation, gap segmentation, incremental persistence, live stats, wake lock and keep-alive. |
 | `src/worker/compute.worker.ts` | Statistics, simplification, and coordinate transforms off the main thread, with a synchronous fallback. |
 | `src/ui/map.ts` | MapLibre setup, region-specific raster styles, tile providers, and GCJ-02 render adapter. |
 | `src/ui/analysis.ts` | Compact metric card (4 hero + 9 details), elevation/speed charts with hover and touch scrubbing, gap repair, GPS quality report, timeline and waypoints. |
-| `src/ui/trips.ts` | Trip library: favorites, tags, search, filters, sorting, yearly footprint and its image/video share preview, import/export, backup entry points. |
+| `src/ui/trips.ts` | Trip library plus nested trip detail (Overview / Data / Share): favorites, tags, search, filters, sorting, yearly footprint, import/export, and explicit trip actions. |
 | `src/ui/backupFlow.ts` | Shared backup/restore UX: download (optionally password-encrypted), restore preview, integrity status, duplicate strategy, pre-restore snapshot. |
-| `src/ui/export.ts` | Posters, replay videos, standalone HTML, share link, privacy review. |
+| `src/ui/export.ts` | Share detail: privacy review, posters, replay videos, standalone HTML, files, and share link, with trip-version-aware output invalidation. |
 | `src/core/trackVideo.ts` | Realtime canvas replay, intro/outro cards, and muxing the generated music track. |
 | `src/core/footprintShare.ts` | Aggregate-only yearly footprint artwork: 1080×1350 image and 9-second 1080×1920 video with original music. |
 | `src/core/videoCapture.ts` | Shared MediaRecorder support check and MIME/bitrate selection (MP4/H.264 preferred, WebM fallback). |
@@ -71,7 +71,7 @@ Key principles:
 
 ## Data model
 
-Dexie database `localtrace`, schema version 1:
+Dexie database `localtrace`, schema version 2:
 
 - `trips`: id, activity, status, timestamps, name, tags, favorite, privacy, and
   `statsCache`. Rows are ordered by `updatedAt`.
@@ -81,6 +81,8 @@ Dexie database `localtrace`, schema version 1:
 - `waypoints`: nodes with type, note, time, hidden flag, and linked media ids.
 - `media`: EXIF-stripped photo blobs and thumbnails, linked to a trip.
 - `elevCache`: elevation lookups with fetch time.
+- `shareImports`: durable share-fragment fingerprint to imported trip mappings;
+  this internal deduplication index is not part of user backup payloads.
 
 `loadTripFull` assembles a trip with ordered segments, flattened chunks, waypoints,
 and media metadata. User preferences live separately in `localStorage` through
@@ -129,8 +131,9 @@ Backups serialize every table plus binary media into a `.trip` ZIP:
    Live distance, ascent, speed, and accuracy are updated incrementally.
 5. Wake lock, keep-alive audio, recorder locks, and visibility handling reduce the
    chance of the browser suspending a long recording. The OLED pocket lock is a
-   true-black dashboard that stays in the foreground and adds no hidden/blackout
-   mode, because a hidden page lets browsers suspend geolocation. Operating-system
+   passive, true-black dashboard that stays in the foreground and adds no
+   hidden/blackout mode, because a hidden page lets browsers suspend geolocation.
+   It has no recording-state controls; a 1.5-second hold unlocks it. Operating-system
    limits still apply; recording is not guaranteed with the screen off on every
    device.
 6. Pause and finish refuse to complete while buffered points remain unwritten,
@@ -143,8 +146,10 @@ Backups serialize every table plus binary media into a `.trip` ZIP:
    fresh-enough WGS-84 fix as a `photo` waypoint linked to `media` in one
    transaction; paused or stale captures request a one-shot position without
    creating a track point. Undo atomically removes the waypoint and only deletes
-   media no other waypoint references. The OLED pocket lock destroys the live
-   map, so its camera uses the recorder's in-memory fix or the same one-shot path.
+   media no other waypoint references. The OLED pocket lock pauses MapLibre
+   rendering without destroying the live map, preserving loaded GeoJSON and the
+   camera's map state. Normal-page finishing requires a 1.2-second hold or a right
+   swipe; keyboard and assistive-technology activation remain available.
 
 ## Statistics and charts
 
@@ -155,10 +160,10 @@ count as recorded time; pause and long-silence gaps are reported separately rath
 than counted as standing still. The compute worker runs statistics, simplification, and coordinate
 transforms; `workerBridge.ts` falls back to synchronous execution if the worker
 cannot start. `analysis.ts` renders uPlot elevation and speed charts and links
-hover position to the MapLibre marker. Touch uses pointer capture for continuous
-scrubbing, while `touch-action: pan-y` on the plot leaves vertical page scrolling
-intact. `gpsQuality.ts` evaluates the raw samples that produced the track, not a
-synthetic model.
+cursor position to the MapLibre marker. Touch uses pointer capture for continuous
+scrubbing and an adjacent readout, while `touch-action: pan-y` on the plot leaves
+vertical page scrolling intact. `gpsQuality.ts` evaluates the raw samples that
+produced the track, not a synthetic model.
 
 ## Maps and coordinates
 
@@ -202,7 +207,9 @@ Three modes share the viewfinder:
 - GPX, GeoJSON, KML, batch ZIP, standalone HTML, poster, and replay video are
   generated locally from IndexedDB data.
 - Compact share links put simplified, privacy-cropped data in the URL `#` fragment;
-  fragments never reach the hosting server, and links contain no photos.
+  fragments never reach the hosting server, and links contain no photos. A durable
+  IndexedDB fingerprint index and transactional import prevent repeated links from
+  creating duplicate trips across reloads or concurrent tabs.
 - Posters and videos read the active theme palette and regenerate when the theme
   changes.
 - Replay videos synthesize one of four original loops on-device with Web Audio
@@ -269,12 +276,13 @@ GPX/KML/GeoJSON, compact links, demo data, meetup crypto and cadence, MQTT frame
 validation, QR pixel decoding, chat-image compression/validation, backup
 integrity and encryption, footprint aggregation and recap summaries, GPS quality,
 and procedural video-music composition. Playwright smoke tests run the demo and
-simulator flows in Chromium: analysis chart switching and privacy cropping,
-poster canvas rendering, text-only HTML export, encrypted backup export → wipe →
-restore, the iOS storage nudge, fake-camera coverage for quick photo bursts,
-original-image download, multi-select node photos, two-client encrypted text and
-image chat, camera and image QR join, OLED anti-mistouch, 3-second auto-lock, and
-20-second idle close. A separate opt-in Playwright test (`MEET_PUBLIC_E2E=1`)
+simulator flows in Chromium: nested trip navigation and browser-back history,
+chart series visibility and touch scrubbing, privacy cropping, poster canvas
+rendering, text-only HTML export, encrypted backup export → wipe → restore, the
+iOS storage nudge, fake-camera coverage for quick photo bursts, original-image
+download, multi-select node photos, two-client encrypted text and image chat,
+camera and image QR join, passive OLED anti-mistouch, hold-to-unlock, 3-second
+auto-lock, and 20-second idle close. A separate opt-in Playwright test (`MEET_PUBLIC_E2E=1`)
 creates a public-broker room in two isolated browser contexts and verifies text
 and encrypted image delivery without duplicates.
 GitHub Actions

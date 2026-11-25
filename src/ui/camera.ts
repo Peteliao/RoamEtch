@@ -2,7 +2,8 @@
 // Chat shots are compressed to a weak-network budget; quick shots become photo
 // waypoints. Album import is bounded before the browser decodes pixels.
 import { t } from '../core/i18n';
-import { el, icon } from './helpers';
+import { el, icon, trapFocus } from './helpers';
+import { pushOverlayState, removeOverlayState } from './history';
 import { armKeepAlive } from '../core/keepalive';
 import { processPhoto } from '../core/photos';
 import { saveOriginalPhoto } from '../core/deviceSave';
@@ -274,13 +275,18 @@ export function openCamera(opts: CameraOptions) {
   const leftSlot = opts.mode === 'chat' ? albumBtn : el('span', { class: 'cam-side-spacer' });
   const bottom = el('div', { class: 'cam-bottom' }, leftSlot, shutter, flipBtn);
   const stage = el('div', { class: 'cam-stage' }, video, flash, focusRing, top, hint, toastEl, chip, bottom);
-  const overlay = el('div', { class: 'cam-overlay', role: 'dialog', 'aria-modal': 'true', 'aria-label': title.textContent }, stage);
+  const overlay = el('div', {
+    class: 'cam-overlay', role: 'dialog', 'aria-modal': 'true',
+    'aria-label': title.textContent, tabindex: '-1'
+  }, stage);
   document.body.append(overlay);
 
   const api = { close: () => closeCamera() };
   activeCamera = api;
+  let historyId = 0;
+  let releaseFocus = () => {};
 
-  function closeCamera() {
+  function closeCamera(fromHistory = false) {
     if (closed) return;
     closed = true;
     previewSeq++;
@@ -296,17 +302,16 @@ export function openCamera(opts: CameraOptions) {
     releaseUrl(chipUrl);
     chipUrl = '';
     for (const url of [...ownedUrls]) releaseUrl(url);
-    document.removeEventListener('keydown', onKey);
+    releaseFocus();
     overlay.remove();
+    removeOverlayState(historyId, { history: !fromHistory });
     activeCamera = null;
     // Opening a camera stream can pause the hidden keepalive video on iOS.
     armKeepAlive();
   }
 
-  function onKey(e: KeyboardEvent) {
-    if (e.key === 'Escape') { e.preventDefault(); closeCamera(); }
-  }
-  document.addEventListener('keydown', onKey);
+  historyId = pushOverlayState(() => closeCamera(true));
+  releaseFocus = trapFocus(overlay, { onEscape: () => closeCamera(), initial: closeBtn });
 
   function resetIdle() {
     if (!opts.idleCloseMs) return;

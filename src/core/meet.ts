@@ -148,12 +148,12 @@ function expiryMinutes() {
 function setMeetFragment(code: string) {
   if (typeof location === 'undefined') return;
   const hash = `#meet=${code}`;
-  if (location.hash !== hash) history.replaceState(null, '', location.pathname + location.search + hash);
+  if (location.hash !== hash) history.replaceState(history.state || {}, '', location.pathname + location.search + hash);
 }
 
 function clearMeetFragment() {
   if (typeof location !== 'undefined' && /[#&]meet=/.test(location.hash)) {
-    history.replaceState(null, '', location.pathname + location.search);
+    history.replaceState(history.state || {}, '', location.pathname + location.search);
   }
 }
 

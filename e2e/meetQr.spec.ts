@@ -51,24 +51,37 @@ test('meetup join accepts a camera QR scan and an image QR scan', async ({ page 
       ctx.fillRect(0, 0, 720, 720);
       ctx.drawImage(img, 60, 60, 600, 600);
     };
-    // Keep the first second blank so the test can observe the scanner sheet.
-    const delay = setTimeout(() => {
-      draw();
-      ticker = setInterval(draw, 300);
-    }, 1000);
-    let ticker = 0;
-    const stream = canvas.captureStream(8);
     const media = navigator.mediaDevices;
     const original = media.getUserMedia.bind(media);
-    media.getUserMedia = async () => stream;
+    const streams: MediaStream[] = [];
+    media.getUserMedia = async () => {
+      const stream = canvas.captureStream(8);
+      streams.push(stream);
+      let ticker = 0;
+      const delay = setTimeout(() => {
+        draw();
+        ticker = window.setInterval(draw, 300);
+      }, 1000);
+      for (const track of stream.getTracks()) track.addEventListener('ended', () => {
+        clearTimeout(delay);
+        clearInterval(ticker);
+      });
+      return stream;
+    };
     (window as any).__restoreMeetGum = () => {
-      clearTimeout(delay);
-      clearInterval(ticker);
       media.getUserMedia = original;
-      for (const track of stream.getTracks()) track.stop();
+      for (const stream of streams) for (const track of stream.getTracks()) track.stop();
     };
   }, qrDataUrl(cameraLink));
 
+  await page.getByRole('button', { name: '相机扫码', exact: true }).click();
+  await expect(page.locator('.qr-scan-overlay')).toBeVisible();
+  await expect(page.locator('.qr-scan-close')).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  expect(await page.evaluate(() => document.querySelector('.qr-scan-overlay')?.contains(document.activeElement))).toBe(true);
+  await page.goBack();
+  await expect(page.locator('.qr-scan-overlay')).toHaveCount(0);
+  await expect(page.locator('.modal-backdrop .modal')).toBeVisible();
   await page.getByRole('button', { name: '相机扫码', exact: true }).click();
   await expect(page.locator('.qr-scan-overlay')).toBeVisible();
   await expect(codeInp).toHaveValue(cameraInvite, { timeout: 20_000 });

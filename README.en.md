@@ -12,7 +12,7 @@
 **Try it online: [https://peteliao.github.io/RoamEtch/](https://peteliao.github.io/RoamEtch/)**<br>
 Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose “Add to Home Screen”.
 
-> **No GPS?** Open the Trips tab and press **Load demo trip**, or visit `?demo=1`, to explore analysis, posters, replay video, and self-contained HTML export immediately. Contributors can use `?sim=1` to replay the demo as live GPS on a desktop.
+> **No GPS?** The four main tabs are **Record, Trips, Team, and Settings**. Open Trips, load the demo trip, then choose **Overview / Data / Share** to explore analysis, posters, replay video, and self-contained HTML export. You can also visit `?demo=1`; contributors can use `?sim=1` to replay the demo as live GPS on a desktop.
 
 > **TL;DR**: RoamEtch is a privacy-first, local-first GPX recorder PWA for hiking, cycling, running, road trips, and outdoor teams. It combines trip recording, elevation and speed analysis, shareable posters and videos, WGS-84 file export, and encrypted real-time teammate locations in one page — without sign-up.
 
@@ -59,9 +59,9 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 
 - Live distance, total and moving time, current/average speed, pace, altitude, ascent/descent, calories, and GPS signal strength.
 - Automatic activity detection for hiking, driving, cycling, running, and travel; change the activity at any time while recording.
-- Pause/resume, add waypoints mid-recording, rename on finish, and resume as a new segment after the browser is backgrounded or the screen locks.
-- Three recording-frequency presets (high accuracy, balanced, power saving), screen wake lock, fullscreen, and a true-black OLED pocket lock to reduce accidental touches and battery drain on long trips. Locking the screen with the power button or backgrounding the browser can still pause geolocation.
-- **In-app photo waypoints**: open the camera while recording or paused, shoot in the viewfinder, and link each photo to the current WGS-84 position and altitude. Flash, vibration, continuous shooting, thumbnail, undo, and a “Done (N)” counter are included. Each shot keeps the in-app 1600 px version plus a full-resolution original that “Save original” can hand to the system through the share sheet, save picker, or a download; browsers cannot silently write to the OS photo gallery. Photos stay in local IndexedDB and are never uploaded.
+- Pause/resume, add waypoints mid-recording, rename in the result sheet, and resume as a new segment after the browser is backgrounded or the screen locks. Hold Finish for 1.2 seconds or swipe right to stop; taps and left swipes are ignored. The finished track stays visible for analysis or sharing.
+- Three recording-frequency presets (high accuracy, balanced, power saving), screen wake lock, fullscreen, and a true-black OLED pocket lock to reduce accidental touches and battery drain on long trips. The pocket lock is progress-only, with no pause, resume, or finish controls and no recording-state changes; hold the ring for 1.5 seconds to unlock. Locking the screen with the power button or backgrounding the browser can still pause geolocation.
+- **In-app photo waypoints**: while recording or paused, open Node and choose Photo waypoint to shoot in the viewfinder and link each photo to the current WGS-84 position and altitude. Flash, vibration, continuous shooting, thumbnail, undo, and a “Done (N)” counter are included. Each shot keeps the in-app 1600 px version plus a full-resolution original that “Save original” can hand to the system through the share sheet, save picker, or a download; browsers cannot silently write to the OS photo gallery. Photos stay in local IndexedDB and are never uploaded.
 - **Multi-photo waypoint editor**: select several album images at once or open the camera and shoot a burst inside the node editor. Every captured or selected image is appended to the waypoint until you save it.
 - **Pocket-lock quick camera**: drag the bottom-right camera knob left by at least 120 px in the OLED pocket lock. Taps and short drags are ignored; the camera closes after 20 seconds without interaction, and a saved shot returns to the black pocket lock after 3 seconds or offers “shoot again” / “lock now”.
 - **Re-walk**: follow a reference track with off-route alerts and spoken waypoint type, name, and notes as you approach each node.
@@ -268,7 +268,7 @@ Positions, text, thumbnails, and WebRTC signaling use AES-256-GCM end-to-end enc
 
 ### Does recording continue with the screen off?
 
-RoamEtch requests a screen wake lock while recording, and the OLED pocket lock keeps a true-black dashboard visible and awake without hiding the page. It cannot prevent system sleep: iOS and Android may still pause browser geolocation when the screen is locked with the power button or the app is backgrounded. RoamEtch re-locates and resumes when you return. Drag the pocket-lock camera knob left by at least 120 px to shoot without unlocking; the camera closes after 20 seconds without interaction and returns to the black lock 3 seconds after a shot. Behavior depends on the OS and battery policy, so keep the app in the foreground for critical activities.
+RoamEtch requests a screen wake lock while recording, and the OLED pocket lock keeps a true-black progress dashboard visible and awake without hiding the page. It does not change recording state and has no pause, resume, or finish controls; hold the ring for 1.5 seconds to unlock, while a tap does nothing. It cannot prevent system sleep: iOS and Android may still pause browser geolocation when the screen is locked with the power button or the app is backgrounded. RoamEtch re-locates and resumes when you return. Drag the pocket-lock camera knob left by at least 120 px to shoot without unlocking; the camera closes after 20 seconds without interaction and returns to the black lock 3 seconds after a shot. Behavior depends on the OS and battery policy, so keep the app in the foreground for critical activities.
 
 ### Why do maps differ between regions?
 

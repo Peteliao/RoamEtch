@@ -21,7 +21,7 @@ vi.mock('../src/core/settings', () => ({
 vi.mock('../src/core/events', () => ({ emit: mocks.emit }));
 vi.mock('../src/core/elevation', () => ({ backfillTripAltitudes: mocks.backfillTripAltitudes }));
 
-import { appState, recalcNow, refreshActiveTrip, setActiveTrip } from '../src/ui/state';
+import { appState, isTripSectionActive, recalcNow, refreshActiveTrip, setActiveTrip } from '../src/ui/state';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -41,9 +41,11 @@ function full(id: string, name: string) {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
+  appState.view = 'record';
   appState.activeTripId = null;
   appState.activeTripFull = null;
   appState.stats = null;
+  appState.tripDetail = { open: false, tripId: null, section: 'overview' };
   mocks.updateTrip.mockResolvedValue(undefined);
   mocks.computeStatsAsync.mockResolvedValue({ distance: 1, segments: [] });
 });
@@ -54,6 +56,27 @@ afterEach(() => {
 });
 
 describe('active trip snapshots', () => {
+  it('recognizes only the visible nested trip section', () => {
+    appState.view = 'trips';
+    appState.tripDetail = { open: true, tripId: 'a', section: 'share' };
+    expect(isTripSectionActive('share')).toBe(true);
+    expect(isTripSectionActive('overview')).toBe(false);
+    appState.view = 'record';
+    expect(isTripSectionActive('share')).toBe(false);
+  });
+
+  it('closes an unrelated trip detail as soon as selection changes', async () => {
+    const next = deferred<ReturnType<typeof full>>();
+    appState.activeTripId = 'a';
+    appState.tripDetail = { open: true, tripId: 'a', section: 'data' };
+    mocks.loadTripFull.mockReturnValueOnce(next.promise);
+
+    const pending = setActiveTrip('b');
+    expect(appState.tripDetail).toEqual({ open: false, tripId: null, section: 'overview' });
+    next.resolve(full('b', 'Next trip'));
+    await pending;
+  });
+
   it('does not let an older trip selection overwrite a newer one', async () => {
     const a = deferred<ReturnType<typeof full>>();
     const b = deferred<ReturnType<typeof full>>();

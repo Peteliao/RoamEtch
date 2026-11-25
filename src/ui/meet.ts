@@ -85,6 +85,7 @@ export function createMeetView(navigate) {
   let panelCollapsed = false;
   let lastTickRender = 0;
   let chatModal = null;
+  let chatDraft = '';
   let chatRefresh: (() => void) | null = null;
   let chatAudioHost: HTMLDivElement | null = null;
   let chatImageViewer = null;
@@ -646,6 +647,7 @@ export function createMeetView(navigate) {
       placeholder: t('meet.chatPlaceholder'), 'aria-label': t('meet.chatPlaceholder'),
       enterkeyhint: 'send'
     });
+    input.value = chatDraft;
     const sendBtn = el('button', {
       class: 'meet-chat-send', type: 'button', title: t('meet.chatSend'),
       'aria-label': t('meet.chatSend'), disabled: true, hidden: true
@@ -724,6 +726,7 @@ export function createMeetView(navigate) {
       const end = input.selectionEnd ?? start;
       const next = input.value.slice(0, start) + emoji + input.value.slice(end);
       input.value = Array.from(next).slice(0, MEET_CHAT_MAX_LEN).join('');
+      chatDraft = input.value;
       input.selectionStart = input.selectionEnd = Math.min(start + emoji.length, input.value.length);
       grow();
       syncSend();
@@ -811,6 +814,7 @@ export function createMeetView(navigate) {
       sending = false;
       if (ok) {
         input.value = '';
+        chatDraft = '';
         grow();
         syncSend();
         render(true);
@@ -986,7 +990,11 @@ export function createMeetView(navigate) {
     window.addEventListener('blur', cancelOnBlur);
     document.addEventListener('visibilitychange', cancelWhenHidden);
 
-    input.addEventListener('input', () => { grow(); syncSend(); });
+    input.addEventListener('input', () => {
+      chatDraft = input.value;
+      grow();
+      syncSend();
+    });
     input.addEventListener('keydown', (e: any) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
@@ -1566,12 +1574,14 @@ export function createMeetView(navigate) {
     }
   });
   on('meet:ended', ({ reason }) => {
+    chatDraft = '';
     closeChat();
     if (reason === 'expired') toast(t('meet.expired'), 'warn', 4200);
     else if (reason === 'kicked') toast(t('meet.kickedOut'), 'warn', 4200);
     else if (reason === 'manual') toast(t('meet.left'), 'ok');
   });
   on('meet:codeReset', () => {
+    chatDraft = '';
     closeChat();
     toast(t('meet.resetDone'), 'ok', 3500);
   });
@@ -1584,6 +1594,7 @@ export function createMeetView(navigate) {
     refresh: () => applySnapshot(getMeetSnapshot()),
     getMap: () => map,
     destroy: () => {
+      chatDraft = '';
       closeChat();
       clearTimeout(photoRefTimer);
       map?.clearPhotoRef();
