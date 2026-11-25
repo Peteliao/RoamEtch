@@ -711,64 +711,10 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     class: 'rec-btn resume', onclick: () => { armKeepAlive(); runRecAction(resumeRecording()); }
   }, icon('play', 22), t('record.resume'));
   const stopBtn = el('button', {
-    type: 'button', class: 'rec-btn stop', title: t('record.stopGestureHint'),
-    'aria-label': `${t('record.stop')} · ${t('record.stopGestureHint')}`
+    type: 'button', class: 'rec-btn stop', title: t('record.stop'),
+    'aria-label': t('record.stop'), onclick: onStop
   }, icon('stop', 22), t('record.stop'));
   btnRow.append(activitySel, startBtn, nodeBtn, pauseBtn, resumeBtn, stopBtn);
-
-  let stopGesture = null;
-  function resetStopGesture() {
-    if (!stopGesture) return;
-    cancelAnimationFrame(stopGesture.raf);
-    stopGesture = null;
-    stopBtn.classList.remove('holding', 'ready');
-    stopBtn.style.setProperty('--stop-progress', '0');
-  }
-  stopBtn.addEventListener('pointerdown', (e) => {
-    if (psActive || stopFlowPromise || (rec.status !== 'recording' && rec.status !== 'paused') || e.button !== 0) return;
-    e.preventDefault();
-    resetStopGesture();
-    try { stopBtn.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
-    stopGesture = { id: e.pointerId, x: e.clientX, y: e.clientY, start: performance.now(), invalid: false, ready: false, raf: 0 };
-    stopBtn.classList.add('holding');
-    const tick = () => {
-      if (!stopGesture) return;
-      const progress = Math.min(1, (performance.now() - stopGesture.start) / 1200);
-      stopBtn.style.setProperty('--stop-progress', String(progress));
-      if (progress >= 1 && !stopGesture.ready) {
-        stopGesture.ready = true;
-        stopBtn.classList.add('ready');
-        navigator.vibrate?.(18);
-      }
-      stopGesture.raf = progress < 1 ? requestAnimationFrame(tick) : 0;
-    };
-    stopGesture.raf = requestAnimationFrame(tick);
-  });
-  stopBtn.addEventListener('pointermove', (e) => {
-    const gesture = stopGesture;
-    if (!gesture || gesture.id !== e.pointerId) return;
-    const dx = e.clientX - gesture.x;
-    const dy = e.clientY - gesture.y;
-    if (Math.abs(dy) > Math.abs(dx) + 18) gesture.invalid = true;
-    const swipe = dx >= 120 && Math.abs(dy) <= 90 && !gesture.invalid;
-    const ready = swipe || performance.now() - gesture.start >= 1200;
-    if (ready && !gesture.ready) navigator.vibrate?.(18);
-    gesture.ready = ready;
-    stopBtn.classList.toggle('ready', ready);
-    stopBtn.style.setProperty('--stop-progress', String(Math.max(swipe ? 1 : 0, Math.min(1, (performance.now() - gesture.start) / 1200))));
-  });
-  stopBtn.addEventListener('pointerup', (e) => {
-    if (!stopGesture || stopGesture.id !== e.pointerId) return;
-    const fire = stopGesture.ready && !stopGesture.invalid;
-    resetStopGesture();
-    if (fire) onStop();
-  });
-  stopBtn.addEventListener('pointercancel', resetStopGesture);
-  stopBtn.addEventListener('lostpointercapture', resetStopGesture);
-  stopBtn.addEventListener('contextmenu', (e) => e.preventDefault());
-  stopBtn.addEventListener('click', (e) => {
-    if (e.detail === 0 && !psActive && !stopFlowPromise) onStop();
-  });
 
   function openNodeActions() {
     if (!rec.tripId || (rec.status !== 'recording' && rec.status !== 'paused')) return;
@@ -979,7 +925,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     const errorId = 'record-result-error';
     const input = el('input', {
       type: 'text', id: inputId, value: defaultName, maxlength: '60',
-      autocomplete: 'off', enterkeyhint: 'done', 'aria-describedby': hintId
+      autocomplete: 'off', enterkeyhint: 'save', 'aria-describedby': hintId
     });
     const error = el('div', {
       id: errorId, role: 'alert', 'aria-live': 'assertive',
@@ -1001,7 +947,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       el('button', {
         type: 'button', class: 'btn ghost', 'data-result-action': 'done',
         style: { flex: '1 1 0' }, onclick: () => { void closeResultSheet('done'); }
-      }, t('common.done'))
+      }, t('common.save'))
     ];
     const node = el('section', {
       class: 'record-result-sheet', role: 'dialog', 'aria-modal': 'false',
@@ -1061,6 +1007,9 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       renderBanners();
       return;
     }
+
+    activitySel.value = 'auto';
+    set('activity', 'auto');
 
     const wasOled = psActive;
     let full = null;

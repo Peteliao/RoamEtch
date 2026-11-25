@@ -574,19 +574,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .rec-btn svg { width: 22px; height: 22px; }
 .rec-btn.node { background: var(--bg-elev); color: var(--accent); border: 2px solid var(--accent); }
 .rec-btn.pause { background: var(--warn); color: #3a2a00; }
-.rec-btn.stop {
-  --stop-progress: 0;
-  position: relative; overflow: hidden; background: var(--danger);
-  touch-action: none; user-select: none; -webkit-user-select: none;
-}
-.rec-btn.stop::before {
-  content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  background: conic-gradient(rgba(255,255,255,.3) calc(var(--stop-progress) * 1turn), transparent 0);
-  opacity: 0;
-}
-.rec-btn.stop.holding::before { opacity: 1; }
-.rec-btn.stop.ready { box-shadow: 0 0 0 4px rgba(242,109,109,.28), 0 8px 24px rgba(0,0,0,.4); }
-.rec-btn.stop > * { position: relative; z-index: 1; }
+.rec-btn.stop { background: var(--danger); }
 .rec-btn.resume { background: var(--accent); color: var(--accent-ink); }
 
 /* live panel — three always-on metrics, expandable detail grid */

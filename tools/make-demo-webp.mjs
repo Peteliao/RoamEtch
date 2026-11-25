@@ -11,18 +11,22 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const PORT = 5198;
 const BASE = `http://127.0.0.1:${PORT}`;
 const FRAMES = Number(process.env.DEMO_FRAMES || 42);
+const RESULT_FRAMES = Number(process.env.DEMO_RESULT_FRAMES || 12);
+const RENAME_FRAMES = Number(process.env.DEMO_RENAME_FRAMES || 8);
+const RESET_FRAMES = Number(process.env.DEMO_RESET_FRAMES || 14);
+const TOTAL_FRAMES = FRAMES + RESULT_FRAMES + RENAME_FRAMES + RESET_FRAMES;
 const FRAME_MS = Number(process.env.DEMO_FRAME_MS || 160);
 const WIDTH = Number(process.env.DEMO_WIDTH || 540);
-const QUALITY = Number(process.env.DEMO_QUALITY || 0.64);
+const QUALITY = Number(process.env.DEMO_QUALITY || 0.58);
 
 const LOCALES = [
   {
     id: 'zh',
-    settings: { language: 'zh', theme: 'dark', sim: { enabled: true, playbackSpeed: 180 } }
+    settings: { language: 'zh', theme: 'dark', sim: { enabled: true, playbackSpeed: 90 } }
   },
   {
     id: 'en',
-    settings: { language: 'en', theme: 'dark', sim: { enabled: true, playbackSpeed: 180 } }
+    settings: { language: 'en', theme: 'dark', sim: { enabled: true, playbackSpeed: 90 } }
   }
 ];
 
@@ -171,15 +175,49 @@ async function main() {
 
       const frames = [];
       let size = null;
-      for (let i = 0; i < FRAMES; i++) {
-        const png = await page.screenshot({ type: 'png' });
-        const encoded = await encodeFrame(encoder, png, WIDTH, QUALITY);
-        const webp = Buffer.from(encoded.b64, 'base64');
-        size = { width: encoded.width, height: encoded.height };
-        frames.push(parseWebP(webp).filter((c) => c.id === 'ALPH' || c.id === 'VP8 ' || c.id === 'VP8L'));
-        await page.waitForTimeout(120);
-        process.stdout.write(`\r${locale.id}: frame ${i + 1}/${FRAMES}`);
+      const capture = async (label, count) => {
+        for (let i = 0; i < count; i++) {
+          const png = await page.screenshot({ type: 'png' });
+          const encoded = await encodeFrame(encoder, png, WIDTH, QUALITY);
+          const webp = Buffer.from(encoded.b64, 'base64');
+          size = { width: encoded.width, height: encoded.height };
+          frames.push(parseWebP(webp).filter((c) => c.id === 'ALPH' || c.id === 'VP8 ' || c.id === 'VP8L'));
+          await page.waitForTimeout(120);
+          process.stdout.write(`\r${locale.id}: ${label} frame ${i + 1}/${count} (${frames.length}/${TOTAL_FRAMES})`);
+        }
+      };
+      await capture('recording', FRAMES);
+
+      await page.locator('.rec-btn.stop').click();
+      const result = page.locator('.record-result-sheet');
+      await result.waitFor({ timeout: 30_000 });
+      await capture('default name', RESULT_FRAMES);
+
+      await result.locator('input[type="text"]').fill(locale.id === 'zh' ? '香山环线' : 'Xiangshan Loop');
+      await wait(300);
+      await capture('rename', RENAME_FRAMES);
+
+      await result.locator('[data-result-action="done"]').click();
+      await result.waitFor({ state: 'detached', timeout: 30_000 });
+      const resetState = await page.evaluate(() => {
+        const buttons = {
+          node: document.querySelector('.rec-btn.node'),
+          pause: document.querySelector('.rec-btn.pause'),
+          stop: document.querySelector('.rec-btn.stop'),
+          start: document.querySelector('.rec-pill.start'),
+          activity: document.querySelector('.rec-buttons select.rec-pill')
+        };
+        return {
+          status: window.__lt.recorder.rec.status,
+          hidden: Object.fromEntries(Object.entries(buttons).map(([key, node]) => [key, !!node?.hidden])),
+          activity: buttons.activity?.value
+        };
+      });
+      if (resetState.status !== 'finished' || !resetState.hidden.node || !resetState.hidden.pause ||
+          !resetState.hidden.stop || resetState.hidden.start || resetState.hidden.activity || resetState.activity !== 'auto') {
+        throw new Error(`${locale.id}: finish flow did not reset the recording controls: ${JSON.stringify(resetState)}`);
       }
+      await capture('ready for next trip', RESET_FRAMES);
       await context.close();
 
       const out = animationWebP(frames, size.width, size.height, FRAME_MS);
@@ -191,8 +229,8 @@ async function main() {
       mkdirSync(join(ROOT, 'docs', 'screenshots', locale.id), { recursive: true });
       writeFileSync(target, out);
       process.stdout.write(
-        `\n${locale.id}: ${size.width}x${size.height}, ${FRAMES} frames, ` +
-        `${(FRAME_MS * FRAMES / 1000).toFixed(1)}s, ${(out.length / 1024).toFixed(0)} KB → ${target}\n`
+        `\n${locale.id}: ${size.width}x${size.height}, ${TOTAL_FRAMES} frames, ` +
+        `${(FRAME_MS * TOTAL_FRAMES / 1000).toFixed(1)}s, ${(out.length / 1024).toFixed(0)} KB → ${target}\n`
       );
     }
   } finally {

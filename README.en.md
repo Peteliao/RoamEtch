@@ -19,8 +19,8 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 ## Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/en/demo.webp" width="300" alt="Live recording demo: the Xiangshan loop trail grows with each GPS fix while distance, duration, and speed update in real time">
-  <br><sub><b>Live recording</b> · every step draws itself on the map, with distance, time, and speed updating live</sub>
+  <img src="docs/screenshots/en/demo.webp" width="300" alt="Recording demo: a live track grows on the map; tapping Finish suggests a trip name, and saving returns to Auto detection with Start ready">
+  <br><sub><b>Complete recording flow</b> · live track → Finish → name &amp; save → Auto / Start</sub>
 </p>
 
 <table>
@@ -59,7 +59,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 
 - Live distance, total and moving time, current/average speed, pace, altitude, ascent/descent, calories, and GPS signal strength.
 - Automatic activity detection for hiking, driving, cycling, running, and travel; change the activity at any time while recording.
-- Pause/resume, add waypoints mid-recording, rename in the result sheet, and resume as a new segment after the browser is backgrounded or the screen locks. Hold Finish for 1.2 seconds or swipe right to stop; taps and left swipes are ignored. The finished track stays visible for analysis or sharing.
+- Pause/resume, add waypoints mid-recording, rename in the result sheet, and resume as a new segment after the browser is backgrounded or the screen locks. Tap Finish to save immediately and show a suggested trip name based on activity and time; edit it if needed, then tap Save. The track stays visible for analysis or sharing while the controls return to Auto detection and Start.
 - Three recording-frequency presets (high accuracy, balanced, power saving), screen wake lock, fullscreen, and a true-black OLED pocket lock to reduce accidental touches and battery drain on long trips. The pocket lock is progress-only, with no pause, resume, or finish controls and no recording-state changes; hold the ring for 1.5 seconds to unlock. Locking the screen with the power button or backgrounding the browser can still pause geolocation.
 - **In-app photo waypoints**: while recording or paused, open Node and choose Photo waypoint to shoot in the viewfinder and link each photo to the current WGS-84 position and altitude. Flash, vibration, continuous shooting, thumbnail, undo, and a “Done (N)” counter are included. Each shot keeps the in-app 1600 px version plus a full-resolution original that “Save original” can hand to the system through the share sheet, save picker, or a download; browsers cannot silently write to the OS photo gallery. Photos stay in local IndexedDB and are never uploaded.
 - **Multi-photo waypoint editor**: select several album images at once or open the camera and shoot a burst inside the node editor. Every captured or selected image is appended to the waypoint until you save it.

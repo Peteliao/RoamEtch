@@ -4,6 +4,18 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.1.1] - 2026-11-25
+
+### Fixed
+
+- Restored regular mouse and touch clicks on Finish instead of requiring the
+  previous long-press or swipe gesture.
+- Kept the suggested activity-and-time trip name in the result sheet, renamed
+  its dismissal action to Save, and restored Auto detection with Start after a
+  successful finish.
+- Updated the bilingual README animated demos to show recording, finishing,
+  naming, saving, and the next-trip ready state.
+
 ## [3.1.0] - 2026-11-25
 
 ### Changed

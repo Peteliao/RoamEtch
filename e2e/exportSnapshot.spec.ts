@@ -33,7 +33,7 @@ test('new node text and photo export without reselecting the trip and reach vide
     return { name: node?.name, desc: node?.desc, photos: media.filter(Boolean).length };
   }, tripId)).toEqual({ name: '节点文字验收', desc: '节点描述验收', photos: 1 });
 
-  await page.locator('.rec-btn.stop').press('Enter');
+  await page.locator('.rec-btn.stop').click();
   const result = page.locator('.record-result-sheet');
   await expect(result).toBeVisible();
   await result.locator('input[type="text"]').fill('节点文字验收行程');

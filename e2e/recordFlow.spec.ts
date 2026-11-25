@@ -9,7 +9,7 @@ async function openRecording(page: Page, minPoints = 2) {
 }
 
 async function finishRecording(page: Page) {
-  await page.locator('.rec-btn.stop').press('Enter');
+  await page.locator('.rec-btn.stop').click();
   const result = page.locator('.record-result-sheet');
   await expect(result).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('.modal-backdrop')).toHaveCount(0);
@@ -45,7 +45,7 @@ async function instrumentMap(page: Page) {
   });
 }
 
-test('finished recording keeps its fitted track after Done and clears it only on explicit exit', async ({ page }) => {
+test('finished recording keeps its fitted track after Save and clears it only on explicit exit', async ({ page }) => {
   await openRecording(page);
   await instrumentMap(page);
   const result = await finishRecording(page);
@@ -233,24 +233,36 @@ test('pocket lock unlock is keyboard accessible without adding recording control
   expect(await page.evaluate(() => window.__lt.recorder.rec.status)).toBe('recording');
 });
 
-test('finish requires a hold or right swipe, not a tap or left swipe', async ({ page }) => {
+test('a regular click finishes, suggests a name, saves a rename, and restores Auto with Start', async ({ page }) => {
   await openRecording(page);
-  const stop = page.locator('.rec-btn.stop');
-  await stop.click();
-  await page.waitForTimeout(200);
-  expect(await page.evaluate(() => window.__lt.recorder.rec.status)).toBe('recording');
-  const box = await stop.boundingBox();
-  if (!box) throw new Error('Missing finish button');
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x - 80, box.y + box.height / 2, { steps: 6 });
-  await page.mouse.up();
-  expect(await page.evaluate(() => window.__lt.recorder.rec.status)).toBe('recording');
-  await page.mouse.move(box.x + 12, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x + 152, box.y + box.height / 2, { steps: 6 });
-  await page.mouse.up();
-  await expect(page.locator('.record-result-sheet')).toBeVisible({ timeout: 30_000 });
+  const tripId = await page.evaluate(() => window.__lt.recorder.rec.tripId);
+  const result = page.locator('.record-result-sheet');
+
+  await page.locator('.rec-btn.stop').click();
+
+  await expect(result).toBeVisible({ timeout: 30_000 });
+  expect(await page.evaluate(() => window.__lt.recorder.rec.status)).toBe('finished');
+  const input = result.locator('input[type="text"]');
+  const defaultName = await input.inputValue();
+  expect(defaultName.trim()).not.toBe('');
+  expect(await page.evaluate(async (id) => {
+    const trip = await window.__lt.store.db.trips.get(id);
+    return { status: trip?.status, name: trip?.name };
+  }, tripId)).toEqual({ status: 'finished', name: defaultName });
+
+  await input.fill('  点击结束验收行程  ');
+  await result.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(result).toHaveCount(0);
+  expect(await page.evaluate(async (id) => (await window.__lt.store.db.trips.get(id))?.name, tripId)).toBe('点击结束验收行程');
+
+  await expect(page.locator('.rec-btn.node')).toBeHidden();
+  await expect(page.locator('.rec-btn.pause')).toBeHidden();
+  await expect(page.locator('.rec-btn.stop')).toBeHidden();
+  await expect(page.locator('.rec-pill.start')).toBeVisible();
+  const activity = page.locator('.rec-buttons select.rec-pill');
+  await expect(activity).toBeVisible();
+  await expect(activity).toHaveValue('auto');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('localtrace.settings.v1') || '{}').activity)).toBe('auto');
 });
 
 test('record keyboard shortcuts ignore repeats, interactive targets, other views, and overlays', async ({ page }) => {
