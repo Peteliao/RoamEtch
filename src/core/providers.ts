@@ -113,7 +113,7 @@ export function expandTiles(provider, key) {
 
 export function vectorBgColor() {
   const eff = effectiveTheme();
-  return eff === 'light' ? '#f5f7f6' : eff === 'contrast' ? '#ffffff' : '#000000';
+  return eff === 'light' ? '#f5f7f6' : eff === 'contrast' ? '#ffffff' : eff === 'matrix' ? '#000300' : '#000000';
 }
 
 /** Build a fully self-contained raster style (no external style/glyph/sprite fetches). */

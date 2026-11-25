@@ -15,7 +15,7 @@ const DEFAULTS = {
   language: 'auto',            // auto | zh | en   (UI language, independent of region)
   regionMode: 'auto',          // auto | cn | global  (manual override wins)
   units: 'metric',             // metric | imperial
-  theme: 'dark',               // dark | light | contrast
+  theme: 'dark',               // dark | light | contrast | matrix
   activity: 'auto',            // auto | hike | drive | bike | run | travel
   speedDisplay: 'auto',        // auto | speed | pace
   recordQuality: 'balanced',   // high | balanced | low

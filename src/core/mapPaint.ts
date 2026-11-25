@@ -6,6 +6,7 @@ import { isOfflineSim, isCorsFailSim } from './region';
 import { availableBasemaps, defaultBasemapId, expandTiles } from './providers';
 import { toDisplay } from './coords';
 import { canvasPalette } from './palette';
+import { effectiveTheme } from './theme';
 
 const TILE = 256;
 const MAX_LAT = 85.05112878;
@@ -232,9 +233,11 @@ export function paintTrack(ctx, fit, segments, waypoints, {
 } = {}) {
   if (!fit) return;
   const P = canvasPalette();
-  const stops = darkBg ? BRIGHT_STOPS : P.lut;
-  const halo = darkBg ? 'rgba(0,0,0,0.40)' : P.trackHalo;
-  const casing = darkBg ? 'rgba(4,16,24,0.74)' : P.trackCasing;
+  const matrix = effectiveTheme() === 'matrix';
+  const bright = darkBg && !matrix;
+  const stops = bright ? BRIGHT_STOPS : P.lut;
+  const halo = bright ? 'rgba(0,0,0,0.40)' : P.trackHalo;
+  const casing = bright ? 'rgba(4,16,24,0.74)' : P.trackCasing;
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, fit.w, fit.h);
@@ -264,9 +267,9 @@ export function paintTrack(ctx, fit, segments, waypoints, {
   // imagery; the thin highlight keeps the line from looking flat.
   const passes = [
     { w: lineWidth * 1.9, a: 0.20, color: halo },
-    { w: lineWidth + 2.8, a: darkBg ? 0.85 : 0.92, color: casing },
+    { w: lineWidth + 2.8, a: bright ? 0.85 : 0.92, color: casing },
     { w: lineWidth, a: 1 },
-    { w: Math.max(1.2, lineWidth * 0.24), a: darkBg ? 0.26 : 0.34, color: 'rgba(255,255,255,0.9)' }
+    { w: Math.max(1.2, lineWidth * 0.24), a: bright ? 0.26 : 0.34, color: 'rgba(255,255,255,0.9)' }
   ];
   for (const pass of passes) {
     ctx.globalAlpha = pass.a;
@@ -290,9 +293,9 @@ export function paintTrack(ctx, fit, segments, waypoints, {
 
   for (const wp of waypoints.slice(0, 40)) {
     const [x, y] = fit.toPx(wp);
-    ctx.fillStyle = darkBg ? 'rgba(255,255,255,0.95)' : P.text;
+    ctx.fillStyle = bright ? 'rgba(255,255,255,0.95)' : P.text;
     ctx.beginPath(); ctx.arc(x, y, wpRadius, 0, 7); ctx.fill();
-    ctx.strokeStyle = darkBg ? 'rgba(4,16,24,0.8)' : P.wpRing;
+    ctx.strokeStyle = bright ? 'rgba(4,16,24,0.8)' : P.wpRing;
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(x, y, wpRadius + 1.5, 0, 7); ctx.stroke();
   }
@@ -302,7 +305,7 @@ export function paintTrack(ctx, fit, segments, waypoints, {
     ctx.beginPath(); ctx.arc(x, y, dotRadius + 3.5, 0, 7); ctx.fill();
     ctx.fillStyle = fill;
     ctx.beginPath(); ctx.arc(x, y, dotRadius, 0, 7); ctx.fill();
-    ctx.strokeStyle = darkBg ? 'rgba(255,255,255,0.92)' : P.endRing;
+    ctx.strokeStyle = bright ? 'rgba(255,255,255,0.92)' : P.endRing;
     ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(x, y, dotRadius + 2.5, 0, 7); ctx.stroke();
   };

@@ -131,7 +131,7 @@ export function createSettingsView(navigate) {
     ], get('language'), (v) => setLanguage(v), t('settings.langNote')),
     segRow(t('settings.units'), [['metric', t('settings.metric')], ['imperial', t('settings.imperial')]], get('units'), (v) => set('units', v)),
     segRow(t('settings.theme'), [
-      ['auto', t('settings.themeAuto')], ['dark', t('settings.themeDark')], ['light', t('settings.themeLight')], ['contrast', t('settings.themeContrast')]
+      ['auto', t('settings.themeAuto')], ['dark', t('settings.themeDark')], ['light', t('settings.themeLight')], ['contrast', t('settings.themeContrast')], ['matrix', t('settings.themeMatrix')]
     ], get('theme'), (v) => set('theme', v), t('settings.themeAutoHint'))
   );
 

@@ -14,7 +14,7 @@ import { SITE_URL, drawQr } from './brand';
 import { paletteFor } from './palette';
 import { VIEWER_CSS, VIEWER_JS } from './htmlExportViewer';
 
-const THEMES = ['dark', 'light', 'contrast'];
+const THEMES = ['dark', 'light', 'contrast', 'matrix'];
 
 export const HTML_TIERS = {
   clear: { tol: 3, points: 2_000, waypoints: 30, photos: 12, budget: 680_000 },
@@ -39,8 +39,10 @@ function hexA(hex, a) {
 
 function cssVars(theme) {
   const p = paletteFor(theme);
+  const matrix = theme === 'matrix';
+  const dark = theme === 'dark' || matrix;
   return {
-    'color-scheme': theme === 'dark' ? 'dark' : 'light',
+    'color-scheme': dark ? 'dark' : 'light',
     '--bg': p.vectorBg,
     '--panel': p.panel,
     '--text': p.text,
@@ -48,16 +50,18 @@ function cssVars(theme) {
     '--faint': p.faint,
     '--accent': p.accent,
     '--accent-soft': p.accentSoft,
-    '--accent-ink': theme === 'dark' ? '#06251d' : '#ffffff',
+    '--accent-ink': dark ? (matrix ? '#002b16' : '#06251d') : '#ffffff',
     '--amber': p.amber,
     '--chip': p.cellBg,
-    '--border': theme === 'contrast' ? '#000000' : theme === 'light' ? 'rgba(24,37,31,.13)' : 'rgba(255,255,255,.14)',
-    '--border2': theme === 'contrast' ? '#000000' : theme === 'light' ? 'rgba(24,37,31,.22)' : 'rgba(255,255,255,.24)',
-    '--glass': theme === 'contrast' ? 'rgba(255,255,255,.97)' : hexA(p.panel, theme === 'light' ? 0.9 : 0.86),
+    '--border': matrix ? 'rgba(57,255,136,.18)' : theme === 'contrast' ? '#000000' : theme === 'light' ? 'rgba(24,37,31,.13)' : 'rgba(255,255,255,.14)',
+    '--border2': matrix ? 'rgba(57,255,136,.34)' : theme === 'contrast' ? '#000000' : theme === 'light' ? 'rgba(24,37,31,.22)' : 'rgba(255,255,255,.24)',
+    '--glass': matrix ? 'rgba(2,8,5,.94)' : theme === 'contrast' ? 'rgba(255,255,255,.97)' : hexA(p.panel, theme === 'light' ? 0.9 : 0.86),
     '--sheet': p.panel,
-    '--shadow': theme === 'contrast'
-      ? '0 18px 44px rgba(0,0,0,.22)'
-      : theme === 'light' ? '0 20px 50px rgba(24,37,31,.18)' : '0 20px 50px rgba(0,0,0,.42)'
+    '--shadow': matrix
+      ? '0 20px 50px rgba(0,0,0,.62),0 0 32px rgba(57,255,136,.09)'
+      : theme === 'contrast'
+        ? '0 18px 44px rgba(0,0,0,.22)'
+        : theme === 'light' ? '0 20px 50px rgba(24,37,31,.18)' : '0 20px 50px rgba(0,0,0,.42)'
   };
 }
 
@@ -77,6 +81,7 @@ function canvasPalettes() {
       amber: p.amber,
       text: p.text,
       muted: p.muted,
+      faint: p.faint,
       halo: p.trackHalo,
       casing: p.trackCasing,
       wpRing: p.wpRing,

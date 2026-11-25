@@ -1,4 +1,4 @@
-// Theme resolver: manual dark/light/contrast, or auto by local sunrise/sunset.
+// Theme resolver: manual dark/light/contrast/matrix, or auto by local sunrise/sunset.
 import { get } from './settings';
 import { on, emit } from './events';
 import { regionState } from './region';
@@ -35,7 +35,7 @@ export function applyTheme() {
   const eff = effectiveTheme();
   document.documentElement.dataset.theme = eff === 'dark' ? '' : eff;
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', colorOverride || (eff === 'light' || eff === 'contrast' ? '#f5f7f6' : '#000000'));
+  if (meta) meta.setAttribute('content', colorOverride || (eff === 'matrix' ? '#000300' : eff === 'light' || eff === 'contrast' ? '#f5f7f6' : '#000000'));
   emit('theme:applied', { effective: eff });
 }
 

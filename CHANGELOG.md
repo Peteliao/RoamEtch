@@ -4,6 +4,32 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.1.3] - 2026-11-25
+
+### Added
+
+- Added a manual Matrix theme with fluorescent-green tokens, terminal typography,
+  subtle digital rain, grids, scanlines, and glow across the responsive UI and
+  MapLibre controls.
+- Applied Matrix palettes to posters, recap videos, promotional artwork, yearly
+  footprint images/videos, and standalone HTML exports; exported HTML can cycle
+  through all four manual themes.
+- Added palette, settings-persistence, promo-rendering, and browser regression
+  coverage for Matrix switching, narrow screens, reduced motion, OLED pocket
+  lock, and exports.
+
+### Changed
+
+- Matrix keeps raster basemaps in full color while adapting vector backgrounds,
+  tracks, controls, and attribution; reduced-motion users get static decoration.
+- OLED pocket lock temporarily returns to pure dark without changing the saved
+  Matrix preference or recording state, then restores Matrix after unlocking.
+
+### Fixed
+
+- Preserved Matrix track colors on dark raster maps and corrected dark-theme
+  detection in promotional and yearly-footprint artwork.
+
 ## [3.1.2] - 2026-11-25
 
 ### Added

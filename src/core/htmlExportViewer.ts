@@ -182,6 +182,20 @@ a{color:var(--accent);text-decoration:none}
   .trip-head h1{font-size:18px}
   .mv{font-size:18px}
 }
+html[data-theme="matrix"] .trip-head,
+html[data-theme="matrix"] .dock,
+html[data-theme="matrix"] .sheet{box-shadow:var(--shadow),inset 0 1px rgba(57,255,136,.08)}
+html[data-theme="matrix"] body::after{
+  content:'';position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.42;
+  background-image:repeating-linear-gradient(180deg,rgba(0,0,0,.17) 0 1px,transparent 1px 4px),radial-gradient(ellipse at center,transparent 48%,rgba(0,0,0,.36) 100%);
+}
+html[data-theme="matrix"] .brandname,
+html[data-theme="matrix"] .trip-head h1,
+html[data-theme="matrix"] .mv,
+html[data-theme="matrix"] .sheet-bar h2{font-family:ui-monospace,"SF Mono","Cascadia Mono",Consolas,monospace;letter-spacing:.03em}
+html[data-theme="matrix"] .brandname{color:var(--accent)}
+html[data-theme="matrix"] .act-pill,
+html[data-theme="matrix"] .m.hero .mv{text-shadow:0 0 14px rgba(57,255,136,.24)}
 @media (max-width:370px){
   .trip-head{padding:10px 12px}
   .m{padding-right:5px}
@@ -669,7 +683,7 @@ function applyTheme(th){
   if(metaTheme)metaTheme.setAttribute('content',pal.bg);
   draw();drawProfile();
 }
-var cycle=['dark','light','contrast'];
+var cycle=['dark','light','contrast','matrix'];
 document.getElementById('themeBtn').addEventListener('click',function(){
   var idx=cycle.indexOf(theme);
   applyTheme(cycle[(idx+1)%cycle.length]);

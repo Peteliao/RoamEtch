@@ -105,8 +105,9 @@ describe('promo variants', () => {
       callback(new Blob(['png'], { type: 'image/png' }));
     });
 
+    const themes = ['dark', 'light', 'contrast', 'matrix'];
     for (let variant = 0; variant < promo.PROMO_VARIANT_COUNT; variant++) {
-      mocks.theme = variant % 2 ? 'light' : 'contrast';
+      mocks.theme = themes[variant % themes.length];
       const result = await promo.generatePromo(variant);
       expect(result.variant).toBe(variant);
       expect(result.filename).toMatch(new RegExp(`^roametch-promo-${variant + 1}-\\d+\\.png$`));

@@ -1,5 +1,6 @@
 // Yearly footprint artwork: aggregate-only share card and short recap clip.
 import { canvasPalette } from './palette';
+import { effectiveTheme } from './theme';
 import { drawBrandMark, drawQr, loadBrandFonts, SITE_URL, SPORT_FONT } from './brand';
 import { fitText, roundRectPath } from './tripScore';
 import { fmtAltitude, fmtDistance } from './geo';
@@ -46,7 +47,7 @@ export function footprintCaption(fp, units = get('units')) {
   });
 }
 
-function drawBackground(ctx: CanvasRenderingContext2D, P, highContrast: boolean, w: number, h: number, phase = 0) {
+function drawBackground(ctx: CanvasRenderingContext2D, P, highContrast: boolean, w: number, h: number, phase = 0, matrix = false) {
   if (highContrast) {
     ctx.fillStyle = P.panel;
     ctx.fillRect(0, 0, w, h);
@@ -66,6 +67,40 @@ function drawBackground(ctx: CanvasRenderingContext2D, P, highContrast: boolean,
     return;
   }
 
+  if (matrix) {
+    ctx.fillStyle = P.vectorBg;
+    ctx.fillRect(0, 0, w, h);
+    const wash = ctx.createRadialGradient(w * 0.88, 110, 0, w * 0.88, 110, 640);
+    wash.addColorStop(0, rgba(P.accent, 0.18));
+    wash.addColorStop(1, rgba(P.accent, 0));
+    ctx.fillStyle = wash;
+    ctx.fillRect(0, 0, w, 760);
+    ctx.strokeStyle = P.grid;
+    ctx.lineWidth = 1;
+    for (let x = 24; x < w; x += 72) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+    }
+    for (let y = 24; y < h; y += 72) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+    }
+    for (let col = 0; col < Math.ceil(w / 96); col++) {
+      const x = col * 96 + 16;
+      const drift = Math.sin(phase + col * 1.7) * 40;
+      const rain = ctx.createLinearGradient(0, drift - 420, 0, drift + 620);
+      rain.addColorStop(0, rgba(P.accent, 0));
+      rain.addColorStop(0.72, rgba(P.accent, 0.09));
+      rain.addColorStop(1, rgba(P.accent, 0));
+      ctx.fillStyle = rain;
+      ctx.fillRect(x, drift - 420, 2, 1040);
+    }
+    ctx.fillStyle = rgba(P.panel, 0.34);
+    for (let y = 0; y < h; y += 8) ctx.fillRect(0, y, w, 1);
+    ctx.strokeStyle = P.accentLine;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(24, 24, w - 48, h - 48);
+    return;
+  }
+
   const g = ctx.createLinearGradient(0, 0, w * 0.8, h);
   g.addColorStop(0, P.panel);
   g.addColorStop(0.58, P.vectorBg);
@@ -73,7 +108,7 @@ function drawBackground(ctx: CanvasRenderingContext2D, P, highContrast: boolean,
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
 
-  const dark = P.panel === '#000000';
+  const dark = P.panel !== '#ffffff';
   const glow = (cx, cy, rad, color, alpha) => {
     const rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
     rg.addColorStop(0, rgba(color, alpha));
@@ -109,7 +144,7 @@ function drawBackground(ctx: CanvasRenderingContext2D, P, highContrast: boolean,
 }
 
 function drawHeader(ctx: CanvasRenderingContext2D, P, highContrast: boolean, year: number) {
-  drawBrandMark(ctx, M, 62, 64);
+  drawBrandMark(ctx, M, 62, 64, { bg: P.panel, accent: P.accent, amber: P.amber, dot: P.text });
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
   ctx.fillStyle = P.text;
@@ -370,17 +405,18 @@ function drawCityMap(ctx, fp, P, highContrast, map, x, y, w, h, reveal = 1, elap
       ctx.beginPath(); ctx.moveTo(x, gy); ctx.lineTo(x + w, gy); ctx.stroke();
     }
   }
+  const darkMap = map?.darkBg ?? (P.panel !== '#ffffff');
   const shade = ctx.createLinearGradient(0, y, 0, y + 100);
-  shade.addColorStop(0, highContrast ? 'rgba(255,255,255,.88)' : 'rgba(0,0,0,.34)');
+  shade.addColorStop(0, darkMap ? 'rgba(0,0,0,.46)' : 'rgba(255,255,255,.9)');
   shade.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = shade;
   ctx.fillRect(x, y, w, 100);
   ctx.textAlign = 'left';
-  ctx.fillStyle = highContrast ? P.text : '#ffffff';
+  ctx.fillStyle = P.text;
   ctx.font = `700 25px ${FONT}`;
   ctx.fillText(t('trips.footprintCityMap'), x + 28, y + 42);
   ctx.font = `600 18px ${FONT}`;
-  ctx.fillStyle = highContrast ? P.muted : 'rgba(255,255,255,.82)';
+  ctx.fillStyle = P.muted;
   ctx.fillText(t('trips.footprintCities', { n: fp.cities?.length || 0 }), x + 28, y + 70);
 
   if (!cities.length) {
@@ -401,7 +437,7 @@ function drawCityMap(ctx, fp, P, highContrast, map, x, y, w, h, reveal = 1, elap
     const radius = 8 + Math.round((city.trips / maxTrips) * 6);
     const pulse = ((elapsedMs / 1300) + i * 0.17) % 1;
     ctx.globalAlpha = local;
-    ctx.strokeStyle = highContrast ? P.accent : 'rgba(255,255,255,.85)';
+    ctx.strokeStyle = darkMap ? P.endRing : P.accent;
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(cx, cy, radius + 7 + pulse * 13, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = P.accent;
@@ -414,20 +450,20 @@ function drawCityMap(ctx, fp, P, highContrast, map, x, y, w, h, reveal = 1, elap
     const lw = ctx.measureText(label).width;
     const lx = Math.max(x + 8, Math.min(x + w - lw - 16, cx + radius + 8));
     const ly = Math.max(y + 86, Math.min(y + h - 14, cy + 6));
-    ctx.fillStyle = highContrast ? 'rgba(255,255,255,.92)' : 'rgba(0,0,0,.58)';
+    ctx.fillStyle = rgba(P.panel, darkMap ? 0.74 : 0.9);
     roundRectPath(ctx, lx - 6, ly - 18, lw + 12, 26, 7);
     ctx.fill();
-    ctx.fillStyle = highContrast ? P.text : '#ffffff';
+    ctx.fillStyle = P.text;
     ctx.fillText(label, lx, ly);
   });
   ctx.globalAlpha = 1;
   ctx.restore();
 }
 
-function drawImageScene(ctx, fp, P, highContrast, cityMap) {
+function drawImageScene(ctx, fp, P, highContrast, cityMap, matrix = false) {
   const lang = currentLang();
   const r = recapFootprint(fp, get('units'));
-  drawBackground(ctx, P, highContrast, IMG_W, IMG_H);
+  drawBackground(ctx, P, highContrast, IMG_W, IMG_H, 0, matrix);
   drawHeader(ctx, P, highContrast, r.year);
   drawHero(ctx, P, highContrast, r, 214);
   drawKpiCard(ctx, P, highContrast, r, M, 506, IMG_W - M * 2, 184);
@@ -445,20 +481,21 @@ export async function generateFootprintImage(fp): Promise<{ blob: Blob; filename
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D unavailable');
   const cityMap = await prepareFootprintMap(fp, IMG_W - M * 2, 390);
-  drawImageScene(ctx, fp, canvasPalette(), document.documentElement.dataset.theme === 'contrast', cityMap);
+  const matrix = effectiveTheme() === 'matrix';
+  drawImageScene(ctx, fp, canvasPalette(), effectiveTheme() === 'contrast', cityMap, matrix);
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png');
   });
   return { blob, filename: `roametch-footprint-${fp.year}-${Date.now()}.png` };
 }
 
-function drawVideoScene(ctx, fp, P, highContrast, elapsedMs, cityMap) {
+function drawVideoScene(ctx, fp, P, highContrast, elapsedMs, cityMap, matrix = false) {
   const u = clamp01(elapsedMs / VIDEO_MS);
   const intro = easeOut(Math.min(1, elapsedMs / 800));
   const counters = easeOut(Math.max(0, (elapsedMs - 500) / 3600));
   const lang = currentLang();
   const r = recapFootprint(fp, get('units'));
-  drawBackground(ctx, P, highContrast, VID_W, VID_H, elapsedMs / 1200);
+  drawBackground(ctx, P, highContrast, VID_W, VID_H, elapsedMs / 1200, matrix);
   drawHeader(ctx, P, highContrast, r.year);
   drawHero(ctx, P, highContrast, r, 272, intro);
 
@@ -491,7 +528,7 @@ function drawVideoScene(ctx, fp, P, highContrast, elapsedMs, cityMap) {
     ctx.globalAlpha = 1 - easeOut(u / 0.12);
     ctx.fillStyle = P.panel;
     ctx.fillRect(0, 0, VID_W, VID_H);
-    drawBrandMark(ctx, VID_W / 2 - 52, VID_H / 2 - 112, 104);
+    drawBrandMark(ctx, VID_W / 2 - 52, VID_H / 2 - 112, 104, { bg: P.panel, accent: P.accent, amber: P.amber, dot: P.text });
     ctx.textAlign = 'center';
     ctx.fillStyle = P.accent;
     ctx.font = `700 27px ${SPORT_FONT}`;
@@ -511,7 +548,8 @@ export async function generateFootprintVideo(fp, { music = MUSIC_PREF_RANDOM, si
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     onProgress?.(0.05);
     const P = canvasPalette();
-    const highContrast = document.documentElement.dataset.theme === 'contrast';
+    const highContrast = effectiveTheme() === 'contrast';
+    const matrix = effectiveTheme() === 'matrix';
     const canvas = document.createElement('canvas');
     canvas.width = VID_W;
     canvas.height = VID_H;
@@ -538,7 +576,7 @@ export async function generateFootprintVideo(fp, { music = MUSIC_PREF_RANDOM, si
     signal?.addEventListener('abort', abort, { once: true });
     rec.start(250);
 
-    drawVideoScene(ctx, fp, P, highContrast, VIDEO_MS, cityMap);
+    drawVideoScene(ctx, fp, P, highContrast, VIDEO_MS, cityMap, matrix);
     let cover = '';
     try { cover = canvas.toDataURL('image/jpeg', 0.82); } catch { /* ignore encode failure */ }
 
@@ -547,7 +585,7 @@ export async function generateFootprintVideo(fp, { music = MUSIC_PREF_RANDOM, si
       const step = (now) => {
         if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
         const elapsed = now - t0;
-        drawVideoScene(ctx, fp, P, highContrast, Math.min(VIDEO_MS, elapsed), cityMap);
+        drawVideoScene(ctx, fp, P, highContrast, Math.min(VIDEO_MS, elapsed), cityMap, matrix);
         onProgress?.(0.05 + 0.95 * Math.min(1, elapsed / VIDEO_MS));
         if (elapsed >= VIDEO_MS) { resolve(); return; }
         requestAnimationFrame(step);

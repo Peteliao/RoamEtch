@@ -72,8 +72,31 @@ const CONTRAST = {
   edgeShade: 'rgba(0,0,0,0.25)'
 };
 
+const MATRIX = {
+  panel: '#020805',
+  text: '#d6ffe5',
+  muted: '#8fbca1',
+  faint: '#5f8f72',
+  accent: '#39ff88',
+  accentSoft: 'rgba(57,255,136,0.10)',
+  accentLine: 'rgba(57,255,136,0.32)',
+  amber: '#ffd166',
+  vectorBg: '#000300',
+  grid: 'rgba(57,255,136,0.10)',
+  cellBg: 'rgba(57,255,136,0.06)',
+  progressTrack: 'rgba(57,255,136,0.18)',
+  badgeBg: 'rgba(57,255,136,0.11)',
+  badgeEdge: 'rgba(57,255,136,0.68)',
+  lut: [[0, 112, 56], [24, 220, 112], [180, 255, 214]],
+  trackHalo: 'rgba(0,0,0,0.46)',
+  trackCasing: 'rgba(0,32,14,0.88)',
+  wpRing: 'rgba(2,8,5,0.92)',
+  endRing: 'rgba(214,255,229,0.95)',
+  edgeShade: 'rgba(0,0,0,0.42)'
+};
+
 export function paletteFor(theme: string) {
-  return theme === 'light' ? LIGHT : theme === 'contrast' ? CONTRAST : DARK;
+  return theme === 'light' ? LIGHT : theme === 'contrast' ? CONTRAST : theme === 'matrix' ? MATRIX : DARK;
 }
 
 export function canvasPalette() {

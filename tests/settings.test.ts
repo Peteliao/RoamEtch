@@ -27,6 +27,18 @@ describe('P2P settings', () => {
     expect(settings.get('meetTurnPass')).toBe('');
   });
 
+  it('persists the Matrix preference and restores dark on reset', async () => {
+    installStorage();
+    const settings = await import('../src/core/settings');
+    expect(settings.get('theme')).toBe('dark');
+    settings.set('theme', 'matrix');
+    vi.resetModules();
+    const reloaded = await import('../src/core/settings');
+    expect(reloaded.get('theme')).toBe('matrix');
+    reloaded.resetSettings();
+    expect(reloaded.get('theme')).toBe('dark');
+  });
+
   it('keeps a fresh P2P opt-in after reload', async () => {
     installStorage();
     const first = await import('../src/core/settings');
