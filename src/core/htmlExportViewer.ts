@@ -197,31 +197,27 @@ html[data-theme="matrix"] .brandname{color:var(--accent)}
 html[data-theme="matrix"] .act-pill,
 html[data-theme="matrix"] .m.hero .mv{text-shadow:0 0 14px rgba(57,255,136,.24)}
 html[data-theme="neon"] body::before{
-  content:'';position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.62;
-  background:radial-gradient(ellipse at 8% 4%,color-mix(in srgb,var(--fx-primary) 28%,transparent),transparent 52%),
-    radial-gradient(ellipse at 92% 38%,color-mix(in srgb,var(--fx-secondary) 22%,transparent),transparent 48%),
-    linear-gradient(var(--fx-secondary) 1px,transparent 1px) 0 0/48px 48px,
-    linear-gradient(90deg,var(--fx-secondary) 1px,transparent 1px) 0 0/48px 48px;
+  content:'';position:fixed;inset:-8%;z-index:1;pointer-events:none;filter:blur(12px);opacity:.82;
+  background:radial-gradient(ellipse at 12% 8%,color-mix(in srgb,var(--fx-primary) 24%,transparent),transparent 46%),
+    radial-gradient(ellipse at 88% 34%,color-mix(in srgb,var(--fx-secondary) 20%,transparent),transparent 44%),
+    radial-gradient(ellipse at 54% 96%,rgba(129,140,255,.14),transparent 50%),
+    linear-gradient(118deg,transparent 0 43%,color-mix(in srgb,var(--fx-primary) 9%,transparent) 49%,transparent 58%);
 }
 html[data-theme="neon"] body::after{
-  content:'';position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.34;
-  background:repeating-linear-gradient(180deg,rgba(0,0,0,.24) 0 1px,transparent 1px 4px),radial-gradient(ellipse at center,transparent 54%,rgba(2,3,12,.48) 100%);
+  content:'';position:fixed;inset:0;z-index:1;pointer-events:none;
+  background:radial-gradient(ellipse at center,transparent 58%,rgba(2,3,12,.42) 100%);
 }
-html[data-theme="neon"] .trip-head h1,html[data-theme="neon"] .mv{text-shadow:0 0 16px color-mix(in srgb,var(--fx-primary) 40%,transparent)}
+html[data-theme="neon"] .trip-head h1,html[data-theme="neon"] .mv{text-shadow:0 0 10px color-mix(in srgb,var(--fx-primary) 26%,transparent)}
 html[data-theme="starship"] body::before{
-  content:'';position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.62;
-  background:radial-gradient(circle at 84% 14%,color-mix(in srgb,var(--fx-primary) 13%,transparent),transparent 24%),
-    linear-gradient(var(--fx-secondary) 1px,transparent 1px) 0 0/48px 48px,
-    linear-gradient(90deg,var(--fx-secondary) 1px,transparent 1px) 0 0/48px 48px,
-    repeating-linear-gradient(180deg,transparent 0 95px,color-mix(in srgb,var(--fx-secondary) 9%,transparent) 95px 96px);
+  content:'';position:fixed;inset:-6%;z-index:1;pointer-events:none;filter:blur(8px);opacity:.86;
+  background:radial-gradient(circle at 84% 16%,color-mix(in srgb,var(--fx-primary) 17%,transparent),transparent 27%),
+    radial-gradient(ellipse at 10% 88%,color-mix(in srgb,var(--fx-secondary) 13%,transparent),transparent 44%),
+    radial-gradient(ellipse at 52% 46%,rgba(33,77,110,.20),transparent 58%),
+    linear-gradient(132deg,transparent 0 62%,color-mix(in srgb,var(--fx-secondary) 7%,transparent) 68%,transparent 76%);
 }
 html[data-theme="starship"] body::after{
-  content:'';position:fixed;inset:12px;z-index:1;pointer-events:none;opacity:.5;
-  border:1px solid color-mix(in srgb,var(--fx-primary) 35%,transparent);
-  background:linear-gradient(var(--fx-primary),var(--fx-primary)) left top/36px 2px no-repeat,
-    linear-gradient(var(--fx-primary),var(--fx-primary)) left top/2px 36px no-repeat,
-    linear-gradient(var(--fx-primary),var(--fx-primary)) right bottom/36px 2px no-repeat,
-    linear-gradient(var(--fx-primary),var(--fx-primary)) right bottom/2px 36px no-repeat;
+  content:'';position:fixed;inset:0;z-index:1;pointer-events:none;
+  background:radial-gradient(ellipse at center,transparent 56%,rgba(1,6,11,.46) 100%);
 }
 html[data-theme="starship"] .brandname,html[data-theme="starship"] h1,html[data-theme="starship"] .mv{font-family:ui-monospace,monospace;letter-spacing:.05em;text-transform:uppercase}
 html[data-theme="aurora"] body::before{
@@ -262,6 +258,47 @@ html[data-theme="vermilion"] body::after{
   font:700 24px "Songti SC",serif;opacity:.72;transform:rotate(-4deg);
 }
 html[data-theme="vermilion"] h1,html[data-theme="vermilion"] .mv{font-family:"Noto Serif CJK SC","Songti SC",serif}
+html[data-theme="sakura"] body::before{
+  content:'';position:fixed;inset:-10%;z-index:1;pointer-events:none;filter:blur(16px);
+  background:radial-gradient(ellipse at 16% 8%,rgba(255,255,255,.78),transparent 42%),
+    radial-gradient(ellipse at 86% 72%,color-mix(in srgb,var(--fx-primary) 15%,transparent),transparent 46%),
+    radial-gradient(ellipse at 8% 94%,color-mix(in srgb,var(--fx-secondary) 9%,transparent),transparent 38%),
+    linear-gradient(126deg,transparent 0 54%,rgba(255,255,255,.24) 62%,transparent 72%);
+  animation:viewer-sakura 20s ease-in-out infinite alternate;
+}
+@keyframes viewer-sakura{to{transform:translate3d(2%,-1.5%,0)}}
+html[data-theme="sakura"] body::after{content:'';position:fixed;inset:0;z-index:1;pointer-events:none;background:linear-gradient(124deg,rgba(255,255,255,.18),transparent 34%,transparent 76%,rgba(200,95,125,.035))}
+html[data-theme="butterfly"] body::before{
+  content:'';position:fixed;inset:-12%;z-index:1;pointer-events:none;filter:blur(18px);
+  background:radial-gradient(ellipse at 18% 12%,color-mix(in srgb,var(--fx-primary) 17%,transparent),transparent 44%),
+    radial-gradient(ellipse at 84% 26%,color-mix(in srgb,var(--fx-secondary) 15%,transparent),transparent 42%),
+    radial-gradient(ellipse at 66% 92%,rgba(230,150,199,.16),transparent 48%),
+    conic-gradient(from 210deg at 72% 24%,transparent 0 72%,rgba(255,255,255,.20) 78%,transparent 84%);
+  animation:viewer-butterfly 18s ease-in-out infinite alternate;
+}
+@keyframes viewer-butterfly{to{transform:translate3d(-2%,2%,0) rotate(1.5deg)}}
+html[data-theme="butterfly"] body::after{content:'';position:fixed;inset:0;z-index:1;pointer-events:none;background:linear-gradient(118deg,rgba(255,255,255,.24),transparent 40%,transparent 72%,rgba(63,159,154,.05))}
+html[data-theme="pearl"] body::before{
+  content:'';position:fixed;inset:-8%;z-index:1;pointer-events:none;filter:blur(7px);
+  background:radial-gradient(circle at 72% 18%,rgba(255,255,255,.92),transparent 34%),
+    radial-gradient(ellipse at 14% 82%,color-mix(in srgb,var(--fx-secondary) 13%,transparent),transparent 46%),
+    conic-gradient(from 28deg at 72% 18%,rgba(255,255,255,.28),rgba(246,235,213,.10),rgba(255,255,255,.30),rgba(230,214,186,.08),rgba(255,255,255,.28)),
+    repeating-radial-gradient(ellipse at 88% 90%,transparent 0 44px,color-mix(in srgb,var(--fx-primary) 5%,transparent) 45px 46px);
+  animation:viewer-pearl 16s ease-in-out infinite alternate;
+}
+@keyframes viewer-pearl{to{transform:translate3d(1%,1%,0);opacity:.86}}
+html[data-theme="pearl"] body::after{content:'';position:fixed;inset:0;z-index:1;pointer-events:none;background:radial-gradient(ellipse at center,transparent 62%,rgba(105,87,63,.07) 100%)}
+html[data-theme="rose"] body::before{
+  content:'';position:fixed;inset:-8%;z-index:1;pointer-events:none;
+  background:radial-gradient(ellipse at 20% 10%,color-mix(in srgb,var(--fx-primary) 17%,transparent),transparent 46%),
+    radial-gradient(ellipse at 86% 84%,color-mix(in srgb,var(--fx-secondary) 10%,transparent),transparent 42%),
+    linear-gradient(132deg,rgba(255,255,255,.025),transparent 38%,rgba(216,181,106,.035));
+}
+html[data-theme="rose"] body::after{
+  content:'';position:fixed;inset:10px;z-index:1;pointer-events:none;border:1px solid rgba(216,181,106,.18);
+  box-shadow:inset 0 0 70px rgba(10,2,6,.20),inset 0 0 0 1px rgba(217,139,159,.035);
+}
+html[data-theme="rose"] h1,html[data-theme="rose"] .mv{font-family:"Noto Serif CJK SC","Songti SC",serif}
 html[data-theme="contrast"] body::before{content:'';position:fixed;inset:0;z-index:1;pointer-events:none;opacity:.65;background:repeating-linear-gradient(122deg,transparent 0 94px,color-mix(in srgb,var(--fx-secondary) 8%,transparent) 95px 96px)}
 html.oled-lock body::before,html.oled-lock body::after{display:none!important}
 @media (max-width:370px){

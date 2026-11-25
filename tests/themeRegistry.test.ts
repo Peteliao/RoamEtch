@@ -4,7 +4,10 @@ import {
   appCssVars, htmlCssVars, isConcreteTheme, isThemeMode, themeDefinition
 } from '../src/core/themeRegistry';
 
-const EXPECTED_IDS = ['dark', 'light', 'contrast', 'matrix', 'neon', 'starship', 'aurora', 'amber', 'deepsea', 'vermilion'];
+const EXPECTED_IDS = [
+  'dark', 'light', 'contrast', 'matrix', 'neon', 'starship',
+  'aurora', 'amber', 'deepsea', 'vermilion', 'sakura', 'butterfly', 'pearl', 'rose'
+];
 const PALETTE_KEYS = [
   'panel', 'text', 'muted', 'faint', 'accent', 'accentSoft', 'accentLine', 'amber',
   'vectorBg', 'grid', 'cellBg', 'progressTrack', 'badgeBg', 'badgeEdge', 'lut',
@@ -12,7 +15,7 @@ const PALETTE_KEYS = [
 ] as const;
 
 describe('central theme registry', () => {
-  it('exposes exactly eleven selector options and ten concrete export themes', () => {
+  it('exposes exactly fifteen selector options and fourteen concrete export themes', () => {
     expect(THEME_OPTIONS.map((option) => option.id)).toEqual(['auto', ...EXPECTED_IDS]);
     expect(CONCRETE_THEME_IDS).toEqual(EXPECTED_IDS);
     expect(HTML_THEME_CYCLE).toEqual(EXPECTED_IDS);
@@ -21,6 +24,7 @@ describe('central theme registry', () => {
     expect(isThemeMode('oled')).toBe(false);
     expect(isConcreteTheme('auto')).toBe(false);
     expect(isConcreteTheme('vermilion')).toBe(true);
+    expect(isConcreteTheme('rose')).toBe(true);
   });
 
   it('owns bilingual labels, stable keys and the renamed Blazing sun', () => {
@@ -32,7 +36,11 @@ describe('central theme registry', () => {
     expect(THEME_DEFINITIONS.amber.labels).toEqual({ zh: '琥珀', en: 'Amber' });
     expect(THEME_DEFINITIONS.deepsea.labels).toEqual({ zh: '深海', en: 'Deep sea' });
     expect(THEME_DEFINITIONS.vermilion.labels).toEqual({ zh: '朱砂', en: 'Vermilion' });
-    expect(new Set(THEME_OPTIONS.map((option) => option.labelKey)).size).toBe(11);
+    expect(THEME_DEFINITIONS.sakura.labels).toEqual({ zh: '樱雾', en: 'Sakura mist' });
+    expect(THEME_DEFINITIONS.butterfly.labels).toEqual({ zh: '蝶梦', en: 'Butterfly dream' });
+    expect(THEME_DEFINITIONS.pearl.labels).toEqual({ zh: '珠光', en: 'Pearl' });
+    expect(THEME_DEFINITIONS.rose.labels).toEqual({ zh: '蔷薇', en: 'Rose' });
+    expect(new Set(THEME_OPTIONS.map((option) => option.labelKey)).size).toBe(15);
   });
 
   it('provides complete, distinct palettes and consistent color schemes', () => {
@@ -60,6 +68,10 @@ describe('central theme registry', () => {
     expect(THEME_DEFINITIONS.light.colorScheme).toBe('light');
     expect(THEME_DEFINITIONS.contrast.colorScheme).toBe('light');
     expect(THEME_DEFINITIONS.vermilion.colorScheme).toBe('light');
+    expect(THEME_DEFINITIONS.sakura.colorScheme).toBe('light');
+    expect(THEME_DEFINITIONS.butterfly.colorScheme).toBe('light');
+    expect(THEME_DEFINITIONS.pearl.colorScheme).toBe('light');
+    expect(THEME_DEFINITIONS.rose.colorScheme).toBe('dark');
     expect(THEME_DEFINITIONS.matrix.colorScheme).toBe('dark');
   });
 

@@ -1,7 +1,7 @@
 // Single source of truth for selectable themes and every exported appearance.
 // Keep this module free of settings/store/browser state so it is safe to import
 // from CSS bootstrap, tests, canvas exporters and the offline HTML generator.
-export type ConcreteThemeId = 'dark' | 'light' | 'contrast' | 'matrix' | 'neon' | 'starship' | 'aurora' | 'amber' | 'deepsea' | 'vermilion';
+export type ConcreteThemeId = 'dark' | 'light' | 'contrast' | 'matrix' | 'neon' | 'starship' | 'aurora' | 'amber' | 'deepsea' | 'vermilion' | 'sakura' | 'butterfly' | 'pearl' | 'rose';
 export type ThemeMode = 'auto' | ConcreteThemeId;
 export type ThemeEffect = ConcreteThemeId;
 
@@ -58,7 +58,11 @@ export const THEME_OPTIONS: readonly ThemeOption[] = [
   { id: 'aurora', labelKey: 'settings.themeAurora' },
   { id: 'amber', labelKey: 'settings.themeAmber' },
   { id: 'deepsea', labelKey: 'settings.themeDeepsea' },
-  { id: 'vermilion', labelKey: 'settings.themeVermilion' }
+  { id: 'vermilion', labelKey: 'settings.themeVermilion' },
+  { id: 'sakura', labelKey: 'settings.themeSakura' },
+  { id: 'butterfly', labelKey: 'settings.themeButterfly' },
+  { id: 'pearl', labelKey: 'settings.themePearl' },
+  { id: 'rose', labelKey: 'settings.themeRose' }
 ];
 
 export const CONCRETE_THEME_IDS = THEME_OPTIONS.filter((o) => !o.auto).map((o) => o.id) as ConcreteThemeId[];
@@ -109,8 +113,8 @@ const MATRIX: CanvasPalette = {
 };
 const NEON: CanvasPalette = {
   panel: '#080b1c', text: '#f4f7ff', muted: '#9ba5c9', faint: '#626b91',
-  accent: '#ff3bd4', accentSoft: 'rgba(255,59,212,0.13)', accentLine: 'rgba(40,240,255,0.44)', amber: '#28f0ff',
-  vectorBg: '#060819', grid: 'rgba(40,240,255,0.11)', cellBg: 'rgba(155,165,201,0.08)',
+  accent: '#ff3bd4', accentSoft: 'rgba(255,59,212,0.12)', accentLine: 'rgba(40,240,255,0.30)', amber: '#28f0ff',
+  vectorBg: '#050611', grid: 'rgba(40,240,255,0.045)', cellBg: 'rgba(155,165,201,0.07)',
   progressTrack: 'rgba(40,240,255,0.18)', badgeBg: 'rgba(255,59,212,0.12)', badgeEdge: 'rgba(255,59,212,0.65)',
   lut: [[255, 59, 212], [40, 240, 255], [129, 140, 255]],
   trackHalo: 'rgba(255,59,212,0.20)', trackCasing: 'rgba(4,6,20,0.90)', wpRing: 'rgba(8,11,28,0.94)',
@@ -118,8 +122,8 @@ const NEON: CanvasPalette = {
 };
 const STARSHIP: CanvasPalette = {
   panel: '#07111b', text: '#e3f5ff', muted: '#8ca8b8', faint: '#526f80',
-  accent: '#ffb547', accentSoft: 'rgba(255,181,71,0.12)', accentLine: 'rgba(91,202,255,0.38)', amber: '#ffdb8a',
-  vectorBg: '#030b12', grid: 'rgba(91,202,255,0.11)', cellBg: 'rgba(140,168,184,0.08)',
+  accent: '#ffb547', accentSoft: 'rgba(255,181,71,0.11)', accentLine: 'rgba(91,202,255,0.28)', amber: '#ffdb8a',
+  vectorBg: '#030a12', grid: 'rgba(91,202,255,0.045)', cellBg: 'rgba(140,168,184,0.07)',
   progressTrack: 'rgba(91,202,255,0.18)', badgeBg: 'rgba(255,181,71,0.10)', badgeEdge: 'rgba(255,181,71,0.62)',
   lut: [[255, 181, 71], [91, 202, 255], [227, 245, 255]],
   trackHalo: 'rgba(0,0,0,0.40)', trackCasing: 'rgba(3,11,18,0.90)', wpRing: 'rgba(7,17,27,0.94)',
@@ -160,6 +164,42 @@ const VERMILION: CanvasPalette = {
   lut: [[179, 58, 43], [89, 91, 82], [46, 112, 109]],
   trackHalo: 'rgba(63,55,45,0.22)', trackCasing: 'rgba(63,55,45,0.76)', wpRing: 'rgba(243,238,229,0.94)',
   endRing: 'rgba(39,37,34,0.88)', edgeShade: 'rgba(63,55,45,0.16)'
+};
+const SAKURA: CanvasPalette = {
+  panel: '#fff7f9', text: '#4a2c35', muted: '#8a6470', faint: '#ad8994',
+  accent: '#c85f7d', accentSoft: 'rgba(200,95,125,0.10)', accentLine: 'rgba(200,95,125,0.28)', amber: '#d59a45',
+  vectorBg: '#f9eef2', grid: 'rgba(122,63,83,0.055)', cellBg: 'rgba(122,63,83,0.045)',
+  progressTrack: 'rgba(122,63,83,0.16)', badgeBg: 'rgba(200,95,125,0.10)', badgeEdge: 'rgba(200,95,125,0.50)',
+  lut: [[170, 72, 101], [218, 128, 155], [244, 201, 210]],
+  trackHalo: 'rgba(255,255,255,0.38)', trackCasing: 'rgba(91,44,60,0.72)', wpRing: 'rgba(255,255,255,0.95)',
+  endRing: 'rgba(74,44,53,0.88)', edgeShade: 'rgba(122,63,83,0.14)'
+};
+const BUTTERFLY: CanvasPalette = {
+  panel: '#f7f4ff', text: '#3f355d', muted: '#766b94', faint: '#9b91b3',
+  accent: '#7c68c8', accentSoft: 'rgba(124,104,200,0.10)', accentLine: 'rgba(124,104,200,0.28)', amber: '#3f9f9a',
+  vectorBg: '#f1eefb', grid: 'rgba(80,62,130,0.05)', cellBg: 'rgba(80,62,130,0.045)',
+  progressTrack: 'rgba(80,62,130,0.15)', badgeBg: 'rgba(124,104,200,0.10)', badgeEdge: 'rgba(124,104,200,0.48)',
+  lut: [[111, 78, 190], [70, 180, 181], [230, 150, 199]],
+  trackHalo: 'rgba(255,255,255,0.40)', trackCasing: 'rgba(63,53,105,0.70)', wpRing: 'rgba(255,255,255,0.96)',
+  endRing: 'rgba(63,53,105,0.86)', edgeShade: 'rgba(80,62,130,0.13)'
+};
+const PEARL: CanvasPalette = {
+  panel: '#fffdf7', text: '#4a443b', muted: '#83796b', faint: '#aaa092',
+  accent: '#96764d', accentSoft: 'rgba(150,118,77,0.10)', accentLine: 'rgba(150,118,77,0.28)', amber: '#c2a16d',
+  vectorBg: '#f6f0e5', grid: 'rgba(105,87,63,0.05)', cellBg: 'rgba(105,87,63,0.045)',
+  progressTrack: 'rgba(105,87,63,0.16)', badgeBg: 'rgba(150,118,77,0.10)', badgeEdge: 'rgba(150,118,77,0.48)',
+  lut: [[126, 98, 67], [200, 174, 132], [246, 235, 213]],
+  trackHalo: 'rgba(255,255,255,0.48)', trackCasing: 'rgba(91,75,55,0.68)', wpRing: 'rgba(255,255,255,0.97)',
+  endRing: 'rgba(74,68,59,0.86)', edgeShade: 'rgba(105,87,63,0.13)'
+};
+const ROSE: CanvasPalette = {
+  panel: '#2a0d18', text: '#f7e7e4', muted: '#c9a3a7', faint: '#8f666f',
+  accent: '#d98b9f', accentSoft: 'rgba(217,139,159,0.12)', accentLine: 'rgba(216,181,106,0.30)', amber: '#d8b56a',
+  vectorBg: '#190810', grid: 'rgba(231,167,179,0.05)', cellBg: 'rgba(201,163,167,0.06)',
+  progressTrack: 'rgba(201,163,167,0.17)', badgeBg: 'rgba(217,139,159,0.11)', badgeEdge: 'rgba(216,181,106,0.52)',
+  lut: [[109, 31, 56], [198, 91, 116], [232, 181, 116]],
+  trackHalo: 'rgba(74,15,34,0.42)', trackCasing: 'rgba(20,5,11,0.88)', wpRing: 'rgba(42,13,24,0.95)',
+  endRing: 'rgba(247,231,228,0.94)', edgeShade: 'rgba(10,2,6,0.42)'
 };
 
 const baseUi: ThemeDefinition['ui'] = {
@@ -262,6 +302,46 @@ export const THEME_DEFINITIONS: Record<ConcreteThemeId, ThemeDefinition> = {
       radiusLg: '14px', radius: '10px', radiusSm: '5px', fontNum: '"Noto Serif CJK SC","Songti SC",serif',
       mapAttrib: 'rgba(243,238,229,0.94)', mapIconFilter: 'none', mapControlFilter: 'none'
     }
+  },
+  sakura: {
+    id: 'sakura', labelKey: 'settings.themeSakura', labels: { zh: '樱雾', en: 'Sakura mist' }, colorScheme: 'light', effect: 'sakura', palette: SAKURA,
+    ui: {
+      ...baseUi, bgElev: '#fff7f9', bgCard: '#fffafb', bgInput: '#f3e2e8', border: 'rgba(122,63,83,0.12)', borderStrong: 'rgba(200,95,125,0.26)',
+      accentStrong: '#b94e70', accentInk: '#fff7fa', danger: '#b83b5b', info: '#7a6aa8', trackCasing: '#fff7f9', trackGap: '#d8bdc7',
+      shadow1: '0 2px 10px rgba(122,63,83,0.07)', shadow2: '0 14px 36px rgba(122,63,83,0.14)', glass: 'rgba(255,247,249,0.90)',
+      radiusLg: '18px', radius: '14px', radiusSm: '10px',
+      mapAttrib: 'rgba(255,247,249,0.94)', mapIconFilter: 'none', mapControlFilter: 'none'
+    }
+  },
+  butterfly: {
+    id: 'butterfly', labelKey: 'settings.themeButterfly', labels: { zh: '蝶梦', en: 'Butterfly dream' }, colorScheme: 'light', effect: 'butterfly', palette: BUTTERFLY,
+    ui: {
+      ...baseUi, bgElev: '#f7f4ff', bgCard: '#fcfaff', bgInput: '#ebe5f8', border: 'rgba(80,62,130,0.12)', borderStrong: 'rgba(124,104,200,0.28)',
+      accentStrong: '#6d55bd', accentInk: '#ffffff', danger: '#b64f79', info: '#3f9f9a', trackCasing: '#f7f4ff', trackGap: '#cfc6e2',
+      shadow1: '0 3px 12px rgba(80,62,130,0.07)', shadow2: '0 16px 40px rgba(80,62,130,0.14)', glass: 'rgba(247,244,255,0.88)',
+      radiusLg: '20px', radius: '15px', radiusSm: '11px',
+      mapAttrib: 'rgba(247,244,255,0.94)', mapIconFilter: 'none', mapControlFilter: 'none'
+    }
+  },
+  pearl: {
+    id: 'pearl', labelKey: 'settings.themePearl', labels: { zh: '珠光', en: 'Pearl' }, colorScheme: 'light', effect: 'pearl', palette: PEARL,
+    ui: {
+      ...baseUi, bgElev: '#fffdf7', bgCard: '#fffefa', bgInput: '#eee5d6', border: 'rgba(105,87,63,0.13)', borderStrong: 'rgba(150,118,77,0.28)',
+      accentStrong: '#80633f', accentInk: '#fffdf7', danger: '#a64b4b', info: '#657f86', trackCasing: '#fffdf7', trackGap: '#d6c8b3',
+      shadow1: '0 2px 10px rgba(105,87,63,0.07)', shadow2: '0 16px 38px rgba(105,87,63,0.14)', glass: 'rgba(255,253,247,0.91)',
+      radiusLg: '20px', radius: '15px', radiusSm: '11px',
+      mapAttrib: 'rgba(255,253,247,0.95)', mapIconFilter: 'none', mapControlFilter: 'none'
+    }
+  },
+  rose: {
+    id: 'rose', labelKey: 'settings.themeRose', labels: { zh: '蔷薇', en: 'Rose' }, colorScheme: 'dark', effect: 'rose', palette: ROSE,
+    ui: {
+      ...baseUi, bgElev: '#2c0e19', bgCard: '#35121f', bgInput: '#411827', border: 'rgba(217,139,159,0.16)', borderStrong: 'rgba(216,181,106,0.34)',
+      accentStrong: '#e7a7b3', accentInk: '#32101d', danger: '#ff8fa3', info: '#d8b56a', trackCasing: '#190810', trackGap: '#805761',
+      shadow1: '0 3px 14px rgba(10,2,6,0.34)', shadow2: '0 18px 44px rgba(10,2,6,0.48)', glass: 'rgba(36,10,20,0.91)',
+      radiusLg: '20px', radius: '14px', radiusSm: '10px', fontNum: '"Noto Serif CJK SC","Songti SC",serif',
+      mapAttrib: 'rgba(36,10,20,0.94)', mapIconFilter: 'invert(0.9)', mapControlFilter: 'invert(0.88) sepia(0.25) hue-rotate(300deg)'
+    }
   }
 };
 
@@ -318,6 +398,13 @@ function scanlines(ctx: CanvasRenderingContext2D, w: number, h: number, color: s
   ctx.fillStyle = color;
   for (let y = 0; y < h; y += step) ctx.fillRect(0, y, w, 1);
 }
+function dust(ctx: CanvasRenderingContext2D, w: number, h: number, color: string, count = 32) {
+  ctx.fillStyle = color;
+  for (let i = 0; i < count; i++) {
+    const x = (i * 157.31 + 29) % w, y = (i * 83.77 + 17) % h;
+    ctx.beginPath(); ctx.arc(x, y, i % 9 === 0 ? 1.7 : 0.85, 0, Math.PI * 2); ctx.fill();
+  }
+}
 
 /** Shared, deterministic canvas backdrop for maps, posters, promos and recaps. */
 export function paintThemeBackground(ctx: CanvasRenderingContext2D, w: number, h: number, value: unknown, phase = 0, showGrid = true) {
@@ -348,30 +435,41 @@ export function paintThemeBackground(ctx: CanvasRenderingContext2D, w: number, h
     }
     scanlines(ctx, w, h, alpha(p.panel, 0.34));
   } else if (d.effect === 'neon') {
-    glow(ctx, w * 0.12, h * 0.08, w * 0.72, p.accent, 0.22);
-    glow(ctx, w * 0.9, h * 0.38, w * 0.66, p.amber, 0.18);
+    const depth = ctx.createLinearGradient(0, 0, w, h);
+    depth.addColorStop(0, alpha(p.accent, 0.07)); depth.addColorStop(0.48, alpha(p.panel, 0)); depth.addColorStop(1, alpha(p.amber, 0.05));
+    ctx.fillStyle = depth; ctx.fillRect(0, 0, w, h);
+    glow(ctx, w * 0.12, h * 0.08, w * 0.76, p.accent, 0.16);
+    glow(ctx, w * 0.9, h * 0.38, w * 0.7, p.amber, 0.12);
+    const beam = ctx.createLinearGradient(w * 0.08, h, w * 0.92, 0);
+    beam.addColorStop(0, alpha(p.accent, 0)); beam.addColorStop(0.42, alpha(p.accent, 0.07));
+    beam.addColorStop(0.58, alpha(p.amber, 0.06)); beam.addColorStop(1, alpha(p.amber, 0));
+    ctx.fillStyle = beam; ctx.beginPath(); ctx.moveTo(w * 0.18, h); ctx.lineTo(w * 0.54, 0); ctx.lineTo(w * 0.78, 0); ctx.lineTo(w * 0.42, h); ctx.closePath(); ctx.fill();
     if (showGrid) {
-      grid(ctx, w, h, p.grid, 64);
-      ctx.strokeStyle = alpha(p.amber, 0.20); ctx.beginPath();
-      for (let x = -w; x < w * 2; x += 90) { ctx.moveTo(w / 2, h * 0.58); ctx.lineTo(x, h); }
-      for (let y = h * 0.62; y < h; y += (y - h * 0.58) * 0.18) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
-      ctx.stroke();
+      dust(ctx, w, h, alpha(p.amber, 0.18), 30);
+      const trail = ctx.createLinearGradient(0, h, w, h * 0.18);
+      trail.addColorStop(0, alpha(p.accent, 0.03)); trail.addColorStop(0.5, alpha(p.accent, 0.20)); trail.addColorStop(1, alpha(p.amber, 0.04));
+      ctx.strokeStyle = trail; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.moveTo(w * 0.04, h * 0.82); ctx.bezierCurveTo(w * 0.34, h * 0.58, w * 0.58, h * 0.9, w * 0.96, h * 0.24); ctx.stroke();
+      ctx.fillStyle = alpha(p.amber, 0.42);
+      for (const [x, y] of [[0.04, 0.82], [0.34, 0.64], [0.62, 0.72], [0.96, 0.24]]) { ctx.beginPath(); ctx.arc(w * x, h * y, 2.1, 0, Math.PI * 2); ctx.fill(); }
     }
-    scanlines(ctx, w, h, 'rgba(2,3,12,0.30)');
   } else if (d.effect === 'starship') {
-    const g = ctx.createLinearGradient(0, 0, 0, h); g.addColorStop(0, alpha(p.amber, 0.07)); g.addColorStop(1, alpha(p.vectorBg, 0));
-    ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
+    const depth = ctx.createLinearGradient(0, 0, w, h);
+    depth.addColorStop(0, p.accentLine); depth.addColorStop(0.46, alpha(p.panel, 0)); depth.addColorStop(1, alpha(p.vectorBg, 0.5));
+    ctx.fillStyle = depth; ctx.fillRect(0, 0, w, h);
+    glow(ctx, w * 0.84, h * 0.16, w * 0.58, p.accent, 0.12);
+    glow(ctx, w * 0.08, h * 0.86, w * 0.62, p.amber, 0.07);
     if (showGrid) {
-      grid(ctx, w, h, p.grid, 48);
-      ctx.strokeStyle = alpha(p.accent, 0.34); ctx.lineWidth = 2;
-      const cx = w * 0.82, cy = h * 0.2, r = Math.min(w, h) * 0.19;
-      for (const k of [1, 0.66, 0.33]) { ctx.beginPath(); ctx.arc(cx, cy, r * k, 0, Math.PI * 2); ctx.stroke(); }
-      ctx.beginPath(); ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy); ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r); ctx.stroke();
-      ctx.strokeStyle = p.accentLine;
-      const s = Math.min(54, w * 0.08);
-      for (const [x, y, sx, sy] of [[24, 24, 1, 1], [w - 24, 24, -1, 1], [24, h - 24, 1, -1], [w - 24, h - 24, -1, -1]]) {
-        ctx.beginPath(); ctx.moveTo(x, y + sy * s); ctx.lineTo(x, y); ctx.lineTo(x + sx * s, y); ctx.stroke();
-      }
+      dust(ctx, w, h, alpha(p.accent, 0.20), 42);
+      ctx.save(); ctx.globalAlpha = 0.55; ctx.strokeStyle = p.accentLine; ctx.lineWidth = 1.2;
+      const cx = w * 0.84, cy = h * 0.18, r = Math.min(w, h) * 0.24;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 0.28; ctx.beginPath(); ctx.arc(cx, cy, r * 0.72, 0, Math.PI * 1.45); ctx.stroke();
+      ctx.globalAlpha = 0.48; const tick = r * 0.13;
+      for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) { ctx.beginPath(); ctx.moveTo(cx + dx * r * 0.88, cy + dy * r * 0.88); ctx.lineTo(cx + dx * (r * 0.88 + tick), cy + dy * (r * 0.88 + tick)); ctx.stroke(); }
+      ctx.restore();
+      const horizon = ctx.createLinearGradient(0, h * 0.72, w, h);
+      horizon.addColorStop(0, alpha(p.accent, 0)); horizon.addColorStop(0.55, alpha(p.accent, 0.10)); horizon.addColorStop(1, alpha(p.accent, 0));
+      ctx.strokeStyle = horizon; ctx.lineWidth = 1.3; ctx.beginPath(); ctx.ellipse(w * 0.72, h * 1.08, w * 0.56, h * 0.26, -0.08, Math.PI, Math.PI * 2); ctx.stroke();
     }
   } else if (d.effect === 'aurora') {
     ctx.globalCompositeOperation = 'screen';
@@ -414,6 +512,57 @@ export function paintThemeBackground(ctx: CanvasRenderingContext2D, w: number, h
     const s = Math.min(78, w * 0.09), x = w - s * 1.7, y = h * 0.055;
     ctx.strokeStyle = alpha(p.accent, 0.82); ctx.lineWidth = 3; ctx.strokeRect(x, y, s, s);
     ctx.fillStyle = alpha(p.accent, 0.72); ctx.font = `700 ${s * 0.58}px "Songti SC",serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('迹', x + s / 2, y + s / 2 + 1);
+  } else if (d.effect === 'sakura') {
+    glow(ctx, w * 0.18, h * 0.08, w * 0.72, '#ffffff', 0.58);
+    glow(ctx, w * 0.86, h * 0.76, w * 0.56, p.accent, 0.075);
+    glow(ctx, w * 0.08, h * 0.92, w * 0.46, p.amber, 0.035);
+    if (showGrid) {
+      ctx.fillStyle = alpha(p.accent, 0.035);
+      for (let i = 0; i < 7; i++) {
+        const x = w * (0.08 + (i % 3) * 0.42), y = h * (0.12 + (i % 4) * 0.23);
+        ctx.beginPath(); ctx.ellipse(x, y, w * 0.035, h * 0.018, -0.55 + i * 0.21, 0, Math.PI * 2); ctx.fill();
+      }
+      dust(ctx, w, h, alpha(p.accent, 0.13), 20);
+    }
+  } else if (d.effect === 'butterfly') {
+    glow(ctx, w * 0.2, h * 0.12, w * 0.68, p.accent, 0.075);
+    glow(ctx, w * 0.84, h * 0.28, w * 0.58, p.amber, 0.065);
+    glow(ctx, w * 0.68, h * 0.9, w * 0.5, '#e8a6cf', 0.06);
+    if (showGrid) {
+      const wing = ctx.createLinearGradient(w * 0.52, h * 0.12, w * 0.94, h * 0.76);
+      wing.addColorStop(0, alpha(p.accent, 0.11)); wing.addColorStop(0.46, alpha(p.amber, 0.07)); wing.addColorStop(1, alpha('#e8a6cf', 0));
+      ctx.fillStyle = wing; ctx.beginPath(); ctx.moveTo(w * 0.68, h * 0.16); ctx.bezierCurveTo(w * 0.9, h * 0.04, w * 1.02, h * 0.36, w * 0.86, h * 0.58); ctx.bezierCurveTo(w * 0.76, h * 0.72, w * 0.64, h * 0.5, w * 0.68, h * 0.16); ctx.fill();
+      const lowerWing = ctx.createLinearGradient(0, h * 0.62, w * 0.42, h);
+      lowerWing.addColorStop(0, alpha('#e8a6cf', 0.08)); lowerWing.addColorStop(1, alpha(p.accent, 0));
+      ctx.fillStyle = lowerWing; ctx.beginPath(); ctx.moveTo(w * 0.06, h * 0.74); ctx.bezierCurveTo(w * 0.02, h * 0.54, w * 0.3, h * 0.58, w * 0.28, h * 0.84); ctx.bezierCurveTo(w * 0.26, h * 1.02, w * 0.08, h * 0.96, w * 0.06, h * 0.74); ctx.fill();
+      const ribbon = ctx.createLinearGradient(0, h, w, 0);
+      ribbon.addColorStop(0, alpha(p.accent, 0)); ribbon.addColorStop(0.5, alpha(p.amber, 0.14)); ribbon.addColorStop(1, alpha(p.accent, 0));
+      ctx.strokeStyle = ribbon; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(0, h * 0.88); ctx.bezierCurveTo(w * 0.36, h * (0.66 + Math.sin(phase) * 0.01), w * 0.58, h * 0.94, w, h * 0.36); ctx.stroke();
+      dust(ctx, w, h, alpha(p.accent, 0.14), 24);
+    }
+  } else if (d.effect === 'pearl') {
+    glow(ctx, w * 0.72, h * 0.18, w * 0.62, '#ffffff', 0.64);
+    glow(ctx, w * 0.16, h * 0.82, w * 0.56, p.amber, 0.06);
+    const satin = ctx.createLinearGradient(0, h, w, 0);
+    satin.addColorStop(0, 'rgba(255,255,255,0)'); satin.addColorStop(0.42, 'rgba(255,255,255,0.30)'); satin.addColorStop(0.62, 'rgba(255,255,255,0.04)'); satin.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = satin; ctx.fillRect(0, 0, w, h);
+    if (showGrid) {
+      ctx.strokeStyle = alpha(p.accent, 0.075); ctx.lineWidth = 1.2;
+      for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.ellipse(w * 0.86, h * 0.9, w * (0.12 + i * 0.035), h * (0.05 + i * 0.016), -0.32, Math.PI, Math.PI * 1.8); ctx.stroke(); }
+      dust(ctx, w, h, alpha(p.accent, 0.11), 18);
+    }
+  } else if (d.effect === 'rose') {
+    glow(ctx, w * 0.22, h * 0.12, w * 0.74, p.accent, 0.10);
+    glow(ctx, w * 0.86, h * 0.82, w * 0.56, p.amber, 0.045);
+    const velvet = ctx.createLinearGradient(0, 0, w, h);
+    velvet.addColorStop(0, alpha(p.accent, 0.045)); velvet.addColorStop(0.5, alpha(p.panel, 0)); velvet.addColorStop(1, 'rgba(0,0,0,0.16)');
+    ctx.fillStyle = velvet; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = alpha(p.amber, 0.17); ctx.lineWidth = 1.4; ctx.strokeRect(w * 0.035, h * 0.035, w * 0.93, h * 0.93);
+    if (showGrid) {
+      ctx.strokeStyle = alpha(p.accent, 0.08); ctx.lineWidth = 1;
+      for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.ellipse(w * 0.12, h * 0.9, w * (0.12 + i * 0.04), h * (0.05 + i * 0.014), -0.42, Math.PI, Math.PI * 1.7); ctx.stroke(); }
+      dust(ctx, w, h, alpha(p.amber, 0.13), 20);
+    }
   }
   ctx.restore();
 }

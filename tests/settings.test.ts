@@ -43,13 +43,13 @@ describe('P2P settings', () => {
     installStorage({ theme: 'obsolete' });
     const settings = await import('../src/core/settings');
     expect(settings.get('theme')).toBe('dark');
-    for (const theme of ['auto', 'neon', 'starship', 'aurora', 'amber', 'deepsea', 'vermilion']) {
+    for (const theme of ['auto', 'neon', 'starship', 'aurora', 'amber', 'deepsea', 'vermilion', 'sakura', 'butterfly', 'pearl', 'rose']) {
       settings.set('theme', theme);
       expect(settings.get('theme')).toBe(theme);
     }
     settings.set('theme', 'oled');
     settings.patch({ theme: 'unknown', units: 'imperial' });
-    expect(settings.get('theme')).toBe('vermilion');
+    expect(settings.get('theme')).toBe('rose');
     expect(settings.get('units')).toBe('imperial');
   });
 

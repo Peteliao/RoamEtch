@@ -165,10 +165,13 @@ describe('promo variants', () => {
     }
   });
 
-  it('renders all 25 variants across all 10 themes with translated copy and normalized metadata', async () => {
+  it('renders all 25 variants across all 14 themes with translated copy and normalized metadata', async () => {
     await i18n.setLanguage('zh');
     const { canvases, texts } = installCanvasMock();
-    const themes = ['dark', 'light', 'contrast', 'matrix', 'neon', 'starship', 'aurora', 'amber', 'deepsea', 'vermilion'];
+    const themes = [
+      'dark', 'light', 'contrast', 'matrix', 'neon', 'starship',
+      'aurora', 'amber', 'deepsea', 'vermilion', 'sakura', 'butterfly', 'pearl', 'rose'
+    ];
     for (const theme of themes) {
       mocks.theme = theme;
       for (let variant = 0; variant < promo.PROMO_VARIANT_COUNT; variant++) {
@@ -183,7 +186,7 @@ describe('promo variants', () => {
         expect(texts.slice(textStart).some((text) => text.startsWith('promo.'))).toBe(false);
       }
     }
-    expect(canvases).toHaveLength(250);
+    expect(canvases).toHaveLength(350);
     expect(texts).toContain('RoamEtch迹刻');
     expect(await promo.generatePromo(25)).toMatchObject({ variant: 0 });
     expect(await promo.generatePromo(-1)).toMatchObject({ variant: 24 });

@@ -2,9 +2,9 @@ import { expect, test } from '@playwright/test';
 import { blockExternal, gotoTab } from './utils';
 import { THEME_DEFINITIONS } from '../src/core/themeRegistry';
 
-const NEW_THEMES = ['neon', 'starship', 'aurora', 'amber', 'deepsea', 'vermilion'] as const;
+const NEW_THEMES = ['neon', 'starship', 'aurora', 'amber', 'deepsea', 'vermilion', 'sakura', 'butterfly', 'pearl', 'rose'] as const;
 const ALL_THEMES = ['dark', 'light', 'contrast', 'matrix', ...NEW_THEMES];
-const REPRESENTATIVE = ['neon', 'aurora', 'vermilion'];
+const REPRESENTATIVE = ['neon', 'starship', 'aurora', 'vermilion', 'sakura', 'butterfly', 'pearl', 'rose'];
 
 test('all new themes restyle controls at runtime and restore safely after OLED lock', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -15,7 +15,7 @@ test('all new themes restyle controls at runtime and restore safely after OLED l
   await gotoTab(page, 'settings');
 
   const toggle = page.locator('.theme-toggle');
-  await expect(toggle.locator('button')).toHaveCount(11);
+  await expect(toggle.locator('button')).toHaveCount(15);
   await expect(toggle).toContainText('烈日');
   await expect(toggle).toContainText('霓虹');
   await expect(toggle).toContainText('星舰');
@@ -23,6 +23,10 @@ test('all new themes restyle controls at runtime and restore safely after OLED l
   await expect(toggle).toContainText('琥珀');
   await expect(toggle).toContainText('深海');
   await expect(toggle).toContainText('朱砂');
+  await expect(toggle).toContainText('樱雾');
+  await expect(toggle).toContainText('蝶梦');
+  await expect(toggle).toContainText('珠光');
+  await expect(toggle).toContainText('蔷薇');
 
   for (const id of NEW_THEMES) {
     const definition = THEME_DEFINITIONS[id];
@@ -146,6 +150,8 @@ test('every theme reaches canvas artwork and the offline viewer; videos retain d
     const video = await generateTrackVideo(full, { vectorOnly: true, seconds: 0.25, music: 'dawn' });
     const html = await buildSelfContainedHTML(full, { includePhotos: false });
     const payload = JSON.parse(html.html.match(/window\.__TRIP__=(\{.*?\});<\/script>/)![1]);
+    const neonCss = html.html.match(/html\[data-theme="neon"\][^{]*\{[^}]*\}/g)?.join('') || '';
+    const starshipCss = html.html.match(/html\[data-theme="starship"\][^{]*\{[^}]*\}/g)?.join('') || '';
     const frame = document.createElement('iframe');
     frame.style.display = 'none';
     frame.srcdoc = html.html;
@@ -176,7 +182,14 @@ test('every theme reaches canvas artwork and the offline viewer; videos retain d
         palettes: Object.keys(payload.palettes),
         css: Object.keys(payload.css),
         cycle: payload.themeCycle,
-        neonScanlines: html.html.includes('html[data-theme="neon"] body::after'),
+        neonAtmosphere: html.html.includes('html[data-theme="neon"] body::before'),
+        neonCss,
+        starshipCss,
+        starshipAtmosphere: html.html.includes('html[data-theme="starship"] body::before'),
+        sakura: html.html.includes('html[data-theme="sakura"] body::before'),
+        butterfly: html.html.includes('html[data-theme="butterfly"] body::before'),
+        pearl: html.html.includes('html[data-theme="pearl"] body::before'),
+        rose: html.html.includes('html[data-theme="rose"] body::before'),
         aurora: html.html.includes('html[data-theme="aurora"] body::before'),
         seal: html.html.includes("content:'迹'"),
         viewerSeen, auroraAnimation, auroraPointer
@@ -202,10 +215,22 @@ test('every theme reaches canvas artwork and the offline viewer; videos retain d
   expect(result.html.palettes).toEqual(ALL_THEMES);
   expect(result.html.css).toEqual(ALL_THEMES);
   expect(result.html.cycle).toEqual(ALL_THEMES);
-  expect(result.html.neonScanlines).toBe(true);
+  expect(result.html.neonAtmosphere).toBe(true);
+  expect(result.html.neonCss).not.toContain('repeating-linear-gradient');
+  expect(result.html.neonCss).not.toContain('background-size:48px');
+  expect(result.html.starshipAtmosphere).toBe(true);
+  expect(result.html.starshipCss).not.toContain('background-size:48px');
+  expect(result.html.starshipCss).not.toContain('repeating-linear-gradient');
+  expect(result.html.sakura).toBe(true);
+  expect(result.html.butterfly).toBe(true);
+  expect(result.html.pearl).toBe(true);
+  expect(result.html.rose).toBe(true);
   expect(result.html.aurora).toBe(true);
   expect(result.html.seal).toBe(true);
-  expect(result.html.viewerSeen).toEqual(['neon', 'starship', 'aurora', 'amber', 'deepsea', 'vermilion', 'dark', 'light', 'contrast', 'matrix', 'neon']);
+  expect(result.html.viewerSeen).toEqual([
+    'neon', 'starship', 'aurora', 'amber', 'deepsea', 'vermilion',
+    'sakura', 'butterfly', 'pearl', 'rose', 'dark', 'light', 'contrast', 'matrix', 'neon'
+  ]);
   expect(result.html.auroraAnimation).toBe('none');
   expect(result.html.auroraPointer).toBe('none');
 });

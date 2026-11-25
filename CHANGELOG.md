@@ -4,6 +4,20 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.1.7] - 2026-11-25
+
+### Added
+
+- Added Sakura mist, Butterfly dream, Pearl, and Rose themes with refined light
+  and dark palettes across the interface, MapLibre controls, canvas artwork,
+  promotional variants, and standalone HTML exports.
+
+### Changed
+
+- Rebuilt Neon and Starship backgrounds with soft atmospheric light, sparse
+  accents, and restrained navigation details instead of dense grids, scanlines,
+  and high-contrast HUD framing.
+
 ## [3.1.6] - 2026-11-25
 
 ### Added
