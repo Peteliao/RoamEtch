@@ -5,12 +5,12 @@ test('browser back dismisses a modal without changing the underlying view', asyn
   await blockExternal(page);
   await page.goto('/?sim=1');
   await expect(page.locator('#view-record.active')).toBeVisible({ timeout: 30_000 });
-  await page.locator('.iconbtn[title="地图工具"]').click();
+  await page.locator('.map-layer-pill').click();
   await expect(page.locator('.modal-backdrop')).toBeVisible();
   await page.locator('.modal-backdrop .m-head .iconbtn').click();
   await expect(page.locator('.modal-backdrop')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => history.state?.lt?.type)).toBe('view');
-  await page.locator('.iconbtn[title="地图工具"]').click();
+  await page.locator('.map-layer-pill').click();
   await expect(page.locator('.modal-backdrop')).toBeVisible();
   await page.goBack();
   await expect(page.locator('.modal-backdrop')).toHaveCount(0);

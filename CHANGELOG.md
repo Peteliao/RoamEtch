@@ -4,6 +4,30 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.1.4] - 2026-11-25
+
+### Added
+
+- Added a smooth foreground-brightness slider to OLED pocket lock, with a
+  readable minimum and persistent setting that leaves the true-black background
+  unchanged.
+- Added remote team-chat notification sounds, an animated chat button and unread
+  badge, and a synchronized alert on the persistent service-region dot.
+- Added distinct amber host and teal member map colors, plus smooth proximity
+  zoom that frames approaching teammates and pauses after manual map controls.
+
+### Changed
+
+- Removed the redundant Map Tools panel; Edit mode now sits directly below OLED
+  pocket lock and reveals Undo/Redo underneath without overlapping record controls.
+- Trip charts now use their actual container width and tighter axis gutters to
+  reduce empty space while keeping labels readable.
+
+### Fixed
+
+- Preserved proximity auto-zoom after an initial single-person fit, camera
+  movement, and basemap style reloads.
+
 ## [3.1.3] - 2026-11-25
 
 ### Added

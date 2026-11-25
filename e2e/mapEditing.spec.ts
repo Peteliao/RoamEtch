@@ -14,13 +14,15 @@ test('editing is limited to a finished trip map view and supports undo redo', as
     });
 
     await gotoTab(page, 'record');
-    await page.locator('.iconbtn[title="地图工具"]').click();
-    const editRow = page.locator('.sheet-row').filter({ hasText: '编辑模式' });
-    await expect(editRow).toBeDisabled();
-    await expect(page.locator('.modal-backdrop')).toContainText('仅在地图查看已完成行程时可编辑');
-    await page.keyboard.press('Escape');
+    const editButton = page.locator('.iconbtn[aria-label="编辑模式"]');
+    await expect(editButton).toBeDisabled();
+    await expect(editButton).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('.iconbtn[title="地图工具"]')).toHaveCount(0);
+    await expect(page.locator('.modal-backdrop')).toHaveCount(0);
     await expect(page.locator('.iconbtn[aria-label="撤销"]')).toBeHidden();
     await expect(page.locator('.iconbtn[aria-label="重做"]')).toBeHidden();
+    expect(await page.locator('.map-tools .iconbtn').evaluateAll((nodes) => nodes.slice(-4).map((node) =>
+      node.getAttribute('aria-label') || node.getAttribute('title')))).toEqual(['OLED 口袋锁', '编辑模式', '撤销', '重做']);
 
     await gotoTab(page, 'trips');
     await page.locator('.trip-detail-back').click();
@@ -29,9 +31,12 @@ test('editing is limited to a finished trip map view and supports undo redo', as
     await tripItem.click();
     await page.locator('#trip-detail').getByRole('button', { name: '在地图查看' }).click();
     await expect(page.locator('.view-trip-bar')).toBeVisible();
-    await page.locator('.iconbtn[title="地图工具"]').click();
-    await expect(editRow).toBeEnabled();
-    await editRow.click();
+    await expect(editButton).toBeEnabled();
+    await expect(editButton).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('.iconbtn[aria-label="撤销"]')).toBeHidden();
+    await editButton.click();
+    await expect(editButton).toHaveAttribute('aria-pressed', 'true');
+    await expect(editButton).toHaveClass(/active/);
     await expect(page.locator('.iconbtn[aria-label="撤销"]')).toBeVisible();
     await expect(page.locator('.iconbtn[aria-label="重做"]')).toBeVisible();
     await expect(page.locator('.iconbtn[aria-label="撤销"]')).toBeDisabled();
@@ -67,8 +72,8 @@ test('editing is limited to a finished trip map view and supports undo redo', as
     await expect(page.locator('.view-trip-bar')).toBeHidden();
     await expect(page.locator('.iconbtn[aria-label="撤销"]')).toBeHidden();
     await expect(page.locator('.iconbtn[aria-label="重做"]')).toBeHidden();
-    await page.locator('.iconbtn[title="地图工具"]').click();
-    await expect(page.locator('.sheet-row').filter({ hasText: '编辑模式' })).toBeDisabled();
+    await expect(editButton).toBeDisabled();
+    await expect(editButton).toHaveAttribute('aria-pressed', 'false');
   } finally {
     if (tripId) await page.evaluate(async (id) => {
       await window.__lt.store.deleteTrip(id);

@@ -217,10 +217,49 @@ test('pocket lock is passive, keeps recording, and restores the same paused map 
   await result.locator('[data-result-action="done"]').click();
   await expect(result).toHaveCount(0);
   await expect(entry).toBeDisabled();
+  await expect(page.locator('.iconbtn[aria-label="编辑模式"]')).toBeDisabled();
+  await expect(page.locator('.modal-backdrop')).toHaveCount(0);
+});
 
-  await page.locator('.iconbtn[title="地图工具"]').click();
-  await expect(page.locator('.sheet-row').filter({ hasText: 'OLED 口袋锁' })).toHaveCount(0);
-  await expect(page.locator('.sheet-row').filter({ hasText: '编辑模式' })).toBeDisabled();
+test('pocket lock brightness stays readable at its minimum and persists', async ({ page }) => {
+  await openRecording(page);
+  await page.locator('.power-lock-entry').click();
+  const dash = page.locator('#oled-dash');
+  const slider = page.locator('#oled-brightness');
+  await expect(dash).toBeVisible();
+  await expect(slider).toHaveAttribute('min', '35');
+  await expect(slider).toHaveAttribute('max', '100');
+  await expect(slider).toHaveValue('70');
+  expect(await dash.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe('rgb(0, 0, 0)');
+
+  await slider.focus();
+  await slider.press('Home');
+  await expect(page.locator('.ps-brightness-value')).toHaveText('35%');
+  await expect(slider).toHaveAttribute('aria-valuetext', '35%');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('localtrace.settings.v1') || '{}').oledBrightness)).toBe(35);
+  const minimum = await dash.evaluate((node) => {
+    const style = getComputedStyle(node);
+    const lock = node.querySelector('.ps-lock')!;
+    return {
+      primary: style.getPropertyValue('--oled-primary'),
+      lockColor: getComputedStyle(lock).color,
+      lockVisible: getComputedStyle(lock).visibility === 'visible'
+    };
+  });
+  expect(minimum.primary).not.toBe('rgb(0, 0, 0)');
+  expect(minimum.lockColor).not.toBe('rgb(0, 0, 0)');
+  expect(minimum.lockVisible).toBe(true);
+  await expect(page.locator('.ps-lock-status')).toBeVisible();
+
+  await slider.press('End');
+  await expect(page.locator('.ps-brightness-value')).toHaveText('100%');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('localtrace.settings.v1') || '{}').oledBrightness)).toBe(100);
+  await hold(page, '.ps-unlock');
+  await expect(page.locator('#oled-dash.active')).toHaveCount(0);
+
+  await page.locator('.power-lock-entry').click();
+  await expect(slider).toHaveValue('100');
+  await expect(page.locator('.ps-brightness-value')).toHaveText('100%');
 });
 
 test('pocket lock unlock is keyboard accessible without adding recording controls', async ({ page }) => {
@@ -299,9 +338,8 @@ test('record keyboard shortcuts ignore repeats, interactive targets, other views
 
   expect(await pressBody()).toBe(true);
   await expect.poll(() => page.evaluate(() => window.__lt.recorder.rec.status)).toBe('recording');
-  await page.locator('.iconbtn[title="地图工具"]').click();
+  await page.locator('.map-layer-pill').click();
   await expect(page.locator('.modal-backdrop')).toBeVisible();
-  await expect(page.locator('.sheet-row').filter({ hasText: '编辑模式' })).toBeDisabled();
   expect(await pressBody()).toBe(false);
   expect(await page.evaluate(() => window.__lt.recorder.rec.status)).toBe('recording');
   await page.keyboard.press('Escape');

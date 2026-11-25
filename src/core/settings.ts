@@ -20,6 +20,7 @@ const DEFAULTS = {
   speedDisplay: 'auto',        // auto | speed | pace
   recordQuality: 'balanced',   // high | balanced | low
   wakeLock: true,
+  oledBrightness: 70,          // foreground brightness in pocket lock (35–100)
   rewalkVoice: true,           // voice guidance during re-walk
   ascentThreshold: 4,          // metres hysteresis
   weightKg: 65,                // used for calorie estimates

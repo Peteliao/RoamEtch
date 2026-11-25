@@ -34,7 +34,23 @@ test('demo trip renders charts and privacy crop feedback', async ({ page }) => {
   const legend = chartCard.locator('.chart-legend');
   await expect(legend).toContainText('海拔');
   await expect(legend).toContainText('速度');
-  await expect(chartCard.locator('.chart-wrap canvas').first()).toBeVisible();
+  const chartLayout = await chartCard.locator('.chart-wrap').evaluate((wrap) => {
+    const plot = wrap.querySelector('.uplot') as HTMLElement;
+    const rect = wrap.getBoundingClientRect();
+    const plotRect = plot.getBoundingClientRect();
+    return {
+      wrapWidth: rect.width,
+      plotWidth: plotRect.width,
+      leftGap: plotRect.left - rect.left,
+      rightGap: rect.right - plotRect.right,
+      overflow: wrap.scrollWidth - wrap.clientWidth
+    };
+  });
+  expect(chartLayout.wrapWidth).toBeGreaterThan(280);
+  expect(chartLayout.plotWidth / chartLayout.wrapWidth).toBeGreaterThan(0.9);
+  expect(chartLayout.leftGap).toBeLessThanOrEqual(1);
+  expect(chartLayout.rightGap).toBeLessThanOrEqual(1);
+  expect(chartLayout.overflow).toBeLessThanOrEqual(1);
 
   await gotoTripSection(page, 'share');
   await page.locator('#view-export .privacy-adjust').click();

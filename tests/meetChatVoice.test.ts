@@ -122,6 +122,32 @@ describe('meetup voice and emoji chat', () => {
     expect(meetModule.getMeetSnapshot().messages).toHaveLength(1);
   });
 
+  it('notifies only for a valid remote message and ignores duplicates', async () => {
+    const snapshot = await setup();
+    const events = await import('../src/core/events');
+    const received = vi.fn();
+    const off = events.on('meet:chat:received', received);
+    try {
+      expect(await meetModule.sendMeetMessage('local')).toBe(true);
+      expect(received).not.toHaveBeenCalled();
+
+      const packet = {
+        k: 'msg', id: 'bob', name: 'Bob', c: '#5aa7f0', v: snapshot.protocol,
+        sq: 1, ts: Date.now(), mid: 'notify01', tx: 'remote'
+      };
+      harness.relayOptions.onMessage(JSON.stringify(packet));
+      await vi.waitFor(() => expect(received).toHaveBeenCalledTimes(1));
+      expect(received).toHaveBeenLastCalledWith(expect.objectContaining({ fromId: 'bob', unread: 1 }));
+
+      harness.relayOptions.onMessage(JSON.stringify(packet));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(received).toHaveBeenCalledTimes(1);
+    } finally {
+      off();
+    }
+  });
+
   it('expires voice payloads beyond the bounded in-memory window', async () => {
     await setup();
     for (let i = 0; i < CHAT_VOICE_KEEP + 1; i++) expect(await meetModule.sendMeetVoice(voicePacket())).toBe(true);

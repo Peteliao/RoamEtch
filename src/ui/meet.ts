@@ -17,6 +17,7 @@ import { CHAT_IMAGE_KEEP, readChatImageHeader } from '../core/chatImage';
 import { CHAT_VOICE_KEEP, CHAT_VOICE_MAX_DURATION_MS, ChatVoiceRecorder, chatVoiceBlob } from '../core/chatVoice';
 import { P2PTransferError } from '../core/webrtcTransfer';
 import { exportImage } from '../core/shareEnv';
+import { playChatNotificationSound, unlockChatNotificationSound } from '../core/chatNotify';
 
 const CHAT_EMOJIS = [
   '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🙂', '🙃', '😉', '😊', '😍',
@@ -85,6 +86,7 @@ export function createMeetView(navigate) {
   let panelCollapsed = false;
   let lastTickRender = 0;
   let chatModal = null;
+  let chatPingTimer = 0;
   let chatDraft = '';
   let chatRefresh: (() => void) | null = null;
   let chatAudioHost: HTMLDivElement | null = null;
@@ -158,11 +160,18 @@ export function createMeetView(navigate) {
     const n = Number(s?.chatUnread) || 0;
     chatBadge.hidden = n <= 0;
     chatBadge.textContent = n > 99 ? '99+' : String(n);
+    chatBtn.classList.toggle('chat-notice', n > 0);
     const label = n > 0 ? t('meet.chatUnread', { n }) : t('meet.chat');
     chatBtn.title = label;
     chatBtn.setAttribute('aria-label', label);
     chatBtn.disabled = !s?.active;
   }
+
+  function unlockChatSound() {
+    if (snap.active) unlockChatNotificationSound();
+  }
+  view.addEventListener('pointerdown', unlockChatSound, { passive: true });
+  view.addEventListener('keydown', unlockChatSound);
 
   function base64ImageBlob(data: string, mime: string) {
     const bin = atob(data);
@@ -638,6 +647,7 @@ export function createMeetView(navigate) {
     if (chatModal) return;
     const initial = getMeetSnapshot();
     if (!initial.active) return;
+    unlockChatNotificationSound();
     const list = el('div', { class: 'meet-chat-list', role: 'log', 'aria-live': 'polite' });
     const note = el('div', { class: 'meet-chat-note' },
       icon('shield', 15),
@@ -1068,7 +1078,7 @@ export function createMeetView(navigate) {
     else if (s.self?.hasFix && s.sharing) sub = t('meet.sharing');
     else if (s.self?.hasFix) sub = t('meet.sharingPaused');
     return el('div', { class: 'meet-peer-row self' },
-      el('span', { class: 'meet-peer-dot', style: { background: 'var(--accent)' } }),
+      el('span', { class: 'meet-peer-dot', style: { background: s.self?.color || 'var(--accent)' } }),
       el('div', { class: 'meet-peer-main' },
         el('div', { class: 'meet-peer-name' }, el('span', { class: 'mp-name' }, s.self?.name || t('meet.me')), badge(t('meet.me')), s.isHost ? badge(t('meet.hostBadge'), 'host') : null),
         el('div', { class: 'meet-peer-sub' }, sub))
@@ -1561,6 +1571,13 @@ export function createMeetView(navigate) {
     if (s.chatUnread) meet.markChatRead();
     chatRefresh?.();
   });
+  on('meet:chat:received', () => {
+    playChatNotificationSound();
+    clearTimeout(chatPingTimer);
+    chatBtn.classList.remove('chat-ping');
+    requestAnimationFrame(() => chatBtn.classList.add('chat-ping'));
+    chatPingTimer = window.setTimeout(() => chatBtn.classList.remove('chat-ping'), 1100);
+  });
   on('meet:p2p', ({ type, peerId, fileId, sha256, progress, code }) => {
     if (!chatModal || !fileId || !sha256) return;
     const key = originalKey(peerId, fileId, sha256);
@@ -1575,6 +1592,8 @@ export function createMeetView(navigate) {
   });
   on('meet:ended', ({ reason }) => {
     chatDraft = '';
+    chatBtn.classList.remove('chat-notice', 'chat-ping');
+    clearTimeout(chatPingTimer);
     closeChat();
     if (reason === 'expired') toast(t('meet.expired'), 'warn', 4200);
     else if (reason === 'kicked') toast(t('meet.kickedOut'), 'warn', 4200);
@@ -1595,6 +1614,8 @@ export function createMeetView(navigate) {
     getMap: () => map,
     destroy: () => {
       chatDraft = '';
+      chatBtn.classList.remove('chat-notice', 'chat-ping');
+      clearTimeout(chatPingTimer);
       closeChat();
       clearTimeout(photoRefTimer);
       map?.clearPhotoRef();

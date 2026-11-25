@@ -11,6 +11,7 @@ import { on, emit } from '../core/events';
 import { diag } from '../core/diag';
 import { t } from '../core/i18n';
 import { WP_ICONS } from '../core/waypointMeta';
+import { meetProximityZoom, meetRoleColor } from '../core/meetVisuals';
 
 const LIVE_FILL = 'rgba(90,167,240,0.14)';
 
@@ -59,6 +60,11 @@ export class TrackMap {
   declare _liveZoomed: boolean;
   declare _liveFeats: Map<string, any> | null;
   declare _headingEl: HTMLElement | null;
+  declare _meetAutoZoomReady: boolean;
+  declare _meetManualCameraUntil: number;
+  declare _meetLastDistance: number;
+  declare _meetLastSelf: { lat: number; lon: number } | null;
+  declare _meetCameraAnimating: boolean;
 
   constructor(container, opts = {}) {
     this.container = container;
@@ -89,6 +95,11 @@ export class TrackMap {
     this.destroyed = false;
     this._renderingPaused = false;
     this._pausedRepaintDescriptor = undefined;
+    this._meetAutoZoomReady = false;
+    this._meetManualCameraUntil = 0;
+    this._meetLastDistance = Number.NaN;
+    this._meetLastSelf = null;
+    this._meetCameraAnimating = false;
   }
 
   init(center = [116.4, 39.9], zoom = 10) {
@@ -118,6 +129,7 @@ export class TrackMap {
       this._addTrackLayers();
       this._applyTheme();
       this.redraw();
+      requestAnimationFrame(() => this._updateMeetProximity());
     });
     this.map.on('error', (e) => {
       const msg = String(e?.error?.message || e?.message || '');
@@ -135,14 +147,29 @@ export class TrackMap {
       if (e.sourceId === 'base' && e.isSourceLoaded) this.tileLoaded = true;
     });
     this.map.on('moveend', () => {
+      this._meetCameraAnimating = false;
       if (this.editMode) this._scheduleVertices();
+      requestAnimationFrame(() => this._updateMeetProximity());
     });
     this.map.on('click', (e) => {
       if (!this.editMode) return;
       const [lon, lat] = fromDisplay(e.lngLat.lng, e.lngLat.lat, this.coordSystem);
       this.opts.onMapClick?.(lon, lat);
     });
-    this.map.on('dragstart', () => { this.follow = false; emit('map:followoff'); });
+    this.map.on('dragstart', () => {
+      this.follow = false;
+      this._meetManualCameraUntil = Date.now() + 12000;
+      this._meetLastDistance = Number.NaN;
+      this._meetCameraAnimating = false;
+      emit('map:followoff');
+    });
+    this.map.on('wheel', () => {
+      this._meetManualCameraUntil = Date.now() + 12000;
+      this._meetLastDistance = Number.NaN;
+    });
+    this.map.on('zoomstart', () => {
+      if (this.meetSelf && !this._meetCameraAnimating) this._meetManualCameraUntil = Date.now() + 12000;
+    });
     this._offRegion = on('region:changed', () => { if (!this.liveMode) this.refreshBasemapForRegion(); });
     const recover = () => {
       if (!isOfflineSim() && (this.vectorFallback || (this.tileErrors > 0 && !this.tileLoaded))) {
@@ -470,8 +497,14 @@ export class TrackMap {
   }
 
   clearPosition() {
+    if (this.posMarker) {
+      const node = this.posMarker.getElement();
+      node.classList.remove('meet-self');
+      node.style.removeProperty('--self-color');
+    }
     this.posMarker?.remove();
     this.posMarker = null;
+    this._headingEl = null;
     this.map.getSource('pos')?.setData({ type: 'FeatureCollection', features: [] });
   }
 
@@ -483,18 +516,28 @@ export class TrackMap {
     if (!this.map || this.destroyed) return;
     if (self?.hasFix && self.lat != null && self.lon != null) {
       this.updatePosition(self.lat, self.lon, self.acc, self.heading);
+      const color = /^#[0-9a-f]{6}$/i.test(String(self.color))
+        ? self.color : meetRoleColor(!!self.isHost);
+      const node = this.posMarker?.getElement();
+      node?.classList.add('meet-self');
+      node?.style.setProperty('--self-color', color);
     } else {
       this.clearPosition();
     }
     this._renderMeetMarkers();
     this._applyMeetLinks();
     this._applyMeetRoute();
+    this._updateMeetProximity();
   }
 
   clearMeetData() {
     this.meetSelf = null;
     this.meetPeers = [];
     this.meetRoute = null;
+    this._meetAutoZoomReady = false;
+    this._meetLastDistance = Number.NaN;
+    this._meetLastSelf = null;
+    this._meetCameraAnimating = false;
     for (const [, entry] of this.meetMarkers) entry.marker.remove();
     this.meetMarkers.clear();
     this.map?.getSource('meet-links')?.setData({ type: 'FeatureCollection', features: [] });
@@ -582,8 +625,41 @@ export class TrackMap {
     this._applyMeetRoute();
   }
 
+  _updateMeetProximity() {
+    if (!this.map || this.destroyed || !this._meetAutoZoomReady) return;
+    const self = this.meetSelf;
+    if (!self?.hasFix || self.lat == null || self.lon == null) return;
+    if (this.map.isMoving() || Date.now() < this._meetManualCameraUntil) return;
+    const candidates = this.meetPeers.filter((p) => !p.stale && p.lat != null && p.lon != null);
+    const allCandidates = this.meetPeers.filter((p) => p.lat != null && p.lon != null);
+    const pool = candidates.length ? candidates : allCandidates;
+    if (!pool.length) return;
+    const nearest = (a, b) => haversine(self.lat, self.lon, a.lat, a.lon) - haversine(self.lat, self.lon, b.lat, b.lon);
+    const target = self.isHost ? [...pool].sort(nearest)[0] : pool.find((p) => p.isHost) || [...pool].sort(nearest)[0];
+    const distance = haversine(self.lat, self.lon, target.lat, target.lon);
+    const targetZoom = meetProximityZoom(distance, self.lat);
+    const moved = !this._meetLastSelf || haversine(self.lat, self.lon, this._meetLastSelf.lat, this._meetLastSelf.lon) > 12;
+    const changed = !Number.isFinite(this._meetLastDistance)
+      || Math.abs(distance - this._meetLastDistance) / Math.max(1, this._meetLastDistance) > 0.25;
+    if (!moved && !changed && Math.abs(this.map.getZoom() - targetZoom) <= 0.4) return;
+    const selfCoord = toDisplay(self.lon, self.lat, this.coordSystem);
+    const targetCoord = toDisplay(target.lon, target.lat, this.coordSystem);
+    this._meetLastDistance = distance;
+    this._meetLastSelf = { lat: self.lat, lon: self.lon };
+    this._meetCameraAnimating = true;
+    this.map.once('moveend', () => { this._meetCameraAnimating = false; });
+    this.map.easeTo({
+      center: [(selfCoord[0] + targetCoord[0]) / 2, (selfCoord[1] + targetCoord[1]) / 2] as [number, number],
+      zoom: targetZoom,
+      duration: 850
+    });
+  }
+
   fitMeet(padding = 70) {
     if (!this.map || this.destroyed) return;
+    this._meetAutoZoomReady = false;
+    this._meetLastDistance = Number.NaN;
+    this._meetLastSelf = null;
     const pts = [];
     if (this.meetSelf?.hasFix && this.meetSelf.lat != null) pts.push(toDisplay(this.meetSelf.lon, this.meetSelf.lat, this.coordSystem));
     for (const p of this.meetPeers) {
@@ -593,6 +669,9 @@ export class TrackMap {
     this.follow = false;
     emit('map:followoff');
     if (pts.length === 1) {
+      this._meetAutoZoomReady = true;
+      this._meetCameraAnimating = true;
+      this.map.once('moveend', () => { this._meetCameraAnimating = false; });
       this.map.easeTo({ center: pts[0], zoom: Math.max(this.map.getZoom(), 14), duration: 600 });
       return;
     }
@@ -603,6 +682,9 @@ export class TrackMap {
       if (lat < minLat) minLat = lat;
       if (lat > maxLat) maxLat = lat;
     }
+    this._meetAutoZoomReady = true;
+    this._meetCameraAnimating = true;
+    this.map.once('moveend', () => { this._meetCameraAnimating = false; });
     this.map.fitBounds([[minLon, minLat], [maxLon, maxLat]], { padding, duration: 650, maxZoom: 16 });
   }
 

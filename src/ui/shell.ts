@@ -69,17 +69,30 @@ export function createShell(root) {
 
   let views: Record<string, any> = {};
   let current = 'record';
+  let chatNoticeUntil = 0;
 
   function renderRegionChip() {
     const s = regionState;
     const dotClass = s.probing ? 'probing' : (s.probe[s.effective] === 'ok' ? 'ok' : s.probe[s.effective] === 'fail' ? 'bad' : '');
+    const unread = Number(getMeetSnapshot().chatUnread) || 0;
+    const chatNotice = unread > 0 || Date.now() < chatNoticeUntil;
     regionChip.innerHTML = '';
-    regionChip.append(el('span', { class: `dot ${dotClass}` }), regionLabel());
+    regionChip.append(el('span', { class: `dot ${dotClass}${chatNotice ? ' chat-alert' : ''}` }), regionLabel());
   }
   renderRegionChip();
   on('region:changed', renderRegionChip);
   on('region:probed', renderRegionChip);
   on('region:probing', renderRegionChip);
+  on('meet:chat', renderRegionChip);
+  on('meet:chat:received', () => {
+    chatNoticeUntil = Date.now() + 2400;
+    renderRegionChip();
+    window.setTimeout(renderRegionChip, 2450);
+  });
+  on('meet:state', () => {
+    if (!getMeetSnapshot().active) chatNoticeUntil = 0;
+    renderRegionChip();
+  });
 
   regionChip.onclick = () => {
     const m = modal({

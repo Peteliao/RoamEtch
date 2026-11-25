@@ -167,8 +167,11 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   const fitBtn = el('button', { class: 'iconbtn', title: t('record.fit'), onclick: () => map.fitTrack() }, icon('fit'));
   const undoBtn = el('button', { type: 'button', class: 'iconbtn', title: t('edit.undo'), 'aria-label': t('edit.undo'), onclick: undoEdit, style: { display: 'none' } }, icon('undo'));
   const redoBtn = el('button', { type: 'button', class: 'iconbtn', title: t('edit.redo'), 'aria-label': t('edit.redo'), onclick: redoEdit, style: { display: 'none' } }, icon('redo'));
-  const moreBtn = el('button', { type: 'button', class: 'iconbtn', title: t('record.moreTools'), onclick: openMoreSheet }, icon('more'));
-  tools.append(followBtn, fitBtn, undoBtn, redoBtn, moreBtn);
+  const editBtn = el('button', {
+    type: 'button', class: 'iconbtn', title: t('record.editMode'), 'aria-label': t('record.editMode'),
+    'aria-pressed': 'false', disabled: true, onclick: toggleEdit
+  }, icon('edit'));
+  tools.append(followBtn, fitBtn, undoBtn, redoBtn);
   on('map:followoff', () => followBtn.classList.remove('active'));
   on('history:changed', syncEditTools);
 
@@ -190,24 +193,6 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     });
   }
 
-  function openMoreSheet() {
-    let m;
-    const close = (fn) => { m.close(); fn(); };
-    const row = (opts) => el('button', { class: 'sheet-row' + (opts.active ? ' active' : '') + (opts.danger ? ' danger' : ''), disabled: opts.disabled, onclick: opts.onclick },
-      el('span', { class: 's-ic' }, icon(opts.iconKey, 18)),
-      el('span', { class: 's-txt' }, el('div', { class: 's-t' }, opts.title), opts.desc ? el('div', { class: 's-d' }, opts.desc) : null),
-      opts.active ? el('span', { class: 's-check' }, icon('check', 18)) : null);
-    const body = el('div', { class: 'sheet-list' },
-      row({
-        iconKey: 'edit', title: t('record.editMode'),
-        desc: t(canEditMap() ? 'record.editHint' : 'record.editTripOnly'),
-        active: appState.editMode, disabled: !canEditMap(),
-        onclick: () => close(() => toggleEdit())
-      })
-    );
-    m = modal({ title: t('record.moreTools'), body });
-  }
-
   function canEditMap() {
     const trip = viewingTrip?.trip;
     return viewingTripEditable && trip?.status === 'finished'
@@ -219,15 +204,21 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     if (!appState.editMode) return;
     appState.editMode = false;
     map?.setEditMode(false);
-    moreBtn.classList.remove('active');
+    editBtn.classList.remove('active');
+    editBtn.setAttribute('aria-pressed', 'false');
     undoBtn.style.display = 'none';
     redoBtn.style.display = 'none';
+    tools.classList.remove('with-history');
   }
   function syncEditTools() {
     if (appState.editMode && !canEditMap()) leaveEditMode();
     const visible = appState.editMode && canEditMap();
+    editBtn.disabled = !canEditMap();
+    editBtn.classList.toggle('active', appState.editMode);
+    editBtn.setAttribute('aria-pressed', String(appState.editMode));
     undoBtn.style.display = visible ? '' : 'none';
     redoBtn.style.display = visible ? '' : 'none';
+    tools.classList.toggle('with-history', visible);
     const history = histState();
     undoBtn.disabled = !history.canUndo;
     redoBtn.disabled = !history.canRedo;
@@ -236,7 +227,6 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     if (!canEditMap()) { toast(t('record.editTripOnly'), 'warn'); return; }
     appState.editMode = !appState.editMode;
     map.setEditMode(appState.editMode);
-    moreBtn.classList.toggle('active', appState.editMode);
     syncEditTools();
     if (appState.editMode) toast(t('record.editModeOn'), 'info', 3500);
   }
@@ -256,7 +246,8 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     'aria-label': t('record.powerLock'), title: t('record.powerLock'),
     onclick: (e) => { e.stopPropagation(); enterPowerLock(); }
   }, icon('powerlock', 18));
-  tools.insertBefore(powerLockEntry, moreBtn);
+  tools.insertBefore(powerLockEntry, undoBtn);
+  tools.insertBefore(editBtn, undoBtn);
   const pHead = el('div', { class: 'lp-head', onclick: togglePanel },
     pStatus, pSave, el('span', { class: 'rec-dot', id: 'panel-rec-dot' }), el('span', { class: 'chev' }, icon('chevron', 16)));
   function togglePanel() {
@@ -1235,6 +1226,47 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   const psTop = el('div', { class: 'od-top' });
   const odGrid = el('div', { class: 'od-grid' });
   const psBottom = el('div', { class: 'od-bottom' });
+  const OLED_BRIGHTNESS_MIN = 35;
+  const clampOledBrightness = (value) => Math.max(OLED_BRIGHTNESS_MIN, Math.min(100, Math.round(Number(value) || 70)));
+  const mixOledColor = (from: string, to: string, amount: number) => {
+    const channels = (hex: string) => [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
+    const a = channels(from), b = channels(to);
+    return `rgb(${a.map((value, index) => Math.round(value + (b[index] - value) * amount)).join(',')})`;
+  };
+  let oledBrightnessFrame = 0;
+  const oledBrightnessInput = el('input', {
+    id: 'oled-brightness', type: 'range', min: OLED_BRIGHTNESS_MIN, max: 100, step: 1,
+    value: clampOledBrightness(get('oledBrightness')), 'aria-label': t('record.oledBrightness')
+  });
+  const oledBrightnessValue = el('output', { class: 'ps-brightness-value', for: 'oled-brightness' }, '70%');
+  const psBrightness = el('div', { class: 'ps-brightness', title: t('record.oledBrightnessHint') },
+    el('label', { class: 'ps-brightness-label', for: 'oled-brightness' }, t('record.oledBrightness')),
+    oledBrightnessInput,
+    oledBrightnessValue);
+  function applyOledBrightness(value = get('oledBrightness')) {
+    const brightness = clampOledBrightness(value);
+    const amount = (brightness - OLED_BRIGHTNESS_MIN) / (100 - OLED_BRIGHTNESS_MIN);
+    ps.style.setProperty('--oled-primary', mixOledColor('#8d8d8d', '#ffffff', amount));
+    ps.style.setProperty('--oled-secondary', mixOledColor('#6f6f6f', '#bbbbbb', amount));
+    ps.style.setProperty('--oled-muted', mixOledColor('#525252', '#888888', amount));
+    ps.style.setProperty('--oled-accent', mixOledColor('#176c58', '#2bcda7', amount));
+    ps.style.setProperty('--oled-track', mixOledColor('#2b2b2b', '#4a4a4a', amount));
+    oledBrightnessInput.value = String(brightness);
+    oledBrightnessValue.textContent = `${brightness}%`;
+    oledBrightnessInput.setAttribute('aria-valuetext', `${brightness}%`);
+  }
+  oledBrightnessInput.addEventListener('input', () => {
+    oledBrightnessValue.textContent = `${clampOledBrightness(oledBrightnessInput.value)}%`;
+    if (oledBrightnessFrame) return;
+    oledBrightnessFrame = requestAnimationFrame(() => {
+      oledBrightnessFrame = 0;
+      const brightness = clampOledBrightness(oledBrightnessInput.value);
+      applyOledBrightness(brightness);
+      set('oledBrightness', brightness);
+    });
+  });
+  on('settings:changed', ({ key }) => { if (key === 'oledBrightness') applyOledBrightness(); });
+  applyOledBrightness();
   const unlockStatus = el('div', { class: 'ps-lock-status' }, t('record.lockPassive'));
   function odCell(key, hero = false) {
     const num = el('span', { class: 'num' }, '--');
@@ -1276,7 +1308,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     <div class="ps-hint">${t('record.camSwipe')}</div>`;
   psBottom.querySelector('.ps-actions').append(psCamAct);
   psBottom.querySelector('.ps-actions').prepend(unlockStatus);
-  ps.append(psTop, odGrid, psBottom);
+  ps.append(psTop, psBrightness, odGrid, psBottom);
   document.body.append(ps);
 
   function renderPsTop() {
@@ -1450,6 +1482,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
         ps.classList.add('active');
         pushUIState({ type: 'oled' });
         requestWakeLock();
+        applyOledBrightness();
         renderPsTop();
         updatePsCamera();
         renderOled(rec.live);

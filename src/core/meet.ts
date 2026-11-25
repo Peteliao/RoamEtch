@@ -4,6 +4,7 @@ import { get, set } from './settings';
 import { emit } from './events';
 import { t } from './i18n';
 import { haversine, bearing } from './geo';
+import { meetRoleColor } from './meetVisuals';
 import {
   deriveMeetRoom,
   encryptMeetPacket,
@@ -181,7 +182,7 @@ function peerView(p: any, self: any, hostId: string | null) {
   return {
     id: p.id,
     name: p.name,
-    color: p.color,
+    color: meetRoleColor(p.id === hostId),
     lat: p.lat,
     lon: p.lon,
     acc: p.acc,
@@ -236,6 +237,8 @@ export function getMeetSnapshot() {
     self: {
       id: s.self.id,
       name: s.self.name,
+      color: meetRoleColor(s.hostId === s.self.id),
+      isHost: s.hostId === s.self.id,
       lat: s.self.lat,
       lon: s.self.lon,
       acc: s.self.acc,
@@ -630,6 +633,7 @@ async function handleIncoming(text: string) {
     });
     s.chatUnread = Math.min(999, s.chatUnread + 1);
     emit('meet:chat', { unread: s.chatUnread });
+    emit('meet:chat:received', { unread: s.chatUnread, fromId: senderId });
     return;
   }
 

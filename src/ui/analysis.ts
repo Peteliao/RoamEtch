@@ -211,23 +211,27 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     }
   }
 
+  function chartWidth() {
+    return Math.max(1, Math.round(chartWrap.clientWidth || scroll.clientWidth - 24));
+  }
+
   function chartOpts(height, profile, visible): any {
     const P = canvasPalette();
     const speedColor = `rgb(${P.lut[1].join(',')})`;
     const series: any[] = [{ label: distanceUnit(profile.units) }];
     const axes: any[] = [
-      { stroke: P.muted, grid: { stroke: P.grid }, size: 42, font: '12px system-ui', label: [] }
+      { stroke: P.muted, grid: { stroke: P.grid }, size: 36, font: '12px system-ui', label: [] }
     ];
     if (visible.altitude) {
       series.push({ label: `${t('panel.altitude')} (${altitudeUnit(profile.units)})`, stroke: P.accent, width: 1.8, fill: P.accentSoft, points: { show: false } });
-      axes.push({ scale: 'y', stroke: P.accent, grid: { stroke: P.grid }, size: 46, font: '12px system-ui', label: [] });
+      axes.push({ scale: 'y', stroke: P.accent, grid: { stroke: P.grid }, size: 38, font: '12px system-ui', label: [] });
     }
     if (visible.speed) {
       series.push({ label: `${t('panel.speed')} (${speedUnit(profile.units)})`, stroke: speedColor, width: 2, scale: 'y1', fill: null, points: { show: false } });
-      axes.push({ scale: 'y1', stroke: speedColor, grid: { show: false }, size: 52, font: '12px system-ui', side: 1, label: [] });
+      axes.push({ scale: 'y1', stroke: speedColor, grid: { show: false }, size: 44, font: '12px system-ui', side: 1, label: [] });
     }
     return {
-      width: Math.max(280, scroll.clientWidth - 60),
+      width: chartWidth(),
       height,
       scales: {
         x: { time: false, range: () => [0, profile.maxX] },
@@ -614,7 +618,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     refresh: renderAll,
     resize: () => {
       miniMap?.resize();
-      const w = Math.max(280, scroll.clientWidth - 60);
+      const w = chartWidth();
       chart?.setSize({ width: w, height: 220 });
       if (appState.stats) renderSlope(appState.stats);
     },
