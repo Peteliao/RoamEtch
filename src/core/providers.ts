@@ -4,6 +4,7 @@
 import { get } from './settings';
 import { regionState, isOfflineSim } from './region';
 import { effectiveTheme } from './theme';
+import { themeDefinition } from './themeRegistry';
 
 const TIANDITU = (layer, key) =>
   `https://t{s}.tianditu.gov.cn/${layer}_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layer}&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=${key}`;
@@ -112,8 +113,7 @@ export function expandTiles(provider, key) {
 }
 
 export function vectorBgColor() {
-  const eff = effectiveTheme();
-  return eff === 'light' ? '#f5f7f6' : eff === 'contrast' ? '#ffffff' : eff === 'matrix' ? '#000300' : '#000000';
+  return themeDefinition(effectiveTheme()).palette.vectorBg;
 }
 
 /** Build a fully self-contained raster style (no external style/glyph/sprite fetches). */

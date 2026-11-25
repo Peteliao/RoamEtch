@@ -1,5 +1,6 @@
-// Theme resolver: manual dark/light/contrast/matrix, or auto by local sunrise/sunset.
+// Theme resolver: a manual registry theme, or binary light/dark auto resolution.
 import { get } from './settings';
+import { appCssVars, isConcreteTheme, themeDefinition } from './themeRegistry';
 import { on, emit } from './events';
 import { regionState } from './region';
 import { listTrips, loadTripFull } from './store';
@@ -26,16 +27,19 @@ function autoEffective() {
 }
 
 export function effectiveTheme() {
-  if (modeOverride) return modeOverride;
+  if (modeOverride) return isConcreteTheme(modeOverride) ? modeOverride : 'dark';
   const v = get('theme');
-  return v === 'auto' ? autoEffective() : v;
+  if (v === 'auto') return autoEffective();
+  return isConcreteTheme(v) ? v : 'dark';
 }
 
 export function applyTheme() {
   const eff = effectiveTheme();
-  document.documentElement.dataset.theme = eff === 'dark' ? '' : eff;
+  const root = document.documentElement;
+  root.dataset.theme = eff === 'dark' ? '' : eff;
+  for (const [name, value] of Object.entries(appCssVars(eff))) root.style.setProperty(name, value);
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute('content', colorOverride || (eff === 'matrix' ? '#000300' : eff === 'light' || eff === 'contrast' ? '#f5f7f6' : '#000000'));
+  if (meta) meta.setAttribute('content', colorOverride || themeDefinition(eff).palette.vectorBg);
   emit('theme:applied', { effective: eff });
 }
 

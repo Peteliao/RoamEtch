@@ -17,7 +17,7 @@ import { fmtDistance, fmtDuration, simplify } from '../core/geo';
 import { migrateLegacyKey } from '../core/storageKeys';
 import { get } from '../core/settings';
 import { exportImage, exportFile, isWeChat, wechatFileGuidance } from '../core/shareEnv';
-import { appState, setActiveTrip } from './state';
+import { appState, setActiveTrip, refreshActiveTrip, recalcNow } from './state';
 import { TrackMap } from './map';
 import { el, icon, toast, confirmModal, filePickerMulti, modal } from './helpers';
 import { createAnalysisView } from './analysis';
@@ -835,31 +835,83 @@ export function createTripsView(navigate, getRecordMap = () => null) {
       .filter(Boolean))].slice(0, 8);
   }
   function editTrip(trip) {
+    const activities = ['hike', 'drive', 'bike', 'run', 'travel'];
     const nameInput = el('input', { type: 'text', value: trip.name || '', maxlength: '60' });
     const tagsInput = el('input', {
       type: 'text', value: (trip.tags || []).join('，'),
       placeholder: t('trips.tagsPlaceholder')
     });
+    const activityInput = el('select', { 'aria-label': t('record.activityLabel') },
+      ...activities.map((activity) => el('option', { value: activity }, t(`record.activities.${activity}`))));
+    activityInput.value = activities.includes(trip.activity) ? trip.activity : 'hike';
+    const error = el('div', { class: 'hint', role: 'alert', style: { color: 'var(--danger)', display: 'none' } });
+    let saving = false;
+    let persisted = false;
+    let persistedActivity = trip.activity;
     const save = async () => {
-      await updateTrip(trip.id, { name: nameInput.value.trim(), tags: parseTags(tagsInput.value) });
-      m.close();
-      toast(t('trips.renamed'), 'ok');
-      render();
+      if (saving) return;
+      saving = true;
+      saveButton.disabled = true;
+      for (const input of [nameInput, tagsInput, activityInput]) input.disabled = true;
+      error.style.display = 'none';
+      const patch = { name: nameInput.value.trim(), tags: parseTags(tagsInput.value), activity: activityInput.value };
+      const activityChanged = patch.activity !== persistedActivity;
+      try {
+        await updateTrip(trip.id, patch);
+        persisted = true;
+        persistedActivity = patch.activity;
+        // Recalculate only for a genuine activity change. Name/tag-only saves
+        // keep the existing cache and reported distance intact.
+        if (!await refreshActiveTrip(trip.id, { recalc: false })) throw new Error(t('common.unavailable'));
+        if (activityChanged) {
+          if (!await recalcNow()) throw new Error(t('common.unavailable'));
+          // Publish the recalculated cache/version to analysis and export.
+          if (!await refreshActiveTrip(trip.id, { recalc: false })) throw new Error(t('common.unavailable'));
+        }
+        await render();
+        refreshDetailPanel();
+        m.close();
+        toast(t('trips.renamed'), 'ok');
+      } catch (e) {
+        console.error('trip edit failed', e);
+        if (persisted) {
+          // The edit is durable even if recalculation or snapshot refresh failed.
+          // Show that state immediately and leave the editor open for retry.
+          try {
+            await refreshActiveTrip(trip.id, { recalc: false });
+            await render();
+            refreshDetailPanel();
+          } catch (refreshError) { console.error('trip snapshot refresh failed', refreshError); }
+        }
+        error.textContent = persisted
+          ? `${t('trips.renamed')} · ${String(e?.message || e)}`
+          : t('record.resultNameFail');
+        error.style.display = '';
+        toast(error.textContent, 'err', 4200);
+      } finally {
+        saving = false;
+        saveButton.disabled = false;
+        for (const input of [nameInput, tagsInput, activityInput]) input.disabled = false;
+      }
     };
+    const saveButton = el('button', { class: 'btn primary', onclick: save }, t('common.save'));
     const m = modal({
       title: t('trips.editTitle'),
       body: el('div', {},
         el('div', { class: 'field' }, el('label', {}, t('wp.name')), nameInput),
         el('div', { class: 'field', style: { marginTop: '12px' } },
+          el('label', {}, t('record.activityLabel')), activityInput),
+        el('div', { class: 'field', style: { marginTop: '12px' } },
           el('label', {}, t('trips.tagsLabel')), tagsInput,
-          el('div', { class: 'hint' }, t('trips.tagsHint')))),
+          el('div', { class: 'hint' }, t('trips.tagsHint'))),
+        error),
       footer: [
         el('button', { class: 'btn ghost', onclick: () => m.close() }, t('common.cancel')),
-        el('button', { class: 'btn primary', onclick: save }, t('common.save'))
+        saveButton
       ]
     });
     for (const input of [nameInput, tagsInput]) {
-      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') save(); });
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') void save(); });
     }
     setTimeout(() => { nameInput.focus(); nameInput.select(); }, 60);
   }

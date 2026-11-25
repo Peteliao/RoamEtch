@@ -4,6 +4,25 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.1.5] - 2026-11-25
+
+### Added
+
+- Renamed the high-contrast theme to Blazing sun and added Neon, Starship,
+  Aurora, Amber, Deep sea, and Vermilion themes across the interface, MapLibre
+  controls, canvas exports, and standalone HTML viewer.
+- Added activity-type editing for finished trips, with immediate recalculation of
+  activity-dependent statistics while preserving raw points and trip metadata.
+
+### Fixed
+
+- Separated the yearly footprint month summary from month labels, kept privacy
+  copy inside the footer border, and placed city count beside the headline KPIs.
+- Cleared live recording metrics and signal immediately after finishing, and
+  ignored late recorder ticks or altitude results from the previous session.
+- Centered recording and teammate markers in the visible map area above bottom
+  panels, including panel collapse and viewport resizing.
+
 ## [3.1.4] - 2026-11-25
 
 ### Added

@@ -279,6 +279,7 @@ test('a regular click finishes, suggests a name, saves a rename, and restores Au
   const tripId = await page.evaluate(() => window.__lt.recorder.rec.tripId);
   const result = page.locator('.record-result-sheet');
 
+  await page.evaluate(() => { (window as any).__staleLive = window.__lt.recorder.rec.live; });
   await page.locator('.rec-btn.stop').click();
 
   await expect(result).toBeVisible({ timeout: 30_000 });
@@ -304,6 +305,50 @@ test('a regular click finishes, suggests a name, saves a rename, and restores Au
   await expect(activity).toBeVisible();
   await expect(activity).toHaveValue('auto');
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('localtrace.settings.v1') || '{}').activity)).toBe('auto');
+  expect(await page.locator('.lp-compact .num, .lp-more-cell .num').allTextContents())
+    .toEqual(Array(8).fill('--'));
+  await expect(page.locator('.live-panel .sig-bars')).toHaveClass(/lv0/);
+  await expect(page.locator('.live-panel .sig-txt')).toHaveText('--');
+  await expect(page.locator('.lp-detail span:not([hidden])')).toHaveCount(0);
+  await page.evaluate(async () => {
+    const events = await import('/src/core/events.ts');
+    events.emit('recorder:tick', { live: (window as any).__staleLive });
+  });
+  expect(await page.locator('.lp-compact .num, .lp-more-cell .num').allTextContents())
+    .toEqual(Array(8).fill('--'));
+});
+
+test('record map centers the fix above the live metrics panel', async ({ page }) => {
+  await openRecording(page);
+  await expect.poll(() => page.evaluate(() => {
+    const track = window.__lt.shell.getViews().record.getMap();
+    return !!track.posMarker && !track.map.isMoving() && track.map.getPadding().bottom > 200;
+  })).toBe(true);
+  const layout = await page.evaluate(() => {
+    const track = window.__lt.shell.getViews().record.getMap();
+    const point = track.map.project(track.posMarker.getLngLat());
+    const mapRect = track.container.getBoundingClientRect();
+    const controlsRect = document.querySelector('.rec-controls').getBoundingClientRect();
+    return {
+      markerY: point.y,
+      visibleCenterY: (mapRect.height - track.map.getPadding().bottom) / 2,
+      measuredInset: mapRect.bottom - controlsRect.top,
+      padding: track.map.getPadding().bottom
+    };
+  });
+  expect(Math.abs(layout.markerY - layout.visibleCenterY)).toBeLessThan(3);
+  expect(Math.abs(layout.measuredInset - layout.padding)).toBeLessThan(2);
+  await page.locator('.lp-head').click();
+  await expect.poll(() => page.evaluate(() => {
+    const track = window.__lt.shell.getViews().record.getMap();
+    return track.map.getPadding().bottom;
+  })).toBeLessThan(layout.padding - 40);
+  const collapsed = await page.evaluate(() => {
+    const track = window.__lt.shell.getViews().record.getMap();
+    const point = track.map.project(track.posMarker.getLngLat());
+    return { markerY: point.y, visibleCenterY: (track.container.clientHeight - track.map.getPadding().bottom) / 2 };
+  });
+  expect(Math.abs(collapsed.markerY - collapsed.visibleCenterY)).toBeLessThan(3);
 });
 
 test('record keyboard shortcuts ignore repeats, interactive targets, other views, and overlays', async ({ page }) => {

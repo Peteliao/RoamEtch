@@ -39,6 +39,20 @@ describe('P2P settings', () => {
     expect(reloaded.get('theme')).toBe('dark');
   });
 
+  it('accepts all registered themes and rejects unknown saved or patched values', async () => {
+    installStorage({ theme: 'obsolete' });
+    const settings = await import('../src/core/settings');
+    expect(settings.get('theme')).toBe('dark');
+    for (const theme of ['auto', 'neon', 'starship', 'aurora', 'amber', 'deepsea', 'vermilion']) {
+      settings.set('theme', theme);
+      expect(settings.get('theme')).toBe(theme);
+    }
+    settings.set('theme', 'oled');
+    settings.patch({ theme: 'unknown', units: 'imperial' });
+    expect(settings.get('theme')).toBe('vermilion');
+    expect(settings.get('units')).toBe('imperial');
+  });
+
   it('keeps a fresh P2P opt-in after reload', async () => {
     installStorage();
     const first = await import('../src/core/settings');

@@ -2,6 +2,7 @@
 import i18next from 'i18next';
 import { get, resolvedLanguage, set } from './settings';
 import { emit } from './events';
+import { THEME_DEFINITIONS } from './themeRegistry';
 
 const zh = {
   app: {
@@ -734,7 +735,11 @@ const zh = {
     mapGroup: '地图与服务', dataGroup: '数据管理', shareGroup: '分享应用', installGroup: '安装与快捷打开', debugGroup: '调试', aboutGroup: '关于',
     langNote: '界面语言与服务环境相互独立',
     region: '服务环境（双区）', units: '单位制', metric: '公制', imperial: '英制',
-    theme: '主题', themeDark: '深色', themeLight: '浅色', themeContrast: '阳光高对比', themeMatrix: '矩阵',
+    theme: '主题', themeDark: THEME_DEFINITIONS.dark.labels.zh, themeLight: THEME_DEFINITIONS.light.labels.zh,
+    themeContrast: THEME_DEFINITIONS.contrast.labels.zh, themeMatrix: THEME_DEFINITIONS.matrix.labels.zh,
+    themeNeon: THEME_DEFINITIONS.neon.labels.zh, themeStarship: THEME_DEFINITIONS.starship.labels.zh,
+    themeAurora: THEME_DEFINITIONS.aurora.labels.zh, themeAmber: THEME_DEFINITIONS.amber.labels.zh,
+    themeDeepsea: THEME_DEFINITIONS.deepsea.labels.zh, themeVermilion: THEME_DEFINITIONS.vermilion.labels.zh,
     themeAuto: '自动', themeAutoHint: '按参考地日出日落自动切换：日出后浅色、日落后深色',
     activity: '默认活动类型', speedDisplay: '速度/配速显示',
     activityAuto: '自动识别',
@@ -1562,7 +1567,11 @@ const en = {
     mapGroup: 'Maps & services', dataGroup: 'Data', shareGroup: 'Spread the word', installGroup: 'Install & quick access', debugGroup: 'Debug', aboutGroup: 'About',
     langNote: 'UI language is independent from service region',
     region: 'Service region (dual)', units: 'Units', metric: 'Metric', imperial: 'Imperial',
-    theme: 'Theme', themeDark: 'Dark', themeLight: 'Light', themeContrast: 'Sunlight contrast', themeMatrix: 'Matrix',
+    theme: 'Theme', themeDark: THEME_DEFINITIONS.dark.labels.en, themeLight: THEME_DEFINITIONS.light.labels.en,
+    themeContrast: THEME_DEFINITIONS.contrast.labels.en, themeMatrix: THEME_DEFINITIONS.matrix.labels.en,
+    themeNeon: THEME_DEFINITIONS.neon.labels.en, themeStarship: THEME_DEFINITIONS.starship.labels.en,
+    themeAurora: THEME_DEFINITIONS.aurora.labels.en, themeAmber: THEME_DEFINITIONS.amber.labels.en,
+    themeDeepsea: THEME_DEFINITIONS.deepsea.labels.en, themeVermilion: THEME_DEFINITIONS.vermilion.labels.en,
     themeAuto: 'Auto', themeAutoHint: 'Follows local sunrise & sunset: light by day, dark after sunset',
     activity: 'Default activity', speedDisplay: 'Speed / pace display',
     activityAuto: 'Auto-detect',

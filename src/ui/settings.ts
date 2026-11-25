@@ -15,6 +15,7 @@ import { setLanguage, currentLang } from '../core/i18n';
 import { generatePromo, nextVariant } from '../core/promo';
 import { setRewalkVoice } from '../core/rewalk';
 import { APP_VERSION } from '../core/version';
+import { THEME_OPTIONS } from '../core/themeRegistry';
 import { exportImage } from '../core/shareEnv';
 import { openInstallGuide, installSettingsInfo } from './install';
 import { el, icon, toast, confirmModal, filePicker, modal } from './helpers';
@@ -39,8 +40,8 @@ export function createSettingsView(navigate) {
       el('div', { class: 'settings-collapse-body' }, ...rows));
     return { details, open: () => { details.open = true; } };
   }
-  function segRow(label, options, current, onPick, note = '') {
-    const toggle = el('div', { class: 'seg-toggle' });
+  function segRow(label, options, current, onPick, note = '', className = '') {
+    const toggle = el('div', { class: `seg-toggle${className ? ` ${className}` : ''}` });
     for (const [val, txt] of options) {
       const b = el('button', { class: val === current ? 'active' : '' }, txt);
       b.onclick = () => {
@@ -130,9 +131,8 @@ export function createSettingsView(navigate) {
       ['auto', t('settings.langAuto')], ['zh', t('settings.langZh')], ['en', t('settings.langEn')]
     ], get('language'), (v) => setLanguage(v), t('settings.langNote')),
     segRow(t('settings.units'), [['metric', t('settings.metric')], ['imperial', t('settings.imperial')]], get('units'), (v) => set('units', v)),
-    segRow(t('settings.theme'), [
-      ['auto', t('settings.themeAuto')], ['dark', t('settings.themeDark')], ['light', t('settings.themeLight')], ['contrast', t('settings.themeContrast')], ['matrix', t('settings.themeMatrix')]
-    ], get('theme'), (v) => set('theme', v), t('settings.themeAutoHint'))
+    segRow(t('settings.theme'), THEME_OPTIONS.map((option) => [option.id, t(option.labelKey)]),
+      get('theme'), (v) => set('theme', v), t('settings.themeAutoHint'), 'theme-toggle')
   );
 
   // ---- recording ----

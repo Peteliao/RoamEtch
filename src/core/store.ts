@@ -33,13 +33,19 @@ export async function createTrip({ name, activity = 'hike', status = 'recording'
 export const getTrip = (id) => db.trips.get(id);
 export const listTrips = () => db.trips.orderBy('updatedAt').reverse().toArray();
 export async function updateTrip(id, patch, { touch = true }: { touch?: boolean } = {}) {
-  const current = patch.activity != null ? await db.trips.get(id) : null;
-  const clearReported = current?.reportedDistance != null && current.activity !== patch.activity;
-  await db.trips.update(id, {
-    ...patch,
-    ...(clearReported ? { reportedDistance: null } : {}),
-    ...(touch ? { updatedAt: Date.now() } : {})
-  });
+  const write = async () => {
+    const current = patch.activity != null ? await db.trips.get(id) : null;
+    const activityChanged = current && current.activity !== patch.activity;
+    await db.trips.update(id, {
+      ...patch,
+      ...(activityChanged ? { statsCache: null, reportedDistance: null } : {}),
+      ...(touch ? { updatedAt: Date.now() } : {})
+    });
+  };
+  // Read and invalidate in one transaction so no reader can observe a new
+  // activity paired with statistics or a reported distance from the old one.
+  if (patch.activity != null) await db.transaction('rw', db.trips, write);
+  else await write();
 }
 export async function deleteTrip(id) {
   await db.transaction('rw', [db.trips, db.segments, db.trackChunks, db.waypoints, db.media, db.shareImports], async () => {

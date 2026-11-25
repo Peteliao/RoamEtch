@@ -12,9 +12,8 @@ import { tripTimeInfo, routePlaceNames } from './shareInfo';
 import { WP_ICONS } from './waypointMeta';
 import { SITE_URL, drawQr } from './brand';
 import { paletteFor } from './palette';
+import { CONCRETE_THEME_IDS, HTML_THEME_CYCLE, htmlCssVars, themeDefinition } from './themeRegistry';
 import { VIEWER_CSS, VIEWER_JS } from './htmlExportViewer';
-
-const THEMES = ['dark', 'light', 'contrast', 'matrix'];
 
 export const HTML_TIERS = {
   clear: { tol: 3, points: 2_000, waypoints: 30, photos: 12, budget: 680_000 },
@@ -32,37 +31,8 @@ function esc(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function hexA(hex, a) {
-  const n = parseInt(String(hex).replace('#', ''), 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
-}
-
 function cssVars(theme) {
-  const p = paletteFor(theme);
-  const matrix = theme === 'matrix';
-  const dark = theme === 'dark' || matrix;
-  return {
-    'color-scheme': dark ? 'dark' : 'light',
-    '--bg': p.vectorBg,
-    '--panel': p.panel,
-    '--text': p.text,
-    '--muted': p.muted,
-    '--faint': p.faint,
-    '--accent': p.accent,
-    '--accent-soft': p.accentSoft,
-    '--accent-ink': dark ? (matrix ? '#002b16' : '#06251d') : '#ffffff',
-    '--amber': p.amber,
-    '--chip': p.cellBg,
-    '--border': matrix ? 'rgba(57,255,136,.18)' : theme === 'contrast' ? '#000000' : theme === 'light' ? 'rgba(24,37,31,.13)' : 'rgba(255,255,255,.14)',
-    '--border2': matrix ? 'rgba(57,255,136,.34)' : theme === 'contrast' ? '#000000' : theme === 'light' ? 'rgba(24,37,31,.22)' : 'rgba(255,255,255,.24)',
-    '--glass': matrix ? 'rgba(2,8,5,.94)' : theme === 'contrast' ? 'rgba(255,255,255,.97)' : hexA(p.panel, theme === 'light' ? 0.9 : 0.86),
-    '--sheet': p.panel,
-    '--shadow': matrix
-      ? '0 20px 50px rgba(0,0,0,.62),0 0 32px rgba(57,255,136,.09)'
-      : theme === 'contrast'
-        ? '0 18px 44px rgba(0,0,0,.22)'
-        : theme === 'light' ? '0 20px 50px rgba(24,37,31,.18)' : '0 20px 50px rgba(0,0,0,.42)'
-  };
+  return htmlCssVars(theme);
 }
 
 function styleAttr(vars) {
@@ -71,7 +41,7 @@ function styleAttr(vars) {
 
 function canvasPalettes() {
   const out = {};
-  for (const th of THEMES) {
+  for (const th of CONCRETE_THEME_IDS) {
     const p = paletteFor(th);
     out[th] = {
       bg: p.vectorBg,
@@ -339,7 +309,8 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
     altUnit: fmtAltitude(0, units).u,
     labels,
     palettes: canvasPalettes(),
-    css: Object.fromEntries(THEMES.map((th) => [th, cssVars(th)]))
+    css: Object.fromEntries(CONCRETE_THEME_IDS.map((th) => [th, cssVars(th)])),
+    themeCycle: HTML_THEME_CYCLE
   };
   const json = JSON.stringify(data).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 
@@ -378,7 +349,7 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
     </div>
   </div>`;
   const initialVars = cssVars(initialTheme);
-  const initialPal = paletteFor(initialTheme);
+  const initialPal = themeDefinition(initialTheme).palette;
 
   const html = `<!doctype html>
 <html lang="${lang}" data-theme="${initialTheme}" style="${styleAttr(initialVars)}">

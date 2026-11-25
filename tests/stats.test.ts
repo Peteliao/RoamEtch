@@ -35,6 +35,22 @@ describe('trip statistics', () => {
     expect(stats.series.alt[0]).toBe(100);
   });
 
+  it('re-derives distance and calories when switching between drive and hike', () => {
+    const points = [
+      { lat: 30, lon: 120, alt: 100, t: 0 },
+      { lat: 30.0008, lon: 120, alt: 100, t: 60_000 },
+      { lat: 30.0048, lon: 120, alt: 100, t: 120_000 }
+    ];
+    const drive = computeStats(track(points), { activity: 'drive', weightKg: 70 });
+    const hike = computeStats(track(points), { activity: 'hike', weightKg: 70 });
+
+    expect(drive.calories).toBeNull();
+    expect(hike.calories).toBeGreaterThan(0);
+    expect(drive.distance).toBeGreaterThan(hike.distance);
+    expect(drive.movingMs).toBeGreaterThan(hike.movingMs);
+    expect(hike.distance).toBeGreaterThan(0);
+  });
+
   it('honours a larger hysteresis threshold', () => {
     const points = [
       { lat: 30, lon: 120, alt: 100, t: 0 },

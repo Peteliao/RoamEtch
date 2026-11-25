@@ -96,6 +96,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       onVertexInsert: (segId, idx, lon, lat) => insertVertex(segId, idx, lon, lat),
       onVertexDelete: (segId, idx) => deleteVertex(segId, idx)
     }).init(center, zoom);
+    map.observeViewportInset(controls);
     syncPowerLockEntry();
     return map;
   }
@@ -253,6 +254,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   function togglePanel() {
     panel.classList.toggle('collapsed');
     set('panelCollapsed', panel.classList.contains('collapsed'));
+    map?.updateViewportInset();
   }
   const compact = el('div', { class: 'lp-compact' });
   function metric(key, hero = false) {
@@ -324,8 +326,29 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
 
   const altTag = el('span', { class: 'tag', hidden: true });
   cAlt.v.append(altTag);
+  function clearLivePanel() {
+    for (const item of [cDist, cDur, cSpeed, cAvg, cCal, cAlt, cAsc, cDesc]) {
+      item.num.textContent = '--';
+      item.unit.textContent = '';
+    }
+    cSpeed.k.textContent = t(speedMode() === 'pace' ? 'panel.pace' : 'panel.speed');
+    panelSignal.bars.className = 'sig-bars lv0';
+    panelSignal.text.textContent = '--';
+    cSig.k.textContent = t('panel.signal');
+    altTag.hidden = true;
+    altTag.className = 'tag';
+    altTag.textContent = '';
+    detailSlots.forEach((slot) => {
+      slot.textContent = '';
+      slot.hidden = true;
+      slot.classList.remove('lp-coords');
+    });
+  }
   function renderPanel(L) {
-    if (!L) return;
+    if (!L || rec.live !== L || (rec.status !== 'recording' && rec.status !== 'paused')) {
+      clearLivePanel();
+      return;
+    }
     const units = get('units');
     const d = fmtDistance(L.distance, units);
     cDist.num.textContent = d.v;
@@ -802,6 +825,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     stopBtn.hidden = !active;
     stopBtn.disabled = !!stopFlowPromise;
     actRow.hidden = !active;
+    if (!active) clearLivePanel();
     if (active) liveActSel.value = liveActivity;
     renderAutoTag();
     renderStatus();
@@ -1547,7 +1571,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     liveActivity = (await getTrip(rec.tripId))?.activity || get('activity');
     renderButtons(); renderBanners(); renderPanel(rec.live);
   });
-  on('recorder:stopped', () => { renderButtons(); renderBanners(); });
+  on('recorder:stopped', () => { clearLivePanel(); renderButtons(); renderBanners(); });
   on('recorder:busy', () => { readOnly = true; renderBanners(); toast(t('record.tabLocked'), 'warn', 4000); });
   const offBroadcast = onBroadcast((msg) => {
     if (msg.type === 'rec-state') {

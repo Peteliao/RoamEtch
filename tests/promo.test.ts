@@ -105,7 +105,7 @@ describe('promo variants', () => {
       callback(new Blob(['png'], { type: 'image/png' }));
     });
 
-    const themes = ['dark', 'light', 'contrast', 'matrix'];
+    const themes = ['dark', 'light', 'contrast', 'matrix', 'neon', 'starship', 'aurora', 'amber', 'deepsea', 'vermilion'];
     for (let variant = 0; variant < promo.PROMO_VARIANT_COUNT; variant++) {
       mocks.theme = themes[variant % themes.length];
       const result = await promo.generatePromo(variant);

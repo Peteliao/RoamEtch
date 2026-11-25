@@ -436,7 +436,7 @@ function acceptPoint(fix, now, acc, fixSpeed, activity, dist = 0, dt = 0, implie
       if (res.alt == null) return;
       point.alt = res.alt; point.altSrc = res.src;
       if (point._flushed) patchFlushedAlt(point);
-      else {
+      else if (rec.live === L && (rec.status === 'recording' || rec.status === 'paused')) {
         if (altSmooth == null) altSmooth = res.alt;
         L.alt = res.alt; L.altSrc = res.src;
         emit('recorder:tick', { live: L });

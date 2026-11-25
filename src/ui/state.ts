@@ -52,7 +52,7 @@ export async function setActiveTrip(id, { fit = false } = {}) {
   return full;
 }
 
-export async function refreshActiveTrip(id = appState.activeTripId) {
+export async function refreshActiveTrip(id = appState.activeTripId, { recalc = true }: { recalc?: boolean } = {}) {
   if (!id) return null;
   // Recording edits can refresh their own trip without changing the selected trip.
   if (id !== appState.activeTripId) return loadTripFull(id);
@@ -60,9 +60,14 @@ export async function refreshActiveTrip(id = appState.activeTripId) {
   statsRequest++;
   const full = await loadTripFull(id);
   if (request !== activeTripRequest || appState.activeTripId !== id) return null;
+  if (appState.activeTripFull?.trip.activity !== full.trip.activity) appState.stats = null;
   appState.activeTripFull = full;
   emit('trip:active', full);
-  scheduleRecalc();
+  if (recalc) scheduleRecalc();
+  else if (recalcTimer) {
+    clearTimeout(recalcTimer);
+    recalcTimer = null;
+  }
   return full;
 }
 
@@ -72,6 +77,8 @@ export function scheduleRecalc() {
 }
 
 export async function recalcNow() {
+  if (recalcTimer) clearTimeout(recalcTimer);
+  recalcTimer = null;
   const request = ++statsRequest;
   const full = appState.activeTripFull;
   if (!full) return null;

@@ -1,5 +1,6 @@
 // App settings persisted in localStorage. Language / units / region are fully decoupled.
 import { emit } from './events';
+import { isThemeMode } from './themeRegistry';
 
 const KEY = 'localtrace.settings.v1';
 
@@ -15,7 +16,7 @@ const DEFAULTS = {
   language: 'auto',            // auto | zh | en   (UI language, independent of region)
   regionMode: 'auto',          // auto | cn | global  (manual override wins)
   units: 'metric',             // metric | imperial
-  theme: 'dark',               // dark | light | contrast | matrix
+  theme: 'dark',               // auto or any stable id in themeRegistry
   activity: 'auto',            // auto | hike | drive | bike | run | travel
   speedDisplay: 'auto',        // auto | speed | pace
   recordQuality: 'balanced',   // high | balanced | low
@@ -90,6 +91,7 @@ function load() {
     cache = parsed
       ? { ...DEFAULTS, ...parsed, sim: { ...DEFAULTS.sim, ...(parsed.sim || {}) } }
       : { ...DEFAULTS, sim: { ...DEFAULTS.sim } };
+    if (!isThemeMode(cache.theme)) cache.theme = DEFAULTS.theme;
   } catch {
     cache = { ...DEFAULTS, sim: { ...DEFAULTS.sim } };
   }
@@ -100,6 +102,7 @@ export function getSettings() { return load(); }
 export function get(key) { return load()[key]; }
 
 export function set(key, value) {
+  if (key === 'theme' && !isThemeMode(value)) return;
   const s = load();
   s[key] = value;
   persist(s);
@@ -114,6 +117,10 @@ export function resetSettings() {
 }
 
 export function patch(obj) {
+  if ('theme' in obj && !isThemeMode(obj.theme)) {
+    const { theme: _invalidTheme, ...valid } = obj;
+    obj = valid;
+  }
   const s = load();
   Object.assign(s, obj);
   persist(s);

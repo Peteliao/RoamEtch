@@ -5,6 +5,7 @@ import { drawBrandMark, drawQr, loadBrandFonts, SITE_URL, SPORT_FONT } from './b
 import { fitText, roundRectPath } from './tripScore';
 import { t } from './i18n';
 import { effectiveTheme } from './theme';
+import { paintThemeBackground } from './themeRegistry';
 import { APP_VERSION } from './version';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
@@ -89,80 +90,8 @@ function drawHeroCopy(ctx: CanvasRenderingContext2D, P, highContrast: boolean, c
   }
 }
 
-function drawBackground(ctx: CanvasRenderingContext2D, P, highContrast: boolean, matrix = false) {
-  const glow = (cx: number, cy: number, r: number, color: string, a: number) => {
-    const rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    rg.addColorStop(0, rgba(color, a));
-    rg.addColorStop(1, rgba(color, 0));
-    ctx.fillStyle = rg;
-    ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
-  };
-
-  if (highContrast) {
-    ctx.fillStyle = P.panel;
-    ctx.fillRect(0, 0, W, H);
-    const wash = ctx.createLinearGradient(0, 0, W, 640);
-    wash.addColorStop(0, rgba(P.accent, 0.075));
-    wash.addColorStop(0.55, rgba(P.accent, 0.018));
-    wash.addColorStop(1, rgba(P.accent, 0));
-    ctx.fillStyle = wash;
-    ctx.fillRect(0, 0, W, 640);
-    glow(W * 0.08, H * 0.92, 420, P.amber, 0.045);
-    return;
-  }
-
-  if (matrix) {
-    ctx.fillStyle = P.vectorBg;
-    ctx.fillRect(0, 0, W, H);
-    glow(W * 0.86, 110, 600, P.accent, 0.18);
-    glow(W * 0.08, H * 0.92, 460, P.accent, 0.06);
-    ctx.strokeStyle = P.grid;
-    ctx.lineWidth = 1;
-    for (let x = 0; x <= W; x += 60) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
-    }
-    for (let y = 0; y <= H; y += 60) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
-    }
-    const glyphs = 'アイウエオカキクケコサシスセソタチツテト0123456789';
-    ctx.font = `600 16px ${MONO}`;
-    ctx.fillStyle = rgba(P.accent, 0.11);
-    for (let col = 0; col < 17; col++) {
-      const x = 38 + col * 61;
-      const start = (col * 83) % 210;
-      for (let row = 0; row < 27; row++) {
-        const y = start + row * 52;
-        if (y > H + 16) break;
-        ctx.fillText(glyphs[(row * 7 + col * 3) % glyphs.length], x, y);
-      }
-    }
-    ctx.fillStyle = rgba(P.panel, 0.34);
-    for (let y = 0; y < H; y += 8) ctx.fillRect(0, y, W, 1);
-    ctx.strokeStyle = P.accentLine;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(24, 24, W - 48, H - 48);
-    return;
-  }
-
-  const g = ctx.createLinearGradient(0, 0, W, H);
-  g.addColorStop(0, P.panel);
-  g.addColorStop(0.55, P.vectorBg);
-  g.addColorStop(1, P.panel);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, W, H);
-
-  const dark = P.panel !== '#ffffff';
-  glow(W * 0.88, 110, 560, P.accent, dark ? 0.17 : 0.1);
-  glow(W * 0.06, H * 0.93, 420, P.amber, dark ? 0.08 : 0.06);
-
-  ctx.strokeStyle = P.grid;
-  ctx.lineWidth = 1;
-  for (let x = 0; x <= W; x += 120) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, H);
-    ctx.stroke();
-  }
+function drawBackground(ctx: CanvasRenderingContext2D, _P, _highContrast: boolean, theme: string) {
+  paintThemeBackground(ctx, W, H, theme);
 }
 
 function drawHeader(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
@@ -1332,8 +1261,8 @@ export function promoCaption(variant = 0): string {
 export async function generatePromo(variant = pickPromoVariant()): Promise<{ blob: Blob; filename: string; variant: number; caption: string }> {
   await loadBrandFonts();
   const P = canvasPalette();
-  const highContrast = effectiveTheme() === 'contrast';
-  const matrix = effectiveTheme() === 'matrix';
+  const theme = effectiveTheme();
+  const highContrast = theme === 'contrast';
   const canvas = document.createElement('canvas');
   canvas.width = W;
   canvas.height = H;
@@ -1341,7 +1270,7 @@ export async function generatePromo(variant = pickPromoVariant()): Promise<{ blo
   if (!ctx) throw new Error('Canvas 2D unavailable');
   const v = normalizeVariant(variant);
 
-  drawBackground(ctx, P, highContrast, matrix);
+  drawBackground(ctx, P, highContrast, theme);
   drawHeader(ctx, P, highContrast);
 
   const heroKeys = [

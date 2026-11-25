@@ -130,6 +130,7 @@ export function createMeetView(navigate) {
       fallbackText: t('map.fallback'),
       onMeetPeerClick: (id) => flyPeer(id)
     }).init(center, snap.active && snap.self?.hasFix ? 14 : (regionState.effective === 'cn' ? 9 : 3));
+    map.observeViewportInset(panel);
     map.map?.once('load', maybeAutoFit);
     return map;
   }
@@ -1133,6 +1134,7 @@ export function createMeetView(navigate) {
       panel.classList.remove('show');
       panelFoot.innerHTML = '';
       panelBody.innerHTML = '';
+      map?.updateViewportInset();
       return;
     }
     panel.classList.add('show');
@@ -1179,6 +1181,7 @@ export function createMeetView(navigate) {
     }
     panelBody.scrollTop = scrollTop;
     renderFoot(s);
+    map?.updateViewportInset();
   }
 
   function renderFoot(s) {
@@ -1282,6 +1285,7 @@ export function createMeetView(navigate) {
     panelCollapsed = !panelCollapsed;
     panel.classList.toggle('collapsed', panelCollapsed);
     panelHead.setAttribute('aria-expanded', panelCollapsed ? 'false' : 'true');
+    map?.updateViewportInset();
   }
 
   function toggleFollow() {

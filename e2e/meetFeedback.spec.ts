@@ -64,6 +64,22 @@ test('remote chat feedback and proximity map visuals work in the browser', async
       await fitted;
     });
     expect(await map.evaluate(() => window.__lt.shell.getViews().meet.getMap()._meetAutoZoomReady)).toBe(true);
+    await page.locator('.meet-panel .mp-head').click();
+    await expect.poll(() => map.evaluate(() => window.__lt.shell.getViews().meet.getMap().map.getPadding().bottom > 150)).toBe(true);
+    const viewport = await map.evaluate(() => {
+      const track = window.__lt.shell.getViews().meet.getMap();
+      const point = track.map.project(track.posMarker.getLngLat());
+      const mapRect = track.container.getBoundingClientRect();
+      const panelRect = document.querySelector('.meet-panel').getBoundingClientRect();
+      return {
+        markerY: point.y,
+        visibleCenterY: (mapRect.height - track.map.getPadding().bottom) / 2,
+        measuredInset: mapRect.bottom - panelRect.top,
+        padding: track.map.getPadding().bottom
+      };
+    });
+    expect(Math.abs(viewport.markerY - viewport.visibleCenterY)).toBeLessThan(3);
+    expect(Math.abs(viewport.measuredInset - viewport.padding)).toBeLessThan(2);
 
     await map.evaluate(() => {
       const track = window.__lt.shell.getViews().meet.getMap();
@@ -74,6 +90,20 @@ test('remote chat feedback and proximity map visuals work in the browser', async
     });
     await expect.poll(() => map.evaluate(() => Number.isFinite(window.__lt.shell.getViews().meet.getMap()._meetLastDistance))).toBe(true);
     await expect.poll(() => map.evaluate(() => window.__lt.shell.getViews().meet.getMap().map.isMoving())).toBe(false);
+    const groupCenter = await map.evaluate(() => {
+      const track = window.__lt.shell.getViews().meet.getMap();
+      const markers = [track.posMarker, ...[...track.meetMarkers.values()].map((entry) => entry.marker)];
+      const points = markers.map((marker) => track.map.project(marker.getLngLat()));
+      const padding = track.map.getPadding();
+      return {
+        x: (Math.min(...points.map((point) => point.x)) + Math.max(...points.map((point) => point.x))) / 2,
+        y: (Math.min(...points.map((point) => point.y)) + Math.max(...points.map((point) => point.y))) / 2,
+        visibleX: (track.container.clientWidth - padding.left - padding.right) / 2 + padding.left,
+        visibleY: (track.container.clientHeight - padding.bottom) / 2
+      };
+    });
+    expect(Math.abs(groupCenter.x - groupCenter.visibleX)).toBeLessThan(3);
+    expect(Math.abs(groupCenter.y - groupCenter.visibleY)).toBeLessThan(3);
     const farZoom = await map.evaluate(() => window.__lt.shell.getViews().meet.getMap().map.getZoom());
     const colors = await map.evaluate(() => {
       const track = window.__lt.shell.getViews().meet.getMap();

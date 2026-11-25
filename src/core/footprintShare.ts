@@ -10,6 +10,7 @@ import { get } from './settings';
 import { createMusicSession } from './music';
 import { makeVideoRecorder, videoSupported } from './videoCapture';
 import { prepareMap } from './mapPaint';
+import { paintThemeBackground } from './themeRegistry';
 import { MUSIC_PREF_RANDOM } from './music';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
@@ -47,100 +48,8 @@ export function footprintCaption(fp, units = get('units')) {
   });
 }
 
-function drawBackground(ctx: CanvasRenderingContext2D, P, highContrast: boolean, w: number, h: number, phase = 0, matrix = false) {
-  if (highContrast) {
-    ctx.fillStyle = P.panel;
-    ctx.fillRect(0, 0, w, h);
-    const wash = ctx.createLinearGradient(0, 0, w, h * 0.55);
-    wash.addColorStop(0, rgba(P.accent, 0.08));
-    wash.addColorStop(1, rgba(P.accent, 0));
-    ctx.fillStyle = wash;
-    ctx.fillRect(0, 0, w, h * 0.55);
-    ctx.strokeStyle = rgba(P.text, 0.1);
-    ctx.lineWidth = 1;
-    for (let y = 150; y < h; y += 96) {
-      ctx.beginPath();
-      ctx.moveTo(M, y);
-      ctx.lineTo(w - M, y);
-      ctx.stroke();
-    }
-    return;
-  }
-
-  if (matrix) {
-    ctx.fillStyle = P.vectorBg;
-    ctx.fillRect(0, 0, w, h);
-    const wash = ctx.createRadialGradient(w * 0.88, 110, 0, w * 0.88, 110, 640);
-    wash.addColorStop(0, rgba(P.accent, 0.18));
-    wash.addColorStop(1, rgba(P.accent, 0));
-    ctx.fillStyle = wash;
-    ctx.fillRect(0, 0, w, 760);
-    ctx.strokeStyle = P.grid;
-    ctx.lineWidth = 1;
-    for (let x = 24; x < w; x += 72) {
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
-    }
-    for (let y = 24; y < h; y += 72) {
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-    }
-    for (let col = 0; col < Math.ceil(w / 96); col++) {
-      const x = col * 96 + 16;
-      const drift = Math.sin(phase + col * 1.7) * 40;
-      const rain = ctx.createLinearGradient(0, drift - 420, 0, drift + 620);
-      rain.addColorStop(0, rgba(P.accent, 0));
-      rain.addColorStop(0.72, rgba(P.accent, 0.09));
-      rain.addColorStop(1, rgba(P.accent, 0));
-      ctx.fillStyle = rain;
-      ctx.fillRect(x, drift - 420, 2, 1040);
-    }
-    ctx.fillStyle = rgba(P.panel, 0.34);
-    for (let y = 0; y < h; y += 8) ctx.fillRect(0, y, w, 1);
-    ctx.strokeStyle = P.accentLine;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(24, 24, w - 48, h - 48);
-    return;
-  }
-
-  const g = ctx.createLinearGradient(0, 0, w * 0.8, h);
-  g.addColorStop(0, P.panel);
-  g.addColorStop(0.58, P.vectorBg);
-  g.addColorStop(1, P.panel);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, h);
-
-  const dark = P.panel !== '#ffffff';
-  const glow = (cx, cy, rad, color, alpha) => {
-    const rg = ctx.createRadialGradient(cx, cy, 0, cx, cy, rad);
-    rg.addColorStop(0, rgba(color, alpha));
-    rg.addColorStop(1, rgba(color, 0));
-    ctx.fillStyle = rg;
-    ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
-  };
-  glow(w * 0.9 + Math.sin(phase) * 30, 120, 560, P.accent, dark ? 0.18 : 0.1);
-  glow(w * 0.04, h * 0.86, 480, P.amber, dark ? 0.07 : 0.05);
-
-  ctx.strokeStyle = highContrast ? rgba(P.text, 0.12) : P.grid;
-  ctx.lineWidth = 1;
-  const step = 132;
-  for (let x = M; x <= w - M; x += step) {
-    ctx.beginPath();
-    ctx.moveTo(x, 170);
-    ctx.lineTo(x, h - 170);
-    ctx.stroke();
-  }
-  ctx.strokeStyle = rgba(P.accent, dark ? 0.08 : 0.07);
-  ctx.lineWidth = 1.5;
-  for (const [cx, cy, rx, ry, rot] of [
-    [w * 0.84, 420, 230, 110, -0.24],
-    [w * 0.14, h * 0.66, 190, 90, 0.3],
-    [w * 0.76, h * 0.9, 250, 120, 0.12]
-  ]) {
-    for (const k of [1, 0.68, 0.38]) {
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, rx * k, ry * k, rot, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-  }
+function drawBackground(ctx: CanvasRenderingContext2D, _P, _highContrast: boolean, w: number, h: number, phase = 0, theme = 'dark') {
+  paintThemeBackground(ctx, w, h, theme, phase);
 }
 
 function drawHeader(ctx: CanvasRenderingContext2D, P, highContrast: boolean, year: number) {
@@ -231,6 +140,7 @@ function drawKpiCard(ctx: CanvasRenderingContext2D, P, highContrast: boolean, r,
     [`${r.distance.v}${r.distance.u}`, t('analysis.distance')],
     [String(r.trips), t('trips.sumTrips')],
     [String(r.days), t('trips.sumDays')],
+    [String(r.cityCount), t('trips.footprintCityMap')],
     [`${r.ascent.v}${r.ascent.u}`, t('analysis.ascent')]
   ];
   const cw = w / cells.length;
@@ -280,8 +190,10 @@ function drawMonthCard(ctx: CanvasRenderingContext2D, P, highContrast: boolean, 
   ctx.fillText(t('trips.footprintActive', { n: r.activeMonths }), x + w - 38, y + 50);
 
   const left = x + 42, right = x + w - 42;
-  const baseY = y + h - 72;
-  const maxBarH = h - 165;
+  // Reserve a separate summary row below the month labels instead of letting
+  // their descenders collide when both image and video use the same helper.
+  const baseY = y + h - 94;
+  const maxBarH = h - 187;
   const gap = Math.max(8, Math.round((right - left) * 0.012));
   const bw = (right - left - gap * 11) / 12;
   const revealBars = clamp01((reveal - 0.12) / 0.88);
@@ -334,47 +246,47 @@ function drawMonthCard(ctx: CanvasRenderingContext2D, P, highContrast: boolean, 
 }
 
 function drawFooter(ctx: CanvasRenderingContext2D, P, highContrast: boolean, x, y, w, qrSize) {
+  const inset = highContrast ? 22 : 0;
+  const footerH = qrSize + (highContrast ? 38 : 56);
+  const privacyY = y + footerH - 14;
+  const brandY = privacyY - 26;
+  const urlY = brandY - 29;
+  const ctaY = urlY - 31;
+  const tx = x + inset + qrSize + (highContrast ? 28 : 30);
+  const right = x + w - inset;
+  const textWidth = right - tx;
+
   if (highContrast) {
-    roundRectPath(ctx, x, y, w, qrSize + 38, 22);
+    roundRectPath(ctx, x, y, w, footerH, 22);
     ctx.fillStyle = P.accent;
     ctx.fill();
-    drawQr(ctx, SITE_URL, x + 22, y + 19, qrSize);
-    const tx = x + 22 + qrSize + 28;
-    ctx.textAlign = 'left';
-    ctx.fillStyle = P.panel;
-    ctx.font = `800 31px ${FONT}`;
-    ctx.fillText(t('trips.footprintCta'), tx, y + 66);
-    ctx.font = `600 23px ${SPORT_FONT}`;
-    ctx.fillText(SITE_URL, tx, y + 106);
-    ctx.font = `500 19px ${FONT}`;
-    ctx.fillText(t('app.brandLine'), tx, y + 140);
-    return;
+    drawQr(ctx, SITE_URL, x + inset, y + 19, qrSize);
+  } else {
+    const line = ctx.createLinearGradient(x, 0, x + w, 0);
+    line.addColorStop(0, rgba(P.accent, 0.55));
+    line.addColorStop(1, rgba(P.accent, 0));
+    ctx.fillStyle = line;
+    ctx.fillRect(x, y - 18, w, 1.5);
+    drawQr(ctx, SITE_URL, x, y, qrSize);
   }
 
-  const line = ctx.createLinearGradient(x, 0, x + w, 0);
-  line.addColorStop(0, rgba(P.accent, 0.55));
-  line.addColorStop(1, rgba(P.accent, 0));
-  ctx.fillStyle = line;
-  ctx.fillRect(x, y - 18, w, 1.5);
-  drawQr(ctx, SITE_URL, x, y, qrSize);
-  const tx = x + qrSize + 30;
   ctx.textAlign = 'left';
-  ctx.fillStyle = P.text;
+  ctx.fillStyle = highContrast ? P.panel : P.text;
   ctx.font = `800 31px ${FONT}`;
-  ctx.fillText(t('trips.footprintCta'), tx, y + 47);
-  ctx.fillStyle = P.accent;
+  ctx.fillText(fitText(ctx, t('trips.footprintCta'), textWidth), tx, ctaY);
+  ctx.fillStyle = highContrast ? P.panel : P.accent;
   ctx.font = `600 23px ${SPORT_FONT}`;
-  ctx.fillText(SITE_URL, tx, y + 87);
-  ctx.fillStyle = P.muted;
+  ctx.fillText(SITE_URL, tx, urlY);
+  ctx.fillStyle = highContrast ? P.panel : P.muted;
   ctx.font = `500 19px ${FONT}`;
-  ctx.fillText(t('app.brandLine'), tx, y + 121);
-}
+  ctx.fillText(fitText(ctx, t('app.brandLine'), textWidth), tx, brandY);
 
-function drawPrivacy(ctx: CanvasRenderingContext2D, P, w, y) {
-  ctx.textAlign = 'center';
-  ctx.fillStyle = P.faint;
+  // Keep the privacy promise in the footer's text column, above the card or
+  // Matrix frame border, rather than in a separate full-width overlay.
+  ctx.fillStyle = highContrast ? P.panel : P.muted;
   ctx.font = `500 18px ${FONT}`;
-  ctx.fillText(t('trips.footprintPrivacy'), w / 2, y);
+  ctx.textAlign = 'right';
+  ctx.fillText(fitText(ctx, t('trips.footprintPrivacy'), textWidth), right, privacyY);
 }
 
 async function prepareFootprintMap(fp, w, h) {
@@ -460,17 +372,16 @@ function drawCityMap(ctx, fp, P, highContrast, map, x, y, w, h, reveal = 1, elap
   ctx.restore();
 }
 
-function drawImageScene(ctx, fp, P, highContrast, cityMap, matrix = false) {
+function drawImageScene(ctx, fp, P, highContrast, cityMap, theme = 'dark') {
   const lang = currentLang();
   const r = recapFootprint(fp, get('units'));
-  drawBackground(ctx, P, highContrast, IMG_W, IMG_H, 0, matrix);
+  drawBackground(ctx, P, highContrast, IMG_W, IMG_H, 0, theme);
   drawHeader(ctx, P, highContrast, r.year);
   drawHero(ctx, P, highContrast, r, 214);
   drawKpiCard(ctx, P, highContrast, r, M, 506, IMG_W - M * 2, 184);
   drawCityMap(ctx, fp, P, highContrast, cityMap, M, 722, IMG_W - M * 2, 390, 1);
   drawMonthCard(ctx, P, highContrast, fp, r, M, 1132, IMG_W - M * 2, 290, 1, lang);
   drawFooter(ctx, P, highContrast, M, 1432, IMG_W - M * 2, 100);
-  drawPrivacy(ctx, P, IMG_W, 1604);
 }
 
 export async function generateFootprintImage(fp): Promise<{ blob: Blob; filename: string }> {
@@ -481,21 +392,21 @@ export async function generateFootprintImage(fp): Promise<{ blob: Blob; filename
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D unavailable');
   const cityMap = await prepareFootprintMap(fp, IMG_W - M * 2, 390);
-  const matrix = effectiveTheme() === 'matrix';
-  drawImageScene(ctx, fp, canvasPalette(), effectiveTheme() === 'contrast', cityMap, matrix);
+  const theme = effectiveTheme();
+  drawImageScene(ctx, fp, canvasPalette(), theme === 'contrast', cityMap, theme);
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG encode failed'))), 'image/png');
   });
   return { blob, filename: `roametch-footprint-${fp.year}-${Date.now()}.png` };
 }
 
-function drawVideoScene(ctx, fp, P, highContrast, elapsedMs, cityMap, matrix = false) {
+function drawVideoScene(ctx, fp, P, highContrast, elapsedMs, cityMap, theme = 'dark') {
   const u = clamp01(elapsedMs / VIDEO_MS);
   const intro = easeOut(Math.min(1, elapsedMs / 800));
   const counters = easeOut(Math.max(0, (elapsedMs - 500) / 3600));
   const lang = currentLang();
   const r = recapFootprint(fp, get('units'));
-  drawBackground(ctx, P, highContrast, VID_W, VID_H, elapsedMs / 1200, matrix);
+  drawBackground(ctx, P, highContrast, VID_W, VID_H, elapsedMs / 1200, theme);
   drawHeader(ctx, P, highContrast, r.year);
   drawHero(ctx, P, highContrast, r, 272, intro);
 
@@ -510,7 +421,8 @@ function drawVideoScene(ctx, fp, P, highContrast, elapsedMs, cityMap, matrix = f
       return a;
     })(),
     trips: Math.round(r.trips * counters),
-    days: Math.round(r.days * counters)
+    days: Math.round(r.days * counters),
+    cityCount: Math.round(r.cityCount * counters)
   };
   drawKpiCard(ctx, P, highContrast, counted, M, 650, VID_W - M * 2, 226, easeOut(Math.min(1, Math.max(0, (elapsedMs - 300) / 700))));
   drawCityMap(ctx, fp, P, highContrast, cityMap, M, 910, VID_W - M * 2, 380, easeOut(Math.max(0, (elapsedMs - 500) / 1200)), elapsedMs);
@@ -520,7 +432,6 @@ function drawVideoScene(ctx, fp, P, highContrast, elapsedMs, cityMap, matrix = f
   ctx.save();
   ctx.globalAlpha = footerA;
   drawFooter(ctx, P, highContrast, M, 1620, VID_W - M * 2, 150);
-  drawPrivacy(ctx, P, VID_W, 1830);
   ctx.restore();
 
   if (u < 0.12) {
@@ -548,8 +459,8 @@ export async function generateFootprintVideo(fp, { music = MUSIC_PREF_RANDOM, si
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     onProgress?.(0.05);
     const P = canvasPalette();
-    const highContrast = effectiveTheme() === 'contrast';
-    const matrix = effectiveTheme() === 'matrix';
+    const theme = effectiveTheme();
+    const highContrast = theme === 'contrast';
     const canvas = document.createElement('canvas');
     canvas.width = VID_W;
     canvas.height = VID_H;
@@ -576,7 +487,7 @@ export async function generateFootprintVideo(fp, { music = MUSIC_PREF_RANDOM, si
     signal?.addEventListener('abort', abort, { once: true });
     rec.start(250);
 
-    drawVideoScene(ctx, fp, P, highContrast, VIDEO_MS, cityMap, matrix);
+    drawVideoScene(ctx, fp, P, highContrast, VIDEO_MS, cityMap, theme);
     let cover = '';
     try { cover = canvas.toDataURL('image/jpeg', 0.82); } catch { /* ignore encode failure */ }
 
@@ -585,7 +496,7 @@ export async function generateFootprintVideo(fp, { music = MUSIC_PREF_RANDOM, si
       const step = (now) => {
         if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
         const elapsed = now - t0;
-        drawVideoScene(ctx, fp, P, highContrast, Math.min(VIDEO_MS, elapsed), cityMap, matrix);
+        drawVideoScene(ctx, fp, P, highContrast, Math.min(VIDEO_MS, elapsed), cityMap, theme);
         onProgress?.(0.05 + 0.95 * Math.min(1, elapsed / VIDEO_MS));
         if (elapsed >= VIDEO_MS) { resolve(); return; }
         requestAnimationFrame(step);

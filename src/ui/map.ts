@@ -65,6 +65,10 @@ export class TrackMap {
   declare _meetLastDistance: number;
   declare _meetLastSelf: { lat: number; lon: number } | null;
   declare _meetCameraAnimating: boolean;
+  declare _viewportOverlay: HTMLElement | null;
+  declare _viewportObserver: ResizeObserver | null;
+  declare _viewportFrame: number;
+  declare _viewportBottom: number;
 
   constructor(container, opts = {}) {
     this.container = container;
@@ -100,6 +104,10 @@ export class TrackMap {
     this._meetLastDistance = Number.NaN;
     this._meetLastSelf = null;
     this._meetCameraAnimating = false;
+    this._viewportOverlay = null;
+    this._viewportObserver = null;
+    this._viewportFrame = 0;
+    this._viewportBottom = 0;
   }
 
   init(center = [116.4, 39.9], zoom = 10) {
@@ -183,6 +191,42 @@ export class TrackMap {
     return this;
   }
 
+  observeViewportInset(overlay: HTMLElement | null) {
+    this._viewportObserver?.disconnect();
+    this._viewportOverlay = overlay;
+    if (!overlay || typeof ResizeObserver === 'undefined') {
+      this.setViewportInset(0);
+      return;
+    }
+    const schedule = () => {
+      cancelAnimationFrame(this._viewportFrame);
+      this._viewportFrame = requestAnimationFrame(() => this.updateViewportInset());
+    };
+    this._viewportObserver = new ResizeObserver(schedule);
+    this._viewportObserver.observe(overlay);
+    this._viewportObserver.observe(this.container);
+    schedule();
+  }
+
+  updateViewportInset() {
+    const overlay = this._viewportOverlay;
+    if (!this.map || this.destroyed || !overlay) return;
+    const style = getComputedStyle(overlay);
+    const visible = style.display !== 'none' && style.visibility !== 'hidden' && overlay.getClientRects().length > 0;
+    const bottom = visible
+      ? Math.max(0, this.container.getBoundingClientRect().bottom - overlay.getBoundingClientRect().top)
+      : 0;
+    this.setViewportInset(bottom);
+  }
+
+  setViewportInset(bottom: number) {
+    if (!this.map || this.destroyed) return;
+    const value = Math.max(0, Math.round(bottom));
+    if (value === this._viewportBottom) return;
+    this._viewportBottom = value;
+    this.map.setPadding({ top: 0, right: 0, bottom: value, left: 0 });
+  }
+
   // Basemap tiles stay full-color in every theme; track, gaps and background follow it.
   _applyTheme() {
     const m = this.map;
@@ -195,6 +239,7 @@ export class TrackMap {
       set('gap-line', 'line-color', cssVar('--track-gap', '#93a1ac'));
       set('track-casing', 'line-color', cssVar('--track-casing', '#06251d'));
       set('live-casing', 'line-color', cssVar('--track-casing', '#06251d'));
+      set('meet-route-case', 'line-color', cssVar('--track-casing', '#06251d'));
       set('track-line', 'line-color', accent);
       set('live-line', 'line-color', accent);
       set('nav-line', 'line-color', cssVar('--warn', '#f2b14a'));
@@ -685,7 +730,10 @@ export class TrackMap {
     this._meetAutoZoomReady = true;
     this._meetCameraAnimating = true;
     this.map.once('moveend', () => { this._meetCameraAnimating = false; });
-    this.map.fitBounds([[minLon, minLat], [maxLon, maxLat]], { padding, duration: 650, maxZoom: 16 });
+    this.map.fitBounds([[minLon, minLat], [maxLon, maxLat]], {
+      padding: { top: padding, right: padding, bottom: padding + this._viewportBottom, left: padding },
+      duration: 650, maxZoom: 16
+    });
   }
 
   // ---------- re-walk approach guide ----------
@@ -817,7 +865,10 @@ export class TrackMap {
       if (lat > maxLat) maxLat = lat;
     }
     this.follow = false;
-    this.map.fitBounds([[minLon, minLat], [maxLon, maxLat]], { padding, duration: 600, maxZoom: 17 });
+    this.map.fitBounds([[minLon, minLat], [maxLon, maxLat]], {
+      padding: { top: padding, right: padding, bottom: padding + this._viewportBottom, left: padding },
+      duration: 600, maxZoom: 17
+    });
   }
 
   setFollow(on) {
@@ -856,7 +907,10 @@ export class TrackMap {
   clearHover() { this.hoverMarker?.remove(); this.hoverMarker = null; }
 
   getCanvas() { return this.map.getCanvas(); }
-  resize() { this.map?.resize(); }
+  resize() {
+    this.map?.resize();
+    this.updateViewportInset();
+  }
 
   pauseRendering() {
     const m = this.map;
@@ -883,6 +937,10 @@ export class TrackMap {
 
   destroy() {
     this.destroyed = true;
+    this._viewportObserver?.disconnect();
+    this._viewportObserver = null;
+    this._viewportOverlay = null;
+    cancelAnimationFrame(this._viewportFrame);
     this._offRegion?.();
     this._offProbe?.();
     if (this._onOnline) window.removeEventListener('online', this._onOnline);

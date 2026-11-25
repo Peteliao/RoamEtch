@@ -31,7 +31,7 @@ test('Matrix persists across reload and wraps cleanly on narrow screens', async 
   });
   expect(styles).toEqual({ bg: '#000300', accent: '#39ff88' });
   const toggle = matrix.locator('..');
-  await expect(toggle.locator('button')).toHaveCount(5);
+  await expect(toggle.locator('button')).toHaveCount(11);
   const boxes = await toggle.locator('button').evaluateAll((buttons) => buttons.map((button) => {
     const rect = button.getBoundingClientRect();
     return { left: rect.left, right: rect.right, width: rect.width };
@@ -146,7 +146,7 @@ test('Matrix reaches promo, poster, footprint and standalone HTML exports', asyn
       html: {
         initial: html.html.includes('data-theme="matrix"'),
         palette: html.html.includes('"matrix":'),
-        cycle: html.html.includes("['dark','light','contrast','matrix']"),
+        cycle: html.html.includes('"themeCycle":["dark","light","contrast","matrix","neon","starship","aurora","amber","deepsea","vermilion"]'),
         scanlines: html.html.includes('html[data-theme="matrix"] body::after')
       }
     };

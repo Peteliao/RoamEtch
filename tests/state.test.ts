@@ -21,7 +21,7 @@ vi.mock('../src/core/settings', () => ({
 vi.mock('../src/core/events', () => ({ emit: mocks.emit }));
 vi.mock('../src/core/elevation', () => ({ backfillTripAltitudes: mocks.backfillTripAltitudes }));
 
-import { appState, isTripSectionActive, recalcNow, refreshActiveTrip, setActiveTrip } from '../src/ui/state';
+import { appState, isTripSectionActive, recalcNow, refreshActiveTrip, scheduleRecalc, setActiveTrip } from '../src/ui/state';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -29,9 +29,9 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function full(id: string, name: string) {
+function full(id: string, name: string, activity = 'hike', reportedDistance: number | null = null) {
   return {
-    trip: { id, name, activity: 'hike', reportedDistance: null },
+    trip: { id, name, activity, reportedDistance, statsCache: null },
     segments: [{ id: `${id}-segment`, points: [] }],
     waypoints: [],
     media: []
@@ -110,6 +110,49 @@ describe('active trip snapshots', () => {
     expect(appState.activeTripFull?.trip.name).toBe('Edited snapshot');
     expect(mocks.emit).toHaveBeenCalledTimes(1);
     expect(mocks.emit).toHaveBeenCalledWith('trip:active', expect.objectContaining({ trip: expect.objectContaining({ name: 'Edited snapshot' }) }));
+  });
+
+  it('refreshes an unchanged activity without replacing statistics or scheduling recalculation', async () => {
+    appState.activeTripId = 'a';
+    appState.activeTripFull = full('a', 'Before');
+    const cached = { distance: 12, calories: 34 };
+    appState.stats = cached;
+    scheduleRecalc();
+    mocks.loadTripFull.mockResolvedValueOnce(full('a', 'After'));
+
+    await expect(refreshActiveTrip('a', { recalc: false })).resolves.toMatchObject({ trip: { name: 'After' } });
+    await vi.advanceTimersByTimeAsync(350);
+
+    expect(appState.stats).toBe(cached);
+    expect(mocks.computeStatsAsync).not.toHaveBeenCalled();
+    expect(mocks.updateTrip).not.toHaveBeenCalled();
+    expect(mocks.emit).toHaveBeenCalledWith('trip:active', expect.objectContaining({ trip: expect.objectContaining({ name: 'After' }) }));
+  });
+
+  it('drops stale in-memory statistics before publishing a changed activity', async () => {
+    appState.activeTripId = 'a';
+    appState.activeTripFull = full('a', 'Before', 'drive');
+    appState.stats = { distance: 500, calories: null };
+    const next = full('a', 'After', 'hike');
+    next.trip.statsCache = null;
+    mocks.loadTripFull.mockResolvedValueOnce(next);
+
+    await refreshActiveTrip('a', { recalc: false });
+
+    expect(appState.stats).toBeNull();
+    expect(mocks.emit).toHaveBeenCalledWith('trip:active', next);
+    expect(mocks.computeStatsAsync).not.toHaveBeenCalled();
+  });
+
+  it('cancels a pending debounce when an activity edit recalculates immediately', async () => {
+    appState.activeTripId = 'a';
+    appState.activeTripFull = full('a', 'Trip', 'hike');
+    scheduleRecalc();
+
+    await recalcNow();
+    await vi.advanceTimersByTimeAsync(350);
+
+    expect(mocks.computeStatsAsync).toHaveBeenCalledTimes(1);
   });
 
   it('can load a recording trip without disturbing the selected trip', async () => {

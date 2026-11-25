@@ -2,10 +2,12 @@
 // stats synced to the playback position. Rendered in realtime on an offscreen
 // canvas and captured via captureStream + MediaRecorder (mp4 when available).
 import { applyPrivacy } from './privacy';
+import { effectiveTheme } from './theme';
 import { computeStats } from './stats';
 import { prepareMap, paintTrack } from './mapPaint';
 import { computeTripScore, drawScoreBadge, fitText, roundRectPath } from './tripScore';
 import { canvasPalette } from './palette';
+import { paintThemeBackground } from './themeRegistry';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine } from './geo';
 import { loadBrandFonts, drawQr, SITE_URL, SPORT_FONT } from './brand';
 import { tripTimeInfo, routePlaceNames } from './shareInfo';
@@ -173,6 +175,7 @@ export async function generateTrackVideo(full, {
   const score = computeTripScore(stats, full.trip.activity);
   const time = tripTimeInfo(full);
   const P = canvasPalette();
+  const theme = effectiveTheme();
   await loadBrandFonts();
 
   let lastProg = 0;
@@ -487,8 +490,7 @@ export async function generateTrackVideo(full, {
   // Promo/QR lives in the outro instead, so the video opens on the trip itself.
   function drawIntro(p) {
     const ease = 1 - Math.pow(1 - Math.max(0, Math.min(1, p)), 3);
-    ctx.fillStyle = P.panel;
-    ctx.fillRect(0, 0, W, H);
+    paintThemeBackground(ctx, W, H, theme);
     const glow = ctx.createRadialGradient(W / 2, 800, 40, W / 2, 800, 760);
     glow.addColorStop(0, P.accentSoft);
     glow.addColorStop(1, 'rgba(0,0,0,0)');
@@ -609,8 +611,7 @@ export async function generateTrackVideo(full, {
     if (alpha <= 0) return;
     ctx.save();
     ctx.globalAlpha = Math.min(1, alpha);
-    ctx.fillStyle = P.panel;
-    ctx.fillRect(0, 0, W, H);
+    paintThemeBackground(ctx, W, H, theme);
     ctx.textAlign = 'center';
     ctx.fillStyle = P.accent;
     ctx.font = `700 44px ${SPORT_FONT}`;

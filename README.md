@@ -37,7 +37,7 @@
     <td align="center"><img src="docs/screenshots/zh/share.png" width="280" alt="分享与导出：隐私圈、海报、视频、GPX 与网页"><br><sub><b>分享与隐私</b> · 隐私圈裁剪、海报视频、GPX/网页导出</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/screenshots/zh/settings.png" width="280" alt="设置：中英双语、公制英制、深色浅色与高对比主题"><br><sub><b>个性化</b> · 中英双语、单位制、OLED 友好主题</sub></td>
+    <td align="center"><img src="docs/screenshots/zh/settings.png" width="280" alt="设置：中英双语、公制英制与多套个性化主题"><br><sub><b>个性化</b> · 中英双语、单位制、OLED 友好主题</sub></td>
     <td align="center"><img src="docs/screenshots/zh/install.png" width="280" alt="安装引导：iPhone Safari 添加到主屏幕"><br><sub><b>安装到桌面</b> · iOS / Android / 桌面逐步引导</sub></td>
   </tr>
 </table>
@@ -124,7 +124,7 @@
 
 ### 主题与语言
 
-- 深色（OLED 友好纯黑）、浅色、阳光高对比与黑客帝国「矩阵」主题；矩阵采用终端字体、荧光绿、网格、扫描线与低透明度数字雨，支持减少动态效果，并在 OLED 口袋锁下自动关闭全部装饰；自动模式仍只按日出日落切换浅色与深色。
+- 深色（OLED 友好纯黑）、浅色、烈日、矩阵，以及霓虹、星舰、极光、琥珀、深海、朱砂主题；各主题统一覆盖界面、地图控件与分享导出，支持减少动态效果，并在 OLED 口袋锁下自动关闭全部装饰；自动模式仍只按日出日落切换浅色与深色。
 - 简体中文与 English 界面，支持公制/英制；语言与服务环境相互独立，出国使用不会被强制切换地图。
 
 ## 安装到手机桌面

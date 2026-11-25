@@ -7,6 +7,7 @@ import { availableBasemaps, defaultBasemapId, expandTiles } from './providers';
 import { toDisplay } from './coords';
 import { canvasPalette } from './palette';
 import { effectiveTheme } from './theme';
+import { paintThemeBackground, themeDefinition } from './themeRegistry';
 
 const TILE = 256;
 const MAX_LAT = 85.05112878;
@@ -93,13 +94,7 @@ function fillUrl(tpl, z, x, y) {
 }
 
 export function paintVectorBackground(ctx, w, h) {
-  const P = canvasPalette();
-  ctx.fillStyle = P.vectorBg;
-  ctx.fillRect(0, 0, w, h);
-  ctx.strokeStyle = P.grid;
-  ctx.lineWidth = 1;
-  for (let x = 0; x < w; x += 64) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
-  for (let y = 0; y < h; y += 64) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+  paintThemeBackground(ctx, w, h, effectiveTheme());
 }
 
 /** Average perceived luminance of the finished basemap (0..1), null if unreadable. */
@@ -149,7 +144,7 @@ export async function prepareMap({
   const ctx = bg.getContext('2d');
   const label = provider?.id || 'vector';
   const P = canvasPalette();
-  const vectorKey = `vector|${w}x${h}|${P.vectorBg}|${P.grid}`;
+  const vectorKey = `vector|${w}x${h}|${themeDefinition(effectiveTheme()).effect}|${P.vectorBg}|${P.grid}`;
 
   if (!provider || !fit) {
     const hit = cacheGet(vectorKey);
@@ -233,8 +228,10 @@ export function paintTrack(ctx, fit, segments, waypoints, {
 } = {}) {
   if (!fit) return;
   const P = canvasPalette();
-  const matrix = effectiveTheme() === 'matrix';
-  const bright = darkBg && !matrix;
+  const theme = effectiveTheme();
+  // Preserve the original dark/light satellite treatment and Matrix behavior;
+  // identity themes always use their own LUT instead of the shared bright ramp.
+  const bright = darkBg && (theme === 'dark' || theme === 'light');
   const stops = bright ? BRIGHT_STOPS : P.lut;
   const halo = bright ? 'rgba(0,0,0,0.40)' : P.trackHalo;
   const casing = bright ? 'rgba(4,16,24,0.74)' : P.trackCasing;
