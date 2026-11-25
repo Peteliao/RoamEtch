@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initI18n, setLanguage, t } from '../src/core/i18n';
 import { set } from '../src/core/settings';
 import { loadTripFull } from '../src/core/store';
-import { feedFix, startRewalk, stopRewalk } from '../src/core/rewalk';
+import { feedFix, getRewalkNavigation, markExternalNavigation, startRewalk, stopRewalk } from '../src/core/rewalk';
 
 vi.mock('../src/core/store', () => ({ loadTripFull: vi.fn() }));
 vi.mock('../src/core/recorder', () => ({ rec: { status: 'idle' } }));
@@ -98,5 +98,37 @@ describe('re-walk TTS wording', () => {
     feedFix(points[0].lat, points[0].lon);
     feedFix(points[2].lat, points[2].lon);
     expect(voiceTexts().at(-1)).toBe('This walk is complete. You have reached the end.');
+  });
+
+  it('offers driving navigation for a distant approach without repeating local guidance', async () => {
+    expect(await startRewalk('trip-1', 'full-fwd')).toBe(true);
+    feedFix(31, 121);
+    const nav = getRewalkNavigation('web');
+    expect(nav?.provider).toBe('amap');
+    expect(nav?.mode).toBe('driving');
+    expect(nav?.distanceM).toBeGreaterThan(100_000);
+    const count = voiceTexts().length;
+    feedFix(31.0001, 121.0001);
+    expect(voiceTexts()).toHaveLength(count);
+  });
+
+  it('announces distance and compass direction for a nearby approach', async () => {
+    expect(await startRewalk('trip-1', 'full-fwd')).toBe(true);
+    feedFix(30.0089, 120.0005);
+    expect(voiceTexts().at(-1)).toContain('向南前往起点');
+    feedFix(30.004, 120.002);
+    expect(voiceTexts().at(-1)).toContain('向西南前往起点');
+    expect(voiceTexts().at(-1)).toMatch(/前方\d/);
+  });
+
+  it('suppresses local voice after external navigation starts and resumes on the track', async () => {
+    expect(await startRewalk('trip-1', 'full-fwd')).toBe(true);
+    feedFix(31, 121);
+    expect(markExternalNavigation()).toBe(true);
+    const count = voiceTexts().length;
+    feedFix(30.02, 120);
+    expect(voiceTexts()).toHaveLength(count);
+    feedFix(points[0].lat, points[0].lon);
+    expect(voiceTexts().slice(count)).toContain('已回到路线，开始沿轨迹行进。');
   });
 });

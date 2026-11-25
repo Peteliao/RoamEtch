@@ -91,8 +91,7 @@ async function dragCameraRail(page: Page, distance: number) {
 }
 
 async function enterOledLock(page: Page) {
-  await page.locator('.iconbtn[title="地图工具"]').click();
-  await page.locator('.sheet-row').filter({ hasText: 'OLED 口袋锁' }).click();
+  await page.locator('.power-lock-entry').click();
   await expect(page.locator('#oled-dash.active')).toBeVisible();
   await expect(page.locator('.ps-cam-act')).toBeVisible();
 }

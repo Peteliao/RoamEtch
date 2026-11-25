@@ -508,6 +508,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   background: var(--bg-elev); border-color: var(--border); box-shadow: var(--shadow-1);
 }
 .map-tools .iconbtn.active { color: var(--accent); border-color: var(--accent); }
+.map-tools .iconbtn:disabled { opacity: .42; cursor: not-allowed; box-shadow: none; }
+.map-tools .power-lock-entry { color: var(--accent); }
 
 .rec-controls {
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 12;

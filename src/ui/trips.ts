@@ -287,8 +287,8 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   const footprintMapBox = el('div', { class: 'footprint-map', 'aria-label': t('trips.footprintCityMap') });
   const footprintMapStatus = el('div', { class: 'footprint-map-status' });
   const footprintBody = el('div', {});
-  const footprintToggle = el('button', { class: 'footprint-toggle' });
-  const footprintContent = el('div', { class: 'footprint-content' });
+  const footprintToggle = el('button', { type: 'button', class: 'footprint-toggle', 'aria-controls': 'yearly-footprint-content' });
+  const footprintContent = el('div', { class: 'footprint-content', id: 'yearly-footprint-content' });
   footprintToggle.onclick = () => { footprintExpanded = !footprintExpanded; renderFootprint(); };
   footprintContent.append(footprintBody);
   const footprintCard = el('div', { class: 'card footprint-card' }, footprintToggle, footprintContent);
@@ -329,7 +329,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   }
   const storageBar = el('div', { class: 'small faint', style: { marginTop: '14px', textAlign: 'center' } });
   const listBox = el('div', {});
-  scroll.append(header, searchBar, toolbar, listBox, summary, nudge, iosNudge, footprintCard, storageBar);
+  scroll.append(header, footprintCard, searchBar, toolbar, listBox, summary, nudge, iosNudge, storageBar);
 
   function thumbSVG(points) {
     if (!points || points.length < 2) return '<svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="4" fill="var(--text-faint)"/></svg>';
@@ -638,7 +638,9 @@ export function createTripsView(navigate, getRecordMap = () => null) {
         el('span', {}, `${baseFp.trips} ${t('trips.sumTrips')} · ${baseDistance.v}${baseDistance.u}`)),
       icon(footprintExpanded ? 'chevron' : 'chevronRight', 16));
     footprintToggle.setAttribute('aria-expanded', String(footprintExpanded));
+    footprintContent.hidden = !footprintExpanded;
     footprintContent.style.display = footprintExpanded ? '' : 'none';
+    footprintCard.classList.toggle('expanded', footprintExpanded);
     footprintCard.style.display = '';
     if (!footprintExpanded) return;
     const trips = yearTrips(baseFp.year);

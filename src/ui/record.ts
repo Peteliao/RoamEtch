@@ -13,9 +13,11 @@ import { estimateCalories } from '../core/calories';
 import { altSourceShortKey, altSourceTagClass } from '../core/elevation';
 import { loadTripFull, updateTrip, getTrip, addPhotoWaypoint, deletePhotoWaypoint } from '../core/store';
 import { onBroadcast } from '../core/locks';
+import { clearHistory } from '../core/history';
 import { TrackMap } from './map';
 import { WP_ICONS } from '../core/waypointMeta';
-import { rewalk, stopRewalk, toggleMute, startSim, stopSim } from '../core/rewalk';
+import { rewalk, stopRewalk, toggleMute, startSim, stopSim, getRewalkNavigation, markExternalNavigation, EXTERNAL_NAV_MIN_M } from '../core/rewalk';
+import type { NavigationPlatform } from '../core/navigation';
 import { appState, setActiveTrip, refreshActiveTrip } from './state';
 import { openWaypointModal, moveWaypoint, moveVertex, insertVertex, deleteVertex, undoEdit, redoEdit, histState } from './editor';
 import { el, icon, toast, modal, hasOpenOverlay } from './helpers';
@@ -68,6 +70,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   document.addEventListener('click', swallowUnlockGhostClick, true);
   let oledThemeActive = false;
   let viewingTrip = null;
+  let viewingTripEditable = false;
   let recoverable = null;
   let readOnly = false;
 
@@ -80,9 +83,15 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     const { center, zoom } = initialCenter();
     map = new TrackMap(mapContainer, {
       fallbackText: t('map.fallback'),
-      onWaypointClick: (wp) => openWaypointModal(wp, recEditOpts()),
+      onWaypointClick: (wp) => {
+        if (wp.tripId && (!appState.editMode || !canEditMap())) {
+          toast(t('record.editTripOnly'), 'warn');
+          return;
+        }
+        openWaypointModal(wp, recEditOpts());
+      },
       onWaypointMove: (wp, lon, lat) => moveWaypoint(wp, lon, lat),
-      onMapClick: (lon, lat) => { if (appState.editMode && appState.activeTripId) openWaypointModal({ lat, lon }); },
+      onMapClick: (lon, lat) => { if (appState.editMode && canEditMap() && appState.activeTripId) openWaypointModal({ lat, lon }); },
       onVertexMove: (segId, idx, lon, lat) => moveVertex(segId, idx, lon, lat),
       onVertexInsert: (segId, idx, lon, lat) => insertVertex(segId, idx, lon, lat),
       onVertexDelete: (segId, idx) => deleteVertex(segId, idx)
@@ -156,17 +165,12 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     }
   }, icon('follow'));
   const fitBtn = el('button', { class: 'iconbtn', title: t('record.fit'), onclick: () => map.fitTrack() }, icon('fit'));
-  const undoBtn = el('button', { class: 'iconbtn', title: t('edit.undo'), onclick: undoEdit, style: { display: 'none' } }, icon('undo'));
-  const redoBtn = el('button', { class: 'iconbtn', title: t('edit.redo'), onclick: redoEdit, style: { display: 'none' } }, icon('redo'));
-  const moreBtn = el('button', { class: 'iconbtn', title: t('record.moreTools'), onclick: openMoreSheet }, icon('more'));
+  const undoBtn = el('button', { type: 'button', class: 'iconbtn', title: t('edit.undo'), 'aria-label': t('edit.undo'), onclick: undoEdit, style: { display: 'none' } }, icon('undo'));
+  const redoBtn = el('button', { type: 'button', class: 'iconbtn', title: t('edit.redo'), 'aria-label': t('edit.redo'), onclick: redoEdit, style: { display: 'none' } }, icon('redo'));
+  const moreBtn = el('button', { type: 'button', class: 'iconbtn', title: t('record.moreTools'), onclick: openMoreSheet }, icon('more'));
   tools.append(followBtn, fitBtn, undoBtn, redoBtn, moreBtn);
   on('map:followoff', () => followBtn.classList.remove('active'));
-  on('history:changed', (s) => {
-    undoBtn.style.display = appState.editMode ? '' : 'none';
-    redoBtn.style.display = appState.editMode ? '' : 'none';
-    undoBtn.disabled = !s.canUndo;
-    redoBtn.disabled = !s.canRedo;
-  });
+  on('history:changed', syncEditTools);
 
   function canEnterPowerLock() {
     return !!map && !map.destroyed && !powerLockBusy && !powerLockExitPromise
@@ -187,7 +191,6 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   }
 
   function openMoreSheet() {
-    const canEdit = rec.status !== 'recording';
     let m;
     const close = (fn) => { m.close(); fn(); };
     const row = (opts) => el('button', { class: 'sheet-row' + (opts.active ? ' active' : '') + (opts.danger ? ' danger' : ''), disabled: opts.disabled, onclick: opts.onclick },
@@ -196,26 +199,45 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       opts.active ? el('span', { class: 's-check' }, icon('check', 18)) : null);
     const body = el('div', { class: 'sheet-list' },
       row({
-        iconKey: 'edit', title: t('record.editMode'), desc: t('record.editHint'),
-        active: appState.editMode, disabled: !canEdit,
+        iconKey: 'edit', title: t('record.editMode'),
+        desc: t(canEditMap() ? 'record.editHint' : 'record.editTripOnly'),
+        active: appState.editMode, disabled: !canEditMap(),
         onclick: () => close(() => toggleEdit())
-      }),
-      row({
-        iconKey: 'powerlock', title: t('record.powerLock'), desc: t('record.powerLockHint'),
-        disabled: !canEnterPowerLock(), onclick: () => close(enterPowerLock)
       })
     );
     m = modal({ title: t('record.moreTools'), body });
   }
 
+  function canEditMap() {
+    const trip = viewingTrip?.trip;
+    return viewingTripEditable && trip?.status === 'finished'
+      && appState.activeTripId === trip.id && appState.view === 'record'
+      && rec.status !== 'recording' && rec.status !== 'paused'
+      && !rewalk.active && !psActive && !readOnly;
+  }
+  function leaveEditMode() {
+    if (!appState.editMode) return;
+    appState.editMode = false;
+    map?.setEditMode(false);
+    moreBtn.classList.remove('active');
+    undoBtn.style.display = 'none';
+    redoBtn.style.display = 'none';
+  }
+  function syncEditTools() {
+    if (appState.editMode && !canEditMap()) leaveEditMode();
+    const visible = appState.editMode && canEditMap();
+    undoBtn.style.display = visible ? '' : 'none';
+    redoBtn.style.display = visible ? '' : 'none';
+    const history = histState();
+    undoBtn.disabled = !history.canUndo;
+    redoBtn.disabled = !history.canRedo;
+  }
   function toggleEdit() {
-    if (rec.status === 'recording') { toast(t('record.statusRecording'), 'warn'); return; }
-    if (!appState.activeTripId) { toast(t('analysis.noTrip'), 'warn'); return; }
+    if (!canEditMap()) { toast(t('record.editTripOnly'), 'warn'); return; }
     appState.editMode = !appState.editMode;
     map.setEditMode(appState.editMode);
     moreBtn.classList.toggle('active', appState.editMode);
-    undoBtn.style.display = appState.editMode ? '' : 'none';
-    redoBtn.style.display = appState.editMode ? '' : 'none';
+    syncEditTools();
     if (appState.editMode) toast(t('record.editModeOn'), 'info', 3500);
   }
 
@@ -232,11 +254,11 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   powerLockEntry = el('button', {
     type: 'button', class: 'power-lock-entry iconbtn', disabled: true,
     'aria-label': t('record.powerLock'), title: t('record.powerLock'),
-    style: { width: '44px', height: '44px' },
     onclick: (e) => { e.stopPropagation(); enterPowerLock(); }
   }, icon('powerlock', 18));
+  tools.insertBefore(powerLockEntry, moreBtn);
   const pHead = el('div', { class: 'lp-head', onclick: togglePanel },
-    pStatus, pSave, powerLockEntry, el('span', { class: 'rec-dot', id: 'panel-rec-dot' }), el('span', { class: 'chev' }, icon('chevron', 16)));
+    pStatus, pSave, el('span', { class: 'rec-dot', id: 'panel-rec-dot' }), el('span', { class: 'chev' }, icon('chevron', 16)));
   function togglePanel() {
     panel.classList.toggle('collapsed');
     set('panelCollapsed', panel.classList.contains('collapsed'));
@@ -466,20 +488,58 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   const rwFollow = el('button', { class: 'btn sm active', onclick: () => { rwFollowOn = !rwFollowOn; rwFollow.classList.toggle('active', rwFollowOn); } }, icon('follow', 14), t('record.follow'));
   const rwMute = el('button', { class: 'btn sm', onclick: () => toggleMute() }, t('rewalk.mute'));
   const rwSim = el('button', { class: 'btn sm', onclick: () => (rewalk.sim ? stopSim() : startSim()) }, t('rewalk.simWalk'));
+  const rwNavigate = el('button', { class: 'btn sm primary', style: { display: 'none' }, onclick: openExternalNavigation }, icon('flag', 14), t('rewalk.navigateTarget', { target: t('wp.types.start') }));
   const rwExit = el('button', { class: 'btn sm danger', onclick: () => { stopRewalk(); toast(t('rewalk.exited'), 'info', 2000); } }, icon('x', 14), t('rewalk.exit'));
   rewalkBox.append(
     el('div', { class: 'row rw-head', style: { alignItems: 'center', gap: '8px' } }, rwName, rwPhase, rwPct),
     el('div', { class: 'rw-bar' }, rwBarFill),
     el('div', { class: 'rw-stats small' }, el('span', {}, rwLeftK, ' ', rwLeft), rwDir, rwOff),
     rwNext,
-    el('div', { class: 'row wrap', style: { gap: '8px', marginTop: '8px' } }, rwFollow, rwMute, rwSim, rwExit)
+    el('div', { class: 'row wrap', style: { gap: '8px', marginTop: '8px' } }, rwFollow, rwNavigate, rwMute, rwSim, rwExit)
   );
+  function navigationPlatform(): NavigationPlatform {
+    return /iPhone|iPad|iPod/i.test(navigator.userAgent) ? 'ios'
+      : /Android/i.test(navigator.userAgent) ? 'android' : 'web';
+  }
+  function openExternalNavigation() {
+    const nav = getRewalkNavigation(navigationPlatform());
+    if (!nav) { toast(t('rewalk.navOpenFailed'), 'warn'); return; }
+    const target = targetLabel(rewalk.navTargetType || rewalk.targetType);
+    const provider = nav.provider === 'amap' ? 'Amap' : 'Google Maps';
+    let dialog;
+    dialog = modal({
+      title: t('rewalk.navDialogTitle'),
+      body: el('p', { class: 'small muted', style: { marginTop: 0 } },
+        t('rewalk.navDialogBody', { provider, target })),
+      footer: [
+        el('button', { class: 'btn ghost', onclick: () => dialog.close() }, t('common.cancel')),
+        el('button', { class: 'btn primary', onclick: () => {
+          dialog.close();
+          let opened = false;
+          try {
+            const child = window.open(nav.primary, '_blank');
+            opened = !!child;
+            if (child) child.opener = null;
+          } catch { /* external navigation unavailable */ }
+          if (!opened) {
+            try { window.location.assign(nav.fallback); }
+            catch { toast(t('rewalk.navOpenFailed'), 'warn'); return; }
+          }
+          if (markExternalNavigation()) toast(t('rewalk.navOpened'), 'ok', 3500);
+        } }, icon('flag', 15), t('rewalk.navConfirm'))
+      ]
+    });
+  }
   function targetLabel(type) {
     return t(type === 'start' ? 'wp.types.start' : 'wp.types.end');
   }
   function updateRewalk(f) {
     const phase = f.phase || 'follow';
     const done = phase === 'finished' || f.finished;
+    const canNavigate = phase === 'approach' && !done && !f.externalNav
+      && (f.navDist ?? 0) >= EXTERNAL_NAV_MIN_M;
+    rwNavigate.style.display = canNavigate ? '' : 'none';
+    rwNavigate.replaceChildren(icon('flag', 14), t('rewalk.navigateTarget', { target: targetLabel(f.navTargetType || f.targetType) }));
     rwPhase.textContent = t(done ? 'rewalk.phaseDone'
       : phase === 'locating' ? 'rewalk.phaseLocating'
         : phase === 'approach' ? 'rewalk.phaseApproach'
@@ -507,7 +567,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       rwDir.style.display = '';
       const rel = (f.navBearing ?? 0) - (f.heading ?? 0);
       rwDir.style.transform = `rotate(${rel - 90}deg)`;
-      rwNext.textContent = `${t('rewalk.target')} ${target}`;
+      rwNext.textContent = f.externalNav ? t('rewalk.externalGuide') : `${t('rewalk.target')} ${target}`;
       return;
     }
     rwDir.style.display = 'none';
@@ -547,10 +607,12 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       offTrack: rewalk.offTrack, nextWp: null, finished: rewalk.finished,
       phase: rewalk.phase, mode: rewalk.mode, targetType: rewalk.targetType,
       navTargetType: rewalk.navTargetType,
-      navDist, navBearing, heading: null
+      navDist, navBearing, heading: null, externalNav: rewalk.externalNav
     });
   }
   on('rewalk:started', ({ segments, waypoints }) => {
+    leaveEditMode();
+    viewingTripEditable = false;
     viewingTrip = null;
     renderViewBar();
     if (map && !psActive) {
@@ -585,12 +647,14 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   });
   on('rewalk:mute', () => renderRewalk());
   on('rewalk:sim', () => renderRewalk());
+  on('rewalk:navigation', () => renderRewalk());
   on('rewalk:geoerror', ({ code }) => toast(geoErrorMsg(code), 'warn', 4500));
 
   controls.append(rewalkBox, viewBar, bannerBox, panel, actRow, btnRow);
 
   function renderViewBar() {
     viewBar.innerHTML = '';
+    syncEditTools();
     if (!viewingTrip || rec.status === 'recording' || rec.status === 'paused') { viewBar.style.display = 'none'; return; }
     viewBar.style.display = '';
     viewBar.append(
@@ -599,7 +663,9 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     );
   }
   function exitView() {
+    leaveEditMode();
     viewingTrip = null;
+    viewingTripEditable = false;
     appState.showTripInRecord = false;
     map?.setTrackData([], []);
     map?.clearHover();
@@ -733,6 +799,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   }
 
   function renderButtons() {
+    syncEditTools();
     const status = rec.status;
     const active = status === 'recording' || status === 'paused';
     activitySel.className = 'rec-pill select';
@@ -1042,6 +1109,8 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     }
     if (loadFailed) toast(t('common.unavailable'), 'err', 5200);
 
+    leaveEditMode();
+    viewingTripEditable = false;
     viewingTrip = full;
     renderViewBar();
     try {
@@ -1428,6 +1497,8 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   // ---------- recorder events ----------
   on('recorder:started', async ({ simulated }) => {
     liveActivity = (await getTrip(rec.tripId))?.activity || get('activity');
+    leaveEditMode();
+    viewingTripEditable = false;
     viewingTrip = null;
     renderViewBar();
     map?.startLive();
@@ -1482,13 +1553,30 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   on('trip:active', (full) => {
     if (!map || psActive) return;
     if (rec.status === 'recording' || rec.status === 'paused') return;
-    if (!full) { viewingTrip = null; renderViewBar(); map.setTrackData([], []); return; }
-    // only explicit "open on map" from the trips list paints a finished trip here
-    if (!appState.showTripInRecord) return;
-    appState.showTripInRecord = false;
-    viewingTrip = full;
-    map.setTrackData(full.segments, full.waypoints);
-    renderViewBar();
+    if (!full) {
+      leaveEditMode();
+      viewingTripEditable = false;
+      viewingTrip = null;
+      renderViewBar();
+      map.setTrackData([], []);
+      return;
+    }
+    // Library map views allow editing; routine refreshes only redraw.
+    if (appState.showTripInRecord) {
+      leaveEditMode();
+      clearHistory();
+      appState.showTripInRecord = false;
+      viewingTripEditable = true;
+      viewingTrip = full;
+      map.setTrackData(full.segments, full.waypoints);
+      renderViewBar();
+      return;
+    }
+    if (viewingTripEditable && viewingTrip?.trip.id === full.trip.id) {
+      viewingTrip = full;
+      map.setTrackData(full.segments, full.waypoints);
+      renderViewBar();
+    }
   });
   on('activity:guess', ({ activity }) => {
     renderAutoTag();
@@ -1510,7 +1598,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       + '[role="button"], [role="link"], [role="menuitem"], [role="option"], [role="checkbox"], '
       + '[role="radio"], [role="switch"], [role="tab"], [tabindex]:not([tabindex="-1"])'
     )) return;
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && appState.editMode) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && appState.editMode && canEditMap()) {
       e.preventDefault();
       if (e.shiftKey) redoEdit();
       else undoEdit();
@@ -1564,15 +1652,18 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       return;
     }
     if (appState.showTripInRecord && appState.activeTripFull) {
+      leaveEditMode();
+      clearHistory();
       appState.showTripInRecord = false;
       const full = appState.activeTripFull;
+      viewingTripEditable = true;
       viewingTrip = full;
       map.setTrackData(full.segments, full.waypoints);
       renderViewBar();
       setTimeout(() => map.fitTrack(), 600);
     } else if (recoverable) {
       const full = await loadTripFull(recoverable.id);
-      if (full) setTimeout(() => { viewingTrip = full; map.setTrackData(full.segments, full.waypoints); map.fitTrack(); renderViewBar(); }, 600);
+      if (full) setTimeout(() => { viewingTripEditable = false; viewingTrip = full; map.setTrackData(full.segments, full.waypoints); map.fitTrack(); renderViewBar(); }, 600);
     } else if (rec.status === 'idle' || rec.status === 'finished') {
       locateOnce();
     }

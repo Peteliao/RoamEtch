@@ -171,6 +171,8 @@ test('pocket lock is passive, keeps recording, and restores the same paused map 
   const entry = page.locator('.power-lock-entry');
   await expect(entry).toBeEnabled();
   await expect(entry).toHaveAttribute('aria-label', 'OLED 口袋锁');
+  await expect(entry.locator('xpath=..')).toHaveClass(/map-tools/);
+  await expect(page.locator('.lp-head .power-lock-entry')).toHaveCount(0);
   const box = await entry.boundingBox();
   expect(box?.width).toBe(44);
   expect(box?.height).toBe(44);
@@ -217,8 +219,8 @@ test('pocket lock is passive, keeps recording, and restores the same paused map 
   await expect(entry).toBeDisabled();
 
   await page.locator('.iconbtn[title="地图工具"]').click();
-  const lockRow = page.locator('.sheet-row').filter({ hasText: 'OLED 口袋锁' });
-  await expect(lockRow).toBeDisabled();
+  await expect(page.locator('.sheet-row').filter({ hasText: 'OLED 口袋锁' })).toHaveCount(0);
+  await expect(page.locator('.sheet-row').filter({ hasText: '编辑模式' })).toBeDisabled();
 });
 
 test('pocket lock unlock is keyboard accessible without adding recording controls', async ({ page }) => {
@@ -299,6 +301,7 @@ test('record keyboard shortcuts ignore repeats, interactive targets, other views
   await expect.poll(() => page.evaluate(() => window.__lt.recorder.rec.status)).toBe('recording');
   await page.locator('.iconbtn[title="地图工具"]').click();
   await expect(page.locator('.modal-backdrop')).toBeVisible();
+  await expect(page.locator('.sheet-row').filter({ hasText: '编辑模式' })).toBeDisabled();
   expect(await pressBody()).toBe(false);
   expect(await page.evaluate(() => window.__lt.recorder.rec.status)).toBe('recording');
   await page.keyboard.press('Escape');

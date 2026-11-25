@@ -7,7 +7,10 @@ import { emit } from './events';
 import { t, currentLang } from './i18n';
 import { get, set } from './settings';
 import { rec } from './recorder';
+import { navigationLinks, type NavigationLinks, type NavigationPlatform } from './navigation';
 
+export const EXTERNAL_NAV_MIN_M = 1000;
+const APPROACH_BANDS = [20, 50, 100, 200, 500, 1000];
 const ARRIVE_M = 60;
 const NEAR_M = 150;
 const OFF_M = 60;
@@ -36,6 +39,7 @@ export const rewalk = {
   lastFix: null as null | { lat: number; lon: number; acc: any; heading: any },
   finished: false, departed: false, muted: false, sim: false, wps: [],
   announced: new Set(), nearAnnounced: new Set(),
+  externalNav: false, approachBand: null as number | null,
   watchId: null, simTimer: null, simPos: null as null | { lat: number; lon: number },
   simDist: 0, lastOffAnnounce: 0
 };
@@ -57,7 +61,7 @@ export function primeSpeech() {
 }
 
 export function speak(text) {
-  if (rewalk.muted || get('rewalkVoice') === false || !text || !('speechSynthesis' in window)) return;
+  if (rewalk.externalNav || rewalk.muted || get('rewalkVoice') === false || !text || !('speechSynthesis' in window)) return;
   const u = new SpeechSynthesisUtterance(text);
   const zh = String(currentLang()).toLowerCase().startsWith('zh');
   u.lang = zh ? 'zh-CN' : 'en-US';
@@ -138,7 +142,8 @@ export async function startRewalk(tripId, mode: RewalkMode = 'full-fwd') {
     targetType: (mode === 'full-rev' || mode === 'near-start') ? 'start' : 'end',
     navTarget: null, navTargetType: null, lastFix: null, simPos: null,
     finished: false, departed: false, muted: get('rewalkVoice') === false, wps,
-    announced: new Set(), nearAnnounced: new Set(), simDist: 0, lastOffAnnounce: 0
+    announced: new Set(), nearAnnounced: new Set(), externalNav: false, approachBand: null,
+    simDist: 0, lastOffAnnounce: 0
   });
   emit('rewalk:started', {
     tripId, name: rewalk.name, total, mode, targetType: rewalk.targetType,
@@ -171,7 +176,18 @@ function beginFollow(idx, announceJoin) {
   rewalk.departed = false;
   rewalk.navTarget = null;
   rewalk.navTargetType = null;
+  rewalk.externalNav = false;
+  rewalk.approachBand = null;
   if (announceJoin) speak(t('rewalk.joinAnnounce'));
+}
+
+function approachBand(distanceM: number) {
+  return APPROACH_BANDS.find((band) => distanceM <= band) ?? null;
+}
+
+function directionKey(degrees: number) {
+  const keys = ['north', 'northEast', 'east', 'southEast', 'south', 'southWest', 'west', 'northWest'];
+  return keys[Math.round(((degrees % 360) + 360) % 360 / 45) % 8];
 }
 
 function beginApproach(target, fromLat, fromLon) {
@@ -179,7 +195,14 @@ function beginApproach(target, fromLat, fromLon) {
   rewalk.navTarget = { lat: target.lat, lon: target.lon };
   rewalk.navTargetType = rewalk.mode === 'full-fwd' ? 'start' : rewalk.mode === 'full-rev' ? 'end' : rewalk.targetType;
   const d = haversine(fromLat, fromLon, target.lat, target.lon);
-  speak(t('rewalk.approachAnnounce', { target: approachLabel(), dist: distText(d) }));
+  rewalk.approachBand = approachBand(d);
+  if (rewalk.approachBand != null) {
+    speak(t('rewalk.approachGuide', {
+      target: approachLabel(), dist: distText(d), direction: t(`rewalk.directions.${directionKey(bearing(fromLat, fromLon, target.lat, target.lon))}`)
+    }));
+  } else {
+    speak(t('rewalk.approachAnnounce', { target: approachLabel(), dist: distText(d) }));
+  }
 }
 
 function locate(lat, lon) {
@@ -203,6 +226,7 @@ function finish() {
   if (rewalk.finished) return;
   rewalk.finished = true;
   rewalk.phase = 'finished';
+  rewalk.externalNav = false;
   stopWatch();
   stopSim();
   speak(t(rewalk.targetType === 'start' ? 'rewalk.voiceArriveStart' : 'rewalk.voiceArriveEnd'));
@@ -226,6 +250,7 @@ function emission(lat, lon, acc, heading) {
     targetLat: target?.lat, targetLon: target?.lon,
     navDist: rewalk.phase === 'approach' ? remaining : null,
     navBearing: rewalk.phase === 'approach' ? bearing(lat, lon, target.lat, target.lon) : null,
+    externalNav: rewalk.externalNav,
     nextWp: nextWp ? { name: nextWp.name || wpLabel(nextWp), type: nextWp.type, dist: Math.max(0, nextWp.distAlong - along) } : null,
     finished: rewalk.finished
   });
@@ -243,7 +268,19 @@ export function feedFix(lat, lon, acc = null, heading = null) {
       if (rewalk.mode === 'full-fwd' || rewalk.mode === 'full-rev') beginFollow(0, true);
       else finish();
     }
-    if (rewalk.phase === 'approach') { emission(lat, lon, acc, heading); return; }
+    if (rewalk.phase === 'approach') {
+      const band = approachBand(d);
+      if (band != null && band !== rewalk.approachBand) {
+        rewalk.approachBand = band;
+        speak(t('rewalk.approachGuide', {
+          target: approachLabel(), dist: distText(d), direction: t(`rewalk.directions.${directionKey(bearing(lat, lon, target.lat, target.lon))}`)
+        }));
+      } else if (band == null) {
+        rewalk.approachBand = null;
+      }
+      emission(lat, lon, acc, heading);
+      return;
+    }
     if (rewalk.phase === 'finished') { emission(lat, lon, acc, heading); return; }
   }
   if (rewalk.phase !== 'follow') return;
@@ -284,6 +321,23 @@ export function feedFix(lat, lon, acc = null, heading = null) {
   emission(lat, lon, acc, heading);
 }
 
+export function getRewalkNavigation(platform: NavigationPlatform = 'web'): (NavigationLinks & { distanceM: number }) | null {
+  const target = rewalk.navTarget;
+  const from = rewalk.lastFix;
+  if (!rewalk.active || rewalk.phase !== 'approach' || !target || !from) return null;
+  const distanceM = haversine(from.lat, from.lon, target.lat, target.lon);
+  const links = navigationLinks(target.lat, target.lon, distanceM, rewalk.name, platform);
+  return links ? { ...links, distanceM } : null;
+}
+
+export function markExternalNavigation() {
+  if (!rewalk.active || rewalk.phase !== 'approach' || !getRewalkNavigation()) return false;
+  rewalk.externalNav = true;
+  if ('speechSynthesis' in window) speechSynthesis.cancel();
+  emit('rewalk:navigation', { active: true });
+  return true;
+}
+
 export function stopRewalk() {
   if (!rewalk.active) return;
   stopWatch();
@@ -292,6 +346,8 @@ export function stopRewalk() {
   rewalk.active = false;
   rewalk.finished = false;
   rewalk.navTarget = null;
+  rewalk.externalNav = false;
+  rewalk.approachBand = null;
   rewalk.simPos = null;
   rewalk.lastFix = null;
   emit('rewalk:stopped', {});

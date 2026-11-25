@@ -60,11 +60,12 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 - Live distance, total and moving time, current/average speed, pace, altitude, ascent/descent, calories, and GPS signal strength.
 - Automatic activity detection for hiking, driving, cycling, running, and travel; change the activity at any time while recording.
 - Pause/resume, add waypoints mid-recording, rename in the result sheet, and resume as a new segment after the browser is backgrounded or the screen locks. Tap Finish to save immediately and show a suggested trip name based on activity and time; edit it if needed, then tap Save. The track stays visible for analysis or sharing while the controls return to Auto detection and Start.
-- Three recording-frequency presets (high accuracy, balanced, power saving), screen wake lock, fullscreen, and a true-black OLED pocket lock to reduce accidental touches and battery drain on long trips. The pocket lock is progress-only, with no pause, resume, or finish controls and no recording-state changes; hold the ring for 1.5 seconds to unlock. Locking the screen with the power button or backgrounding the browser can still pause geolocation.
+- Three recording-frequency presets (high accuracy, balanced, power saving), screen wake lock, fullscreen, and a true-black OLED pocket lock to reduce accidental touches and battery drain on long trips. Its button sits directly in the right-side map tools. The pocket lock is progress-only, with no pause, resume, or finish controls and no recording-state changes; hold the ring for 1.5 seconds to unlock. Locking the screen with the power button or backgrounding the browser can still pause geolocation.
+- **Track editing**: Edit mode is available only for a finished trip opened from **Trips → View on map**. Add or edit nodes, drag track points, and undo/redo; ordinary recording and freshly finished result tracks stay read-only.
 - **In-app photo waypoints**: while recording or paused, open Node and choose Photo waypoint to shoot in the viewfinder and link each photo to the current WGS-84 position and altitude. Flash, vibration, continuous shooting, thumbnail, undo, and a “Done (N)” counter are included. Each shot keeps the in-app 1600 px version plus a full-resolution original that “Save original” can hand to the system through the share sheet, save picker, or a download; browsers cannot silently write to the OS photo gallery. Photos stay in local IndexedDB and are never uploaded.
 - **Multi-photo waypoint editor**: select several album images at once or open the camera and shoot a burst inside the node editor. Every captured or selected image is appended to the waypoint until you save it.
 - **Pocket-lock quick camera**: drag the bottom-right camera knob left by at least 120 px in the OLED pocket lock. Taps and short drags are ignored; the camera closes after 20 seconds without interaction, and a saved shot returns to the black pocket lock after 3 seconds or offers “shoot again” / “lock now”.
-- **Re-walk**: follow a reference track with off-route alerts and spoken waypoint type, name, and notes as you approach each node.
+- **Re-walk**: follow a reference track with off-route alerts and spoken waypoint type, name, and notes as you approach each node. When you are far from the trip, explicitly open AMap or Google Maps to navigate to its start/end and use the map's turn-by-turn voice guidance; local distance and bearing announcements resume near the target. RoamEtch does not upload your live track.
 
 ### Analyze: understand the route, not just the line
 
@@ -77,7 +78,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 ### Organize: keep a growing library manageable
 
 - Favorite and pin trips, add up to 8 tags, search names and tags, and filter by activity or favorites; sort by recently updated, newest, longest distance, or name.
-- **Yearly footprint**: trips, distance, ascent, active days, and a 12-month distribution for each year, computed entirely from local trips.
+- **Yearly footprint**: a collapsed-by-default accordion above the trip list. Expand it for trips, distance, ascent, active days, and a 12-month distribution for each year, computed entirely from local trips.
 - **Footprint sharing**: export a 1080×1350 yearly summary card or a 9-second 1080×1920 video with the original on-device soundtrack, with preview, save, and native share. Only yearly totals are drawn — no trip names, tracks, places, waypoints, or photos.
 - Favorites, tags, footprint stats, and share artwork stay on this device — nothing is uploaded.
 

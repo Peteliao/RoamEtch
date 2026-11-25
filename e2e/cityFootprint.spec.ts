@@ -30,7 +30,21 @@ test('city footprint asks for consent, lights the map and reaches the share imag
   await expect(page.locator('#trip-detail')).toBeHidden();
 
   const card = page.locator('.footprint-card');
-  await card.locator('.footprint-toggle').click();
+  const toggle = card.locator('.footprint-toggle');
+  const content = card.locator('#yearly-footprint-content');
+  await expect(card).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(content).toBeHidden();
+  const [cardBox, searchBox, firstTripBox] = await Promise.all([
+    card.boundingBox(),
+    page.locator('.search-bar').boundingBox(),
+    page.locator('.trip-item').first().boundingBox()
+  ]);
+  expect(cardBox!.y).toBeLessThan(searchBox!.y);
+  expect(cardBox!.y).toBeLessThan(firstTripBox!.y);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(content).toBeVisible();
   await expect(card.locator('.footprint-map')).toBeVisible();
   await expect(card.locator('.city-footprint-marker')).toHaveCount(0);
   await expect(card).not.toContainText('null');

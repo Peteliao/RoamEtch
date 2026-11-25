@@ -4,6 +4,30 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.1.2] - 2026-11-25
+
+### Added
+
+- Added explicit cross-city re-walk navigation through AMap in mainland China
+  and Google Maps elsewhere, with a privacy notice, external turn-by-turn voice
+  guidance, and local distance/bearing announcements near the target.
+- Added navigation-link, approach-voice, map-editing, and re-walk browser
+  regression coverage.
+
+### Changed
+
+- Moved the passive OLED pocket-lock button into the right-side recording map
+  tools without adding recording controls.
+- Moved Yearly Footprint below the Trips header as an accessible accordion that
+  is collapsed by default and loads its map only when expanded.
+
+### Fixed
+
+- Limited map editing and waypoint changes to finished trips opened from Trips
+  with “View on map”; ordinary recording and finished-result views stay read-only.
+- Restored visible Undo/Redo controls in Edit mode and redraw the trip map after
+  edits, undo, and redo.
+
 ## [3.1.1] - 2026-11-25
 
 ### Fixed

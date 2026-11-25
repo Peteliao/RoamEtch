@@ -22,11 +22,12 @@ const QUALITY = Number(process.env.DEMO_QUALITY || 0.58);
 const LOCALES = [
   {
     id: 'zh',
-    settings: { language: 'zh', theme: 'dark', sim: { enabled: true, playbackSpeed: 90 } }
+    // Keep playback running longer than frame capture on loaded CI machines.
+    settings: { language: 'zh', theme: 'dark', sim: { enabled: true, playbackSpeed: 45 } }
   },
   {
     id: 'en',
-    settings: { language: 'en', theme: 'dark', sim: { enabled: true, playbackSpeed: 90 } }
+    settings: { language: 'en', theme: 'dark', sim: { enabled: true, playbackSpeed: 45 } }
   }
 ];
 
