@@ -6,7 +6,7 @@ import { meet } from '../core/meet';
 import { on } from '../core/events';
 import { regionState, setRegionMode, runProbe } from '../core/region';
 import { storageEstimate, requestStoragePersistence, eraseAll, listTrips } from '../core/store';
-import { inspectStorageHealth } from '../core/storageHealth';
+import { inspectStorageHealth, previewMediaCleanup, executeMediaCleanup } from '../core/storageHealth';
 import { appState, setActiveTrip } from './state';
 import { triggerDownload } from '../core/gpx';
 import { exportDiagLog } from '../core/diag';
@@ -329,6 +329,9 @@ export function createSettingsView(navigate) {
   const healthLine = el('div', { class: 'small muted', style: { marginTop: '3px' } }, t('settings.healthIdle'));
   const healthDetails = el('div', { class: 'storage-health', hidden: true });
   const healthBtn = el('button', { class: 'btn sm' }, icon('shield', 14), t('settings.healthCheck'));
+  const cleanupLine = el('div', { class: 'small muted', style: { marginTop: '6px' }, hidden: true });
+  const cleanupBtn = el('button', { class: 'btn sm danger', hidden: true }, icon('trash', 14), t('settings.cleanupAction'));
+  let cleanupPreview: Awaited<ReturnType<typeof previewMediaCleanup>> | null = null;
   function formatBytes(bytes) {
     if (!bytes) return '0 B';
     if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -338,8 +341,12 @@ export function createSettingsView(navigate) {
     healthBtn.disabled = true;
     healthBtn.textContent = t('settings.healthChecking');
     healthDetails.hidden = true;
+    cleanupLine.hidden = true;
+    cleanupBtn.hidden = true;
+    cleanupPreview = null;
     try {
-      const result = await inspectStorageHealth();
+      const [result, preview] = await Promise.all([inspectStorageHealth(), previewMediaCleanup()]);
+      cleanupPreview = preview;
       healthLine.textContent = t(result.healthy ? 'settings.healthClean' : result.ok ? 'settings.healthAdvisory' : 'settings.healthIssues', { n: result.totals.issues });
       healthLine.style.color = result.ok ? result.healthy ? 'var(--accent)' : 'var(--warn)' : 'var(--danger)';
       healthDetails.innerHTML = '';
@@ -349,7 +356,14 @@ export function createSettingsView(navigate) {
           snapshots: result.counts.snapshotPoints, media: result.counts.media,
           bytes: formatBytes(result.counts.photoBytes)
         })),
-        el('div', { class: 'small faint', style: { marginTop: '4px' } }, t('settings.healthReadOnly')));
+        el('div', { class: 'small faint', style: { marginTop: '4px' } }, t('settings.healthReadOnly')),
+        cleanupLine,
+        el('div', { class: 'row wrap', style: { marginTop: '6px' } }, cleanupBtn));
+      cleanupLine.textContent = preview.count
+        ? t('settings.cleanupPreview', { n: preview.count, bytes: formatBytes(preview.bytes) })
+        : t('settings.cleanupEmpty');
+      cleanupLine.hidden = false;
+      cleanupBtn.hidden = !preview.count;
       for (const issue of result.issues) {
         healthDetails.append(el('div', { class: `health-issue ${issue.severity}` },
           el('div', {},
@@ -366,6 +380,30 @@ export function createSettingsView(navigate) {
       healthBtn.disabled = false;
       healthBtn.innerHTML = '';
       healthBtn.append(icon('shield', 14), t('settings.healthCheck'));
+    }
+  };
+  cleanupBtn.onclick = async () => {
+    const preview = cleanupPreview;
+    if (!preview?.count) return;
+    const confirmed = await confirmModal({
+      title: t('settings.cleanupTitle'),
+      message: t('settings.cleanupConfirm', { n: preview.count, bytes: formatBytes(preview.bytes) }),
+      danger: true,
+      confirmText: t('settings.cleanupAction')
+    });
+    if (!confirmed) return;
+    cleanupBtn.disabled = true;
+    try {
+      const result = await executeMediaCleanup(preview.token);
+      cleanupPreview = null;
+      toast(t('settings.cleanupDone', { n: result.deleted, bytes: formatBytes(result.bytes) }), 'ok');
+      await refreshStorage();
+      healthBtn.click();
+    } catch (e) {
+      console.error(e);
+      toast(t('settings.cleanupFail'), 'err');
+    } finally {
+      cleanupBtn.disabled = false;
     }
   };
   const backupHealthLine = el('div', { class: 'small muted', style: { marginTop: '3px' } });

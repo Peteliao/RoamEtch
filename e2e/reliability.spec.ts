@@ -213,7 +213,7 @@ test('storage health reports issues without modifying records', async ({ page })
   await expect(health).toBeVisible();
   await expect(health).toContainText('孤立轨迹块');
   await expect(health).toContainText('未被节点引用的媒体');
-  await expect(health).toContainText('此检查只读');
+  await expect(health).toContainText('检查与清理预览均为只读');
   expect(await page.evaluate(async () => {
     const { db } = (window as any).__lt.store;
     return {

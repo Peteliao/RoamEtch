@@ -1,5 +1,5 @@
 // Full-database backup / restore as a .trip ZIP archive (JSON tables + media binaries).
-import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
+import { Zip, ZipDeflate, unzipSync, strToU8, strFromU8 } from 'fflate';
 import { db, TRIP_SCHEMA_VERSION } from './store';
 import { emit } from './events';
 import { sha256Hex, stableStringify } from './integrity';
@@ -60,32 +60,52 @@ export async function exportBackup({ password = '' }: { password?: string } = {}
     mediaMeta: media.map((m) => ({ id: m.id, tripId: m.tripId, width: m.width, height: m.height, createdAt: m.createdAt })),
     elevCache
   };
-  const entries = {};
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
   const fileHashes = {};
-  for (const m of media) {
-    const photo = await blobToU8(m.blob);
-    const photoPath = `media/${m.id}.jpg`;
-    entries[photoPath] = photo;
-    fileHashes[photoPath] = { bytes: photo.byteLength, sha256: await sha256Hex(photo) };
-    if (m.thumb) {
-      const thumb = await blobToU8(m.thumb);
-      const thumbPath = `media/${m.id}.thumb.jpg`;
-      entries[thumbPath] = thumb;
-      fileHashes[thumbPath] = { bytes: thumb.byteLength, sha256: await sha256Hex(thumb) };
+  let zipError: unknown = null;
+  const zip = new Zip((error, chunk) => {
+    if (error) zipError = error;
+    else if (chunk.byteLength) chunks.push(chunk);
+  });
+  const addEntry = (name: string, bytes: Uint8Array) => {
+    const entry = new ZipDeflate(name, { level: 6 });
+    zip.add(entry);
+    for (let offset = 0; offset < bytes.byteLength; offset += 1024 * 1024) {
+      entry.push(bytes.subarray(offset, offset + 1024 * 1024));
     }
-  }
-  manifest.integrity = {
-    algo: 'SHA-256',
-    payload: await payloadDigest(manifest),
-    files: fileHashes
+    entry.push(new Uint8Array(), true);
+    if (zipError) throw zipError;
   };
-  entries['manifest.json'] = strToU8(JSON.stringify(manifest));
-  const zipped = zipSync(entries, { level: 6 });
+  try {
+    for (const m of media) {
+      const photo = await blobToU8(m.blob);
+      const photoPath = `media/${m.id}.jpg`;
+      fileHashes[photoPath] = { bytes: photo.byteLength, sha256: await sha256Hex(photo) };
+      addEntry(photoPath, photo);
+      if (m.thumb) {
+        const thumb = await blobToU8(m.thumb);
+        const thumbPath = `media/${m.id}.thumb.jpg`;
+        fileHashes[thumbPath] = { bytes: thumb.byteLength, sha256: await sha256Hex(thumb) };
+        addEntry(thumbPath, thumb);
+      }
+    }
+    manifest.integrity = {
+      algo: 'SHA-256',
+      payload: await payloadDigest(manifest),
+      files: fileHashes
+    };
+    addEntry('manifest.json', strToU8(JSON.stringify(manifest)));
+    zip.end();
+    if (zipError) throw zipError;
+  } catch (error) {
+    zip.terminate();
+    throw error;
+  }
+  const zipBlob = new Blob(chunks, { type: 'application/zip' });
+  chunks.length = 0;
   const stamp = exportedAt.slice(0, 10).replace(/-/g, '');
   const encrypted = !!password;
-  const blob = encrypted
-    ? await encryptBackupBlob(new Blob([zipped], { type: 'application/zip' }), password)
-    : new Blob([zipped], { type: 'application/zip' });
+  const blob = encrypted ? await encryptBackupBlob(zipBlob, password) : zipBlob;
   const filename = encrypted
     ? `roametch-backup-${stamp}${ENCRYPTED_BACKUP_EXT}`
     : `roametch-backup-${stamp}.trip`;

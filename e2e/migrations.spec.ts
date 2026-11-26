@@ -5,6 +5,14 @@ async function createHistoricalDatabase(page: Page, version: number, schemaVersi
   await blockExternal(page);
   await page.route('**/src/main.ts', (route) => route.abort());
   await page.goto('/');
+  await page.evaluate(async () => {
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase('localtrace');
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+      request.onblocked = () => reject(new Error('database deletion blocked'));
+    });
+  });
   await page.evaluate(async ({ version, schemaVersion }) => {
     await new Promise<void>((resolve, reject) => {
       const request = indexedDB.open('localtrace', version * 10);

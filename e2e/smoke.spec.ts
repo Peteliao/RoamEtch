@@ -163,6 +163,83 @@ test('shared-link imports stay deduplicated without localStorage cache', async (
   expect(await page.evaluate(() => window.__lt.store.db.shareImports.count())).toBe(1);
 });
 
+test('streaming GPX import batches large tracks and rolls back failed imports', async ({ page }) => {
+  await blockExternal(page);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+
+  const result = await page.evaluate(async () => {
+    const points = Array.from({ length: 1001 }, (_, index) =>
+      `<trkpt lat="${30 + index / 100000}" lon="${120 + index / 100000}"><ele>${index}</ele><time>2024-01-01T00:${String(index % 60).padStart(2, '0')}:00Z</time></trkpt>`
+    ).join('');
+    const file = new File([`<gpx><metadata><name>Streaming import</name></metadata><trk><trkseg>${points}</trkseg></trk></gpx>`], 'streaming.gpx', { type: 'application/gpx+xml' });
+    const imported = await (window as any).__lt.batch.importTripFiles([file]);
+    const trips = await (window as any).__lt.store.listTrips();
+    const full = await (window as any).__lt.store.loadTripFull(trips[0].id);
+    const pointCount = full.segments.reduce((sum: number, segment: any) => sum + segment.points.length, 0);
+    const chunkCount = await (window as any).__lt.store.db.trackChunks.where('tripId').equals(trips[0].id).count();
+
+    const malformed = new File(['<gpx><trk>'], 'broken.gpx', { type: 'application/gpx+xml' });
+    const failed = await (window as any).__lt.batch.importTripFiles([malformed]);
+    const zipped = await (window as any).__lt.batch.exportTripsZip([trips[0].id]);
+    const zippedResult = await (window as any).__lt.batch.importTripFiles([new File([zipped.blob], zipped.filename)]);
+    const beforeAbortTrips = await (window as any).__lt.store.db.trips.orderBy('id').keys();
+    const zipTripCount = beforeAbortTrips.length;
+    const controller = new AbortController();
+    controller.abort();
+    let abortName = '';
+    try {
+      await (window as any).__lt.batch.importTripFiles([file], { signal: controller.signal });
+    } catch (error) {
+      abortName = (error as Error).name;
+    }
+    return {
+      imported, pointCount, chunkCount, failed, zippedResult, zipTripCount,
+      beforeAbortTrips, abortName,
+      trips: (await (window as any).__lt.store.db.trips.orderBy('id').keys())
+    };
+  });
+
+  expect(result.imported).toEqual({ ok: 1, fail: 0 });
+  expect(result.pointCount).toBe(1001);
+  expect(result.chunkCount).toBe(3);
+  expect(result.failed).toEqual({ ok: 0, fail: 1 });
+  expect(result.zippedResult).toEqual({ ok: 1, fail: 0 });
+  expect(result.zipTripCount).toBe(2);
+  expect(result.abortName).toBe('AbortError');
+  expect(result.trips.sort()).toEqual(result.beforeAbortTrips.sort());
+});
+
+test('storage cleanup confirms and removes only unreferenced media', async ({ page }) => {
+  await blockExternal(page);
+  await openDemo(page);
+  const ids = await page.evaluate(async () => {
+    const { store } = (window as any).__lt;
+    await store.db.media.clear();
+    const trip = (await store.listTrips())[0];
+    const used = await store.addMedia({ tripId: trip.id, blob: new Blob(['used']), thumb: null, width: 10, height: 10 });
+    const unused = await store.addMedia({ tripId: trip.id, blob: new Blob(['unused']), thumb: null, width: 10, height: 10 });
+    await store.addWaypoint({ tripId: trip.id, lat: 30, lon: 120, name: 'Referenced media', mediaIds: [used.id] });
+    return { used: used.id, unused: unused.id };
+  });
+
+  await gotoTab(page, 'settings');
+  await page.getByRole('button', { name: '检查存储完整性', exact: true }).click();
+  const details = page.locator('#view-settings .storage-health');
+  await expect(details).toBeVisible();
+  await expect(details).toContainText('发现 1 份未被任何节点引用的媒体');
+  await details.getByRole('button', { name: '清理媒体', exact: true }).click();
+  const confirmation = page.locator('.modal-backdrop .modal');
+  await expect(confirmation).toContainText('已引用照片不会删除');
+  await confirmation.getByRole('button', { name: '清理媒体', exact: true }).click();
+  await expect(page.locator('#toast-root .toast.ok').last()).toContainText('已删除 1 份未引用媒体');
+  await expect(details).toContainText('没有可清理的未引用媒体');
+  expect(await page.evaluate(({ used, unused }) => Promise.all([
+    (window as any).__lt.store.db.media.get(used).then(Boolean),
+    (window as any).__lt.store.db.media.get(unused).then(Boolean)
+  ]), ids)).toEqual([true, false]);
+});
+
 test('requested pre-restore snapshot failure blocks restore', async ({ page }) => {
   await blockExternal(page);
   await openDemo(page);

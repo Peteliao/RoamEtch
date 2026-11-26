@@ -69,9 +69,41 @@ export interface StorageHealthResult {
   issues: StorageHealthIssue[];
 }
 
+export interface MediaCleanupPreview {
+  token: string;
+  count: number;
+  bytes: number;
+  sampleIds: string[];
+}
+
+export interface MediaCleanupResult {
+  deleted: number;
+  bytes: number;
+  skipped: number;
+}
+
 const MAX_SAMPLE_IDS = 20;
 // FIFO eviction bounds duplicate-fix fingerprint memory on large trips.
 const MAX_DUPLICATE_FIX_KEYS = 50_000;
+const CLEANUP_TOKEN_TTL = 5 * 60_000;
+const MAX_CLEANUP_TOKENS = 4;
+const CLEANUP_LOCK = 'roametch:storage-media-cleanup';
+
+interface CleanupTokenRecord {
+  ids: RecordId[];
+  bytes: number;
+  createdAt: number;
+}
+
+const cleanupTokens = new Map<string, CleanupTokenRecord>();
+
+export class MediaCleanupTokenError extends Error {
+  code = 'media-cleanup-stale';
+  constructor() {
+    super('Storage cleanup preview is stale or was already used.');
+    this.name = 'MediaCleanupTokenError';
+  }
+}
 
 interface SegmentInfo {
   tripId: unknown;
@@ -351,4 +383,64 @@ export async function inspectStorageHealth(): Promise<StorageHealthResult> {
     db.media.toArray()
   ]);
   return analyzeStorageHealth({ trips, segments, trackChunks, trackSnapshots, waypoints, media });
+}
+
+function newCleanupToken() {
+  return globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+export async function previewMediaCleanup(): Promise<MediaCleanupPreview> {
+  const candidates = new Map<RecordId, number>();
+  await db.transaction('r', [db.waypoints, db.media], async () => {
+    const referenced = new Set<RecordId>();
+    await db.waypoints.each((waypoint) => {
+      const ids = asRecord(waypoint)?.mediaIds;
+      if (Array.isArray(ids)) for (const id of ids) if (isRecordId(id)) referenced.add(id);
+    });
+    await db.media.each((item) => {
+      const row = asRecord(item);
+      const id = row?.id;
+      if (!isRecordId(id) || referenced.has(id) || candidates.has(id)) return;
+      candidates.set(id, (blobSize(row?.blob) ?? 0) + (blobSize(row?.thumb) ?? 0));
+    });
+  });
+
+  const now = Date.now();
+  for (const [token, record] of cleanupTokens) if (now - record.createdAt > CLEANUP_TOKEN_TTL) cleanupTokens.delete(token);
+  while (cleanupTokens.size >= MAX_CLEANUP_TOKENS) cleanupTokens.delete(cleanupTokens.keys().next().value!);
+  const ids = [...candidates.keys()];
+  const bytes = ids.reduce<number>((sum, id) => sum + candidates.get(id)!, 0);
+  const token = newCleanupToken();
+  cleanupTokens.set(token, { ids, bytes, createdAt: now });
+  return { token, count: ids.length, bytes, sampleIds: ids.slice(0, 5).map(String) };
+}
+
+async function withCleanupLock<T>(task: () => Promise<T>): Promise<T> {
+  const locks = globalThis.navigator?.locks;
+  return locks?.request ? locks.request(CLEANUP_LOCK, task) : task();
+}
+
+export async function executeMediaCleanup(token: string): Promise<MediaCleanupResult> {
+  const record = cleanupTokens.get(token);
+  if (!record) throw new MediaCleanupTokenError();
+  const result = await withCleanupLock(() => db.transaction('rw', [db.media, db.waypoints], async () => {
+    const referenced = new Set<RecordId>();
+    await db.waypoints.each((waypoint) => {
+      const ids = asRecord(waypoint)?.mediaIds;
+      if (Array.isArray(ids)) for (const id of ids) if (isRecordId(id)) referenced.add(id);
+    });
+    const ids: RecordId[] = [];
+    let bytes = 0;
+    for (const id of record.ids) {
+      if (referenced.has(id)) continue;
+      const row = asRecord(await db.media.get(id));
+      if (!row) continue;
+      ids.push(id);
+      bytes += (blobSize(row.blob) ?? 0) + (blobSize(row.thumb) ?? 0);
+    }
+    if (ids.length) await db.media.bulkDelete(ids);
+    return { deleted: ids.length, bytes, skipped: record.ids.length - ids.length };
+  }));
+  cleanupTokens.delete(token);
+  return result;
 }

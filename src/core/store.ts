@@ -17,14 +17,15 @@ db.on?.('versionchange', () => db.close());
 export const CHUNK_SIZE = 400;
 
 // ---------- trips ----------
-export async function createTrip({ name, activity = 'hike', status = 'recording', createdAt = Date.now() }: any = {}) {
+export async function createTrip({ id = uuid(), name, activity = 'hike', status = 'recording', createdAt = Date.now(), hasTime, publish = true }: any = {}) {
   const trip = {
-    id: uuid(), name: name || '', activity, status,
+    id, name: name || '', activity, status,
     schemaVersion: TRIP_SCHEMA_VERSION, createdAt, updatedAt: Date.now(),
     privacy: { radius: 300, hideSensitive: true },
-    statsCache: null
+    statsCache: null,
+    ...(hasTime != null ? { hasTime } : {})
   };
-  await db.trips.add(trip);
+  if (publish) await db.trips.add(trip);
   return trip;
 }
 export const getTrip = (id) => db.trips.get(id);
@@ -97,9 +98,9 @@ function isValidTrackPoint(point) {
     && Math.abs(point.lat) <= 90 && Math.abs(point.lon) <= 180;
 }
 
-export async function appendPoints(segmentId, tripId, points) {
+export async function appendPoints(segmentId, tripId, points, { allowUnpublished = false }: { allowUnpublished?: boolean } = {}) {
   if (!points.length) return;
-  await db.transaction('rw', [db.trackChunks, db.segments, db.trips], async () => {
+  await db.transaction('rw', [db.trackChunks, db.segments, ...(allowUnpublished ? [] : [db.trips])], async () => {
     const last = await segmentChunkRange(segmentId).last();
     if (last && last.points.length + points.length <= CHUNK_SIZE) {
       last.points.push(...points);
@@ -115,6 +116,7 @@ export async function appendPoints(segmentId, tripId, points) {
       }
     }
     await db.segments.update(segmentId, { endTime: points[points.length - 1].t });
+    if (allowUnpublished) return;
     const trip = await db.trips.get(tripId);
     await updateTrip(tripId, {
       ...(trip?.reportedDistance != null ? { reportedDistance: null } : {})
@@ -412,6 +414,25 @@ export async function deletePhotoWaypoint(waypointId, tripId, mediaId) {
       : [];
     if (mediaId && !references.length) await db.media.delete(mediaId);
     await updateTrip(tripId, {});
+  });
+}
+
+export async function saveWaypointWithMedia({ waypoint, tripId, photos, removedMediaIds, isNew }) {
+  return db.transaction('rw', [db.media, db.waypoints], async () => {
+    const next = { ...waypoint, mediaIds: [...(waypoint.mediaIds || [])] };
+    for (const photo of photos) {
+      const media = await addMedia({ tripId, blob: photo.blob, thumb: photo.thumb, width: photo.width, height: photo.height });
+      next.mediaIds.push(media.id);
+    }
+    for (const mediaId of removedMediaIds) {
+      if (next.mediaIds.includes(mediaId)) continue;
+      const references = await db.waypoints.filter((item) => item.id !== waypoint.id && item.mediaIds?.includes(mediaId)).count();
+      if (!references) await db.media.delete(mediaId);
+    }
+    if (isNew) return addWaypoint({ ...next, tripId });
+    const updated = await updateWaypoint(waypoint.id, next);
+    if (!updated) throw new Error('Waypoint no longer exists');
+    return next;
   });
 }
 

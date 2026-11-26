@@ -192,31 +192,25 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
     wp.desc = descInput.value.trim();
     wp.time = timeInput.value ? new Date(timeInput.value).getTime() : Date.now();
     wp.hidden = hiddenCb.checked;
-    // persist new photos (EXIF already stripped by re-encode)
-    for (const p of pendingPhotos) {
-      const mrec = await store.addMedia({ tripId, blob: p.blob, thumb: p.thumb, width: p.width, height: p.height });
-      wp.mediaIds = [...(wp.mediaIds || []), mrec.id];
-    }
-    for (const mid of removedMedia) await store.deleteMedia(mid);
     if (wp.alt == null) {
       const r = await resolveAltitude(wp.lat, wp.lon, null, null);
       wp.alt = r.alt;
     }
+    const prev = isNew ? null : await store.getWaypoint(wp.id);
+    const saved = await store.saveWaypointWithMedia({
+      waypoint: wp, tripId, photos: pendingPhotos, removedMediaIds: removedMedia, isNew
+    });
     if (isNew) {
-      const before = { ...wp };
-      const created = await store.addWaypoint({ ...wp, tripId });
       pushAction({
         label: 'wp-add',
-        undo: async () => { await store.deleteWaypoint(created.id); await afterEdit(tripId); },
-        redo: async () => { await store.db.waypoints.put(created); await afterEdit(tripId); }
+        undo: async () => { await store.deleteWaypoint(saved.id); await afterEdit(tripId); },
+        redo: async () => { await store.db.waypoints.put(saved); await afterEdit(tripId); }
       });
     } else {
-      const prev = await store.getWaypoint(wp.id);
-      await store.updateWaypoint(wp.id, wp);
       pushAction({
         label: 'wp-edit',
         undo: async () => { await store.db.waypoints.put(prev); await afterEdit(tripId); },
-        redo: async () => { await store.db.waypoints.put({ ...wp }); await afterEdit(tripId); }
+        redo: async () => { await store.db.waypoints.put(saved); await afterEdit(tripId); }
       });
     }
     m.close();

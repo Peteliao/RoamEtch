@@ -1,6 +1,7 @@
 // GPX / GeoJSON / KML import-export. Output is always strict WGS-84.
-import { createTrip, addSegment, appendPoints, addWaypoint, updateTrip } from './store';
+import { createTrip, addSegment, appendPoints, addWaypoint, updateTrip, deleteTrip, deleteSegment, db } from './store';
 import { uuid } from './geo';
+import { streamGPX, type GPXStreamInput } from './gpxStream';
 
 export function parseGPX(text) {
   const doc = new DOMParser().parseFromString(text, 'application/xml');
@@ -66,6 +67,54 @@ export async function importGPX(text, fallbackName = 'GPX import') {
   for (const w of parsed.waypoints) await addWaypoint({ ...w, tripId: trip.id });
   await updateTrip(trip.id, { hasTime: parsed.hasTime });
   return trip;
+}
+
+export async function importGPXFile(
+  input: GPXStreamInput,
+  fallbackName = 'GPX import',
+  options: { signal?: AbortSignal; onProgress?: (loaded: number, total: number) => void; singlePass?: boolean } = {}
+) {
+  const tripId = uuid();
+  let segmentId: string | null = null;
+  let segments = 0;
+  let sawTrack = false;
+  const routeSegmentIds: string[] = [];
+  try {
+    const summary = await streamGPX(input, async (event) => {
+      if (event.type === 'segment-start') {
+        if (event.source === 'track' && !sawTrack) {
+          sawTrack = true;
+          for (const id of routeSegmentIds) await deleteSegment(id);
+          routeSegmentIds.length = 0;
+          segments = 0;
+        }
+        segmentId = null;
+      } else if (event.type === 'points') {
+        if (!segmentId) {
+          const segment = await addSegment(tripId, event.points[0]?.t || Date.now());
+          segmentId = segment.id;
+          segments++;
+          if (event.source === 'route') routeSegmentIds.push(segment.id);
+        }
+        await appendPoints(segmentId, tripId, event.points, { allowUnpublished: true });
+      } else if (event.type === 'waypoints') {
+        for (const waypoint of event.waypoints) await addWaypoint({ ...waypoint, tripId });
+      }
+    }, options);
+    if (!segments) await addSegment(tripId);
+    const trip = await createTrip({
+      id: tripId,
+      name: summary.name || fallbackName,
+      status: 'finished',
+      hasTime: summary.hasTime,
+      publish: false
+    });
+    await db.trips.add(trip);
+    return trip;
+  } catch (error) {
+    try { await deleteTrip(tripId); } catch { /* preserve the original parse failure */ }
+    throw error;
+  }
 }
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
