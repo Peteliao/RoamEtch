@@ -43,9 +43,54 @@ const mocks = vi.hoisted(() => {
 
 vi.mock('dexie', () => ({ default: class MockDexie { constructor() { return mocks.db; } } }));
 
-import { isolateDamaged } from '../src/core/store';
+import { abortTransactionOnSignal, isolateDamaged } from '../src/core/store';
 
 beforeEach(() => mocks.reset());
+
+describe('transaction cancellation binding', () => {
+  it('aborts an active transaction and detaches the signal listener', () => {
+    const controller = new AbortController();
+    const transaction: any = { active: true, abort: vi.fn(() => { transaction.active = false; }) };
+    const detach = abortTransactionOnSignal(transaction, controller.signal);
+
+    controller.abort();
+    detach();
+    controller.abort();
+
+    expect(transaction.abort).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts immediately when the signal is already cancelled', () => {
+    const controller = new AbortController();
+    controller.abort();
+    const transaction: any = { active: true, abort: vi.fn() };
+
+    abortTransactionOnSignal(transaction, controller.signal);
+
+    expect(transaction.abort).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not turn an already committed transaction into a cancellation failure', () => {
+    const controller = new AbortController();
+    const transaction: any = { active: false, abort: vi.fn() };
+    abortTransactionOnSignal(transaction, controller.signal);
+
+    expect(() => controller.abort()).not.toThrow();
+    expect(transaction.abort).not.toHaveBeenCalled();
+  });
+
+  it('treats a transaction abort rejected after commit as commit-wins', () => {
+    const controller = new AbortController();
+    const transaction: any = {
+      active: true,
+      abort: vi.fn(() => { throw new DOMException('Already committed', 'InvalidStateError'); })
+    };
+    abortTransactionOnSignal(transaction, controller.signal);
+
+    expect(() => controller.abort()).not.toThrow();
+    expect(transaction.abort).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('damaged track isolation', () => {
   it('removes orphan segments and their dependent chunks and snapshots atomically', async () => {

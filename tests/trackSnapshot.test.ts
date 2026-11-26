@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => {
   db.version.mockReturnValue(db);
   db.stores.mockReturnValue(db);
   db.upgrade.mockReturnValue(db);
-  return { db, rows: [] as any[], segments: [] as any[] };
+  return { db, rows: [] as any[], segments: [] as any[], snapshotQuery: { toArray: vi.fn(), each: vi.fn() } };
 });
 
 vi.mock('dexie', () => ({
@@ -23,7 +23,7 @@ vi.mock('dexie', () => ({
   }
 }));
 
-import { loadTrackSnapshot, restoreTrackSnapshot } from '../src/core/store';
+import { getTrackSnapshotSummary, loadTrackSnapshot, restoreTrackSnapshot } from '../src/core/store';
 
 const segment = { id: 'seg-1', tripId: 'trip-1', index: 0 };
 const snapshot = (seq: number, overrides: any = {}) => ({
@@ -43,7 +43,11 @@ beforeEach(() => {
   mocks.segments = [segment];
   mocks.db.transaction.mockImplementation(async (...args) => args[args.length - 1]());
   mocks.db.trackSnapshots.where.mockReturnValue({
-    equals: () => ({ toArray: async () => mocks.rows })
+    equals: () => mocks.snapshotQuery
+  });
+  mocks.snapshotQuery.toArray.mockImplementation(async () => mocks.rows);
+  mocks.snapshotQuery.each.mockImplementation(async (callback: (row: any) => void) => {
+    for (const row of mocks.rows) callback(row);
   });
   mocks.db.segments.where.mockReturnValue({
     equals: () => ({ toArray: async () => mocks.segments })
@@ -54,6 +58,17 @@ beforeEach(() => {
 });
 
 describe('local original-track snapshots', () => {
+  it('summarizes snapshots through a cursor without materializing every chunk', async () => {
+    mocks.rows = [
+      snapshot(0, { segmentId: 'seg-1', createdAt: 20, points: [{ lat: 30, lon: 120, t: 1 }] }),
+      snapshot(1, { segmentId: 'seg-2', segmentIndex: 1, createdAt: 10, points: [{ lat: 30, lon: 120, t: 2 }, { lat: 31, lon: 121, t: 3 }] })
+    ];
+
+    await expect(getTrackSnapshotSummary('trip-1')).resolves.toEqual({ segments: 2, points: 3, createdAt: 10 });
+    expect(mocks.snapshotQuery.each).toHaveBeenCalledOnce();
+    expect(mocks.snapshotQuery.toArray).not.toHaveBeenCalled();
+  });
+
   it('orders valid chunks by segment and sequence', async () => {
     mocks.rows = [
       snapshot(1, { points: [{ lat: 30, lon: 120.002, t: 2 }] }),

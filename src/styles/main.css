@@ -1123,6 +1123,10 @@ html.oled-lock { color-scheme: dark; }
 .backup-info-row .v.ok { color: var(--accent); }
 .backup-info-row .v.bad { color: var(--danger); }
 .backup-info-row .v.muted { color: var(--text-dim); }
+.backup-history[hidden] { display: none; }
+.backup-history-list { display: grid; gap: 8px; }
+.backup-history-item { padding: 10px 11px; background: var(--bg-input); border-radius: var(--radius-sm); font-size: 12.5px; }
+.backup-history-item strong { font-size: 13px; }
 .backup-warning {
   display: flex; align-items: flex-start; gap: 7px; font-size: 12px; color: var(--warn);
   line-height: 1.5; margin-top: 8px;
@@ -2126,6 +2130,7 @@ html.oled-lock { color-scheme: dark; }
   border-top: 1px solid var(--border); color: var(--text-dim); font-size: 12px; font-weight: 650;
 }
 .settings-subhead svg { color: var(--accent); }
+.settings-subhead .btn { margin-left: auto; }
 .relay-subhead { margin-top: 0; padding-top: 0; border-top: none; }
 .card.settings-focus { animation: settings-focus 2s ease-out; }
 @keyframes settings-focus {

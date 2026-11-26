@@ -5,12 +5,14 @@ import { get, set, patch, resetSettings, MEET_P2P_NOTICE_VERSION } from '../core
 import { meet } from '../core/meet';
 import { on } from '../core/events';
 import { regionState, setRegionMode, runProbe } from '../core/region';
-import { storageEstimate, requestStoragePersistence, eraseAll, listTrips } from '../core/store';
+import { storageEstimate, requestStoragePersistence, eraseAll, listTrips, TRIP_SCHEMA_VERSION } from '../core/store';
 import { inspectStorageHealth, previewMediaCleanup, executeMediaCleanup } from '../core/storageHealth';
+import { runRestoreDrill, type RestoreDrillProgress, type RestoreDrillResult } from '../core/restoreDrill';
 import { appState, setActiveTrip } from './state';
 import { triggerDownload } from '../core/gpx';
 import { exportDiagLog } from '../core/diag';
 import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
+import { appendBackupHistory, clearBackupHistory, listBackupHistory } from '../core/backupHistory';
 import { startPlayback, stopPlayback, isPlaying } from '../core/simulator';
 import { setLanguage, currentLang } from '../core/i18n';
 import { generatePromo, nextVariant, PROMO_VARIANT_COUNT, promoVariantLabel } from '../core/promo';
@@ -326,9 +328,11 @@ export function createSettingsView(navigate) {
     await refreshStorage();
     toast(t(granted ? 'settings.storagePersistOk' : 'settings.storagePersistFail'), granted ? 'ok' : 'warn', 3500);
   };
-  const healthLine = el('div', { class: 'small muted', style: { marginTop: '3px' } }, t('settings.healthIdle'));
+  const healthLine = el('div', { class: 'small muted', style: { marginTop: '3px' }, 'aria-live': 'polite' }, t('settings.healthIdle'));
   const healthDetails = el('div', { class: 'storage-health', hidden: true });
   const healthBtn = el('button', { class: 'btn sm' }, icon('shield', 14), t('settings.healthCheck'));
+  const healthCancelBtn = el('button', { class: 'btn sm ghost', hidden: true }, t('settings.healthCancel'));
+  let healthController: AbortController | null = null;
   const cleanupLine = el('div', { class: 'small muted', style: { marginTop: '6px' }, hidden: true });
   const cleanupBtn = el('button', { class: 'btn sm danger', hidden: true }, icon('trash', 14), t('settings.cleanupAction'));
   let cleanupPreview: Awaited<ReturnType<typeof previewMediaCleanup>> | null = null;
@@ -337,15 +341,29 @@ export function createSettingsView(navigate) {
     if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / 1048576).toFixed(1)} MB`;
   }
+  healthCancelBtn.onclick = () => healthController?.abort();
   healthBtn.onclick = async () => {
+    healthController?.abort();
+    const controller = new AbortController();
+    healthController = controller;
     healthBtn.disabled = true;
     healthBtn.textContent = t('settings.healthChecking');
+    healthCancelBtn.hidden = false;
     healthDetails.hidden = true;
     cleanupLine.hidden = true;
     cleanupBtn.hidden = true;
     cleanupPreview = null;
     try {
-      const [result, preview] = await Promise.all([inspectStorageHealth(), previewMediaCleanup()]);
+      const [result, preview] = await Promise.all([
+        inspectStorageHealth({
+          signal: controller.signal,
+          onProgress: ({ phase, processed }) => {
+            healthLine.textContent = t('settings.healthProgress', { phase: t(`settings.healthPhase.${phase}`), n: processed });
+          }
+        }),
+        previewMediaCleanup()
+      ]);
+      if (controller.signal.aborted) return;
       cleanupPreview = preview;
       healthLine.textContent = t(result.healthy ? 'settings.healthClean' : result.ok ? 'settings.healthAdvisory' : 'settings.healthIssues', { n: result.totals.issues });
       healthLine.style.color = result.ok ? result.healthy ? 'var(--accent)' : 'var(--warn)' : 'var(--danger)';
@@ -374,9 +392,12 @@ export function createSettingsView(navigate) {
       healthDetails.hidden = false;
     } catch (e) {
       console.error(e);
-      healthLine.textContent = t('settings.healthFail');
-      healthLine.style.color = 'var(--danger)';
+      const cancelled = controller.signal.aborted || e?.name === 'AbortError';
+      healthLine.textContent = t(cancelled ? 'settings.healthCancelled' : 'settings.healthFail');
+      healthLine.style.color = cancelled ? 'var(--warn)' : 'var(--danger)';
     } finally {
+      if (healthController === controller) healthController = null;
+      healthCancelBtn.hidden = true;
       healthBtn.disabled = false;
       healthBtn.innerHTML = '';
       healthBtn.append(icon('shield', 14), t('settings.healthCheck'));
@@ -425,6 +446,122 @@ export function createSettingsView(navigate) {
       } });
     } catch { toast(t('trips.restoreErr'), 'err'); }
   };
+  const drillLine = el('div', { class: 'small muted', id: 'restore-drill-status', style: { marginTop: '6px' }, 'aria-live': 'polite' }, t('settings.drillIdle'));
+  const drillBtn = el('button', { class: 'btn sm' }, icon('shield', 14), t('settings.drillAction'));
+  const drillCancelBtn = el('button', { class: 'btn sm ghost', hidden: true }, t('settings.drillCancel'));
+  let drillController: AbortController | null = null;
+  async function recordDrill(result: RestoreDrillResult | null) {
+    await appendBackupHistory({
+      kind: 'drill', status: result?.ok ? 'drill-passed' : 'failed', createdAt: Date.now(),
+      filename: 'restore-drill.trip', bytes: 0, encrypted: false,
+      backupFormat: 'localtrace-backup', tripSchema: TRIP_SCHEMA_VERSION, appVersion: APP_VERSION,
+      trips: result?.counts.trips || 0, segments: result?.counts.segments || 0,
+      chunks: result?.counts.trackChunks || 0, waypoints: result?.counts.waypoints || 0,
+      media: result?.counts.media || 0, mediaChecked: result?.mediaChecked || 0, mediaFailed: 0,
+      source: 'drill'
+    });
+    await renderBackupHistory();
+  }
+  drillCancelBtn.onclick = () => drillController?.abort();
+  drillBtn.onclick = async () => {
+    if (drillController) return;
+    const controller = new AbortController();
+    drillController = controller;
+    drillBtn.disabled = true;
+    drillCancelBtn.hidden = false;
+    drillLine.style.color = '';
+    drillLine.textContent = t('settings.drillPhase.prepare');
+    const onProgress = (progress: RestoreDrillProgress) => {
+      const phase = t(`settings.drillPhase.${progress.phase}`);
+      drillLine.textContent = progress.total
+        ? `${phase} ${progress.loaded || 0}/${progress.total}`
+        : phase;
+    };
+    try {
+      const result = await runRestoreDrill({ signal: controller.signal, onProgress });
+      await recordDrill(result);
+      if (result.ok) {
+        const checks = Object.values(result.checks).filter(Boolean).length;
+        drillLine.style.color = 'var(--accent)';
+        drillLine.textContent = t('settings.drillPassed', {
+          checks, media: result.mediaChecked, seconds: (result.durationMs / 1000).toFixed(1)
+        });
+        toast(t('settings.drillPassedToast'), 'ok', 3500);
+      } else if (result.status === 'aborted') {
+        drillLine.style.color = 'var(--warn)';
+        drillLine.textContent = t('settings.drillAborted');
+        toast(t('settings.drillAborted'), 'warn', 3000);
+      } else if (result.status === 'unsupported') {
+        drillLine.style.color = 'var(--warn)';
+        drillLine.textContent = t('settings.drillUnsupported');
+        toast(t('settings.drillUnsupported'), 'warn', 3500);
+      } else {
+        drillLine.style.color = 'var(--danger)';
+        drillLine.textContent = t('settings.drillFailed', { code: result.error?.code || 'restore-drill-failed' });
+        toast(t('settings.drillFailedToast'), 'err', 3500);
+      }
+    } catch (error) {
+      console.error(error);
+      await recordDrill(null);
+      drillLine.style.color = 'var(--danger)';
+      drillLine.textContent = t('settings.drillFailed', { code: 'restore-drill-failed' });
+      toast(t('settings.drillFailedToast'), 'err', 3500);
+    } finally {
+      drillController = null;
+      drillBtn.disabled = false;
+      drillCancelBtn.hidden = true;
+    }
+  };
+  const historyList = el('div', { class: 'backup-history-list' });
+  const historyBox = el('div', { class: 'backup-history', hidden: true }, historyList);
+  const historyClearBtn = el('button', { class: 'btn sm ghost' }, t('settings.historyClear'));
+  let historyRevision = 0;
+  async function renderBackupHistory() {
+    const revision = ++historyRevision;
+    const records = await listBackupHistory();
+    if (revision !== historyRevision) return;
+    historyList.innerHTML = '';
+    historyBox.hidden = !records.length;
+    historyClearBtn.hidden = !records.length;
+    for (const record of records) {
+      const failed = record.status === 'failed';
+      const integrity = record.media > 0
+        ? t('settings.historyIntegrity', { checked: record.mediaChecked, total: record.media })
+        : '';
+      historyList.append(el('div', { class: 'backup-history-item' },
+        el('div', { class: 'row wrap', style: { justifyContent: 'space-between', gap: '6px' } },
+          el('strong', {}, `${t(`settings.historyKind.${record.kind}`)} · ${t(`settings.historyStatus.${record.status}`)}`),
+          el('span', { class: 'small', style: { color: failed ? 'var(--danger)' : 'var(--muted)' } },
+            new Date(record.createdAt).toLocaleString())),
+        record.filename ? el('div', { class: 'small mono', style: { marginTop: '4px', wordBreak: 'break-all' } }, record.filename) : null,
+        el('div', { class: 'small muted', style: { marginTop: '4px' } },
+          t('settings.historyCounts', { trips: record.trips, waypoints: record.waypoints, media: record.media }),
+          ` · ${formatBytes(record.bytes)}`,
+          integrity ? ` · ${integrity}` : ''),
+        el('div', { class: 'small faint', style: { marginTop: '2px' } },
+          t('settings.historySource', { source: t(`settings.historyOrigin.${record.source}`) }))));
+    }
+  }
+  historyClearBtn.onclick = async () => {
+    const confirmed = await confirmModal({
+      title: t('settings.historyClear'),
+      message: t('settings.historyClearConfirm'),
+      danger: true,
+      confirmText: t('settings.historyClear')
+    });
+    if (!confirmed) return;
+    historyClearBtn.disabled = true;
+    try {
+      if (!await clearBackupHistory()) throw new Error('backup history clear failed');
+      toast(t('settings.historyCleared'), 'ok');
+      await renderBackupHistory();
+    } catch (e) {
+      console.error(e);
+      toast(t('settings.historyClearFail'), 'err');
+    } finally {
+      historyClearBtn.disabled = false;
+    }
+  };
   const eraseBtn = el('button', { class: 'btn danger block' }, icon('trash', 14), t('settings.clearAll'));
   eraseBtn.onclick = async () => {
     const ok = await confirmModal({ title: t('settings.clearAll'), message: t('settings.clearConfirm'), danger: true, confirmText: t('settings.clearAll') });
@@ -460,9 +597,11 @@ export function createSettingsView(navigate) {
     persistBtn.title = t('settings.storagePersistHint');
     backupHealthLine.textContent = t('backup.lastBackup', { when: lastBackupLabel() }) + (backupDue() ? ' · ' + t('backup.dueShort') : '');
     backupHealthLine.style.color = backupDue() ? 'var(--warn)' : '';
+    await renderBackupHistory();
   }
   refreshStorage();
   on('backup:exported', refreshStorage);
+  on('backup:restored', refreshStorage);
   const dangerZone = el('div', { class: 'danger-zone' },
     el('div', { class: 'dz-title' }, icon('warn', 14), t('settings.dangerTitle')),
     el('div', { class: 'small faint', style: { marginBottom: '10px' } }, t('settings.dangerHint')),
@@ -471,12 +610,17 @@ export function createSettingsView(navigate) {
     el('div', { class: 'row wrap', style: { marginTop: '8px' } }, persistBtn),
     el('div', { class: 'small faint', style: { margin: '5px 0 9px' } }, t('settings.storagePersistHint')),
     el('div', { class: 'sep' }),
-    el('div', { class: 'row wrap', style: { marginBottom: '6px' } }, healthBtn),
+    el('div', { class: 'row wrap', style: { marginBottom: '6px' } }, healthBtn, healthCancelBtn),
     healthLine, healthDetails,
     el('div', { class: 'sep' }),
     backupHealthLine,
-    el('div', { class: 'row wrap', style: { marginTop: '8px' } }, backupBtn, restoreBtn),
-    el('div', { class: 'settings-subhead' }, icon('refresh', 15), t('settings.resetTitle')),
+    el('div', { class: 'row wrap', style: { marginTop: '8px' } }, backupBtn, restoreBtn, drillBtn),
+    el('div', { class: 'small faint', style: { margin: '6px 0 0' } }, t('settings.drillDesc')),
+    el('div', { class: 'row wrap', style: { marginTop: '4px', alignItems: 'center' } }, drillLine, drillCancelBtn),
+    el('div', { class: 'row wrap settings-subhead', style: { marginTop: '14px' } }, icon('database', 15), t('settings.historyTitle'), historyClearBtn),
+    el('div', { class: 'small faint', style: { margin: '-2px 0 8px' } }, t('settings.historyDesc')),
+    historyBox,
+    el('div', { class: 'settings-subhead', style: { marginTop: '14px' } }, icon('refresh', 15), t('settings.resetTitle')),
     el('div', { class: 'small muted', style: { margin: '-2px 0 10px' } }, t('settings.resetDesc')),
     resetBtn,
     el('div', { class: 'sep' }),
@@ -691,6 +835,7 @@ export function createSettingsView(navigate) {
   return {
     view,
     refresh: () => { renderProbe(); renderSimBanner(); refreshStorage(); },
+    destroy: () => healthController?.abort(),
     resize: () => {},
     focus: (intent) => {
       const anchor = typeof intent === 'string' ? intent : intent?.anchor;

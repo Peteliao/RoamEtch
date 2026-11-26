@@ -6,7 +6,7 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 export default defineConfig({
   testDir: './e2e',
   testMatch: '**/*.spec.ts',
-  testIgnore: 'offline*Exports.spec.ts',
+  testIgnore: ['offline*Exports.spec.ts', 'memoryMatrix.spec.ts'],
   outputDir: 'test-results',
   fullyParallel: false,
   workers: 1,

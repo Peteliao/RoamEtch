@@ -42,20 +42,22 @@ Key principles:
 | `src/main.ts` | Bootstrap: i18n, theme, region probe, damaged-row isolation, deep links (`#meet=`, `#t=`), `?demo=1`, `?sim=1`, and the `window.__lt` diagnostics handle. |
 | `src/ui/shell.ts` | Top bar, region chip, four-tab navigation, view lifecycle, language rebuild, and recording/team status shortcuts. |
 | `src/ui/state.ts` | Active trip, nested trip-detail section, and current view state shared by views. |
-| `src/core/store.ts` | Dexie schema and CRUD: trips, segments, 400-point track chunks, waypoints, media, elevation cache. |
+| `src/core/store.ts` | Dexie schema and CRUD: trips, segments, 400-point track chunks, original snapshots, waypoints, media, elevation cache, and bounded previews. |
 | `src/core/recorder.ts` | GPS watch, fix validation, gap segmentation, incremental persistence, live stats, wake lock and keep-alive. |
 | `src/worker/compute.worker.ts` | Statistics, simplification, and coordinate transforms off the main thread, with a synchronous fallback. |
 | `src/ui/map.ts` | MapLibre setup, region-specific raster styles, tile providers, and GCJ-02 render adapter. |
 | `src/ui/analysis.ts` | Compact metric card (4 hero + 9 details), elevation/speed charts with hover and touch scrubbing, gap repair, GPS quality report, timeline and waypoints. |
 | `src/ui/trips.ts` | Trip library plus nested trip detail (Overview / Data / Share): favorites, tags, search, filters, sorting, yearly footprint, import/export, and explicit trip actions. |
-| `src/ui/backupFlow.ts` | Shared backup/restore UX: download (optionally password-encrypted), restore preview, integrity status, duplicate strategy, pre-restore snapshot. |
+| `src/ui/backupFlow.ts` | Shared backup/restore UX: download (optionally password-encrypted), restore preview, integrity status, duplicate strategy, pre-restore snapshot, and privacy-safe operation history. |
 | `src/ui/export.ts` | Share detail: privacy review, posters, replay videos, standalone HTML, files, and share link, with trip-version-aware output invalidation. |
 | `src/core/trackVideo.ts` | Realtime canvas replay, intro/outro cards, and muxing the generated music track. |
 | `src/core/footprintShare.ts` | Aggregate-only yearly footprint artwork: 1080×1350 image and 9-second 1080×1920 video with original music. |
 | `src/core/videoCapture.ts` | Shared MediaRecorder support check and MIME/bitrate selection (MP4/H.264 preferred, WebM fallback). |
 | `src/core/promo.ts` | Generic promo artwork: eight designs per theme, preview cycling, immediate-repeat avoidance, and matching captions. |
 | `src/core/music.ts` | Four original procedural loops: composition data, Web Audio synthesis, seamless tail wrap, random/manual selection, and MediaStream output. |
-| `src/core/backup.ts` | Backup format v2: ZIP manifest, payload digest, per-media checksums, inspect/restore. |
+| `src/core/backup.ts` | Backup format v3: streamed ZIP inspection, 4 KiB decoder slices, central-directory validation, bounded manifest/media decoding, payload digest, per-media checksums, and transactional restore. |
+| `src/core/restoreDrill.ts` | Guided production-pipeline rehearsal using synthetic rows and media in two isolated temporary Dexie databases, with conflict, corruption, cancellation, and cleanup checks. |
+| `src/core/backupHistory.ts` | Independent IndexedDB store for the latest 20 allowlisted backup/restore/drill summaries; explicit clear and one-time legacy migration. |
 | `src/core/backupCrypto.ts` | Optional backup encryption: PBKDF2-SHA-256 → AES-256-GCM `TRKMBKP1` envelope (`.roametch.enc`; older `.trackmint.enc` backups remain restorable). |
 | `src/core/integrity.ts` | Deterministic JSON serialization and SHA-256 helpers. |
 | `src/core/footprint.ts` | Year/month aggregation over `statsCache` for the footprint card. |
@@ -71,13 +73,14 @@ Key principles:
 
 ## Data model
 
-Dexie database `localtrace`, schema version 2:
+Dexie database `localtrace`, schema version 3:
 
 - `trips`: id, activity, status, timestamps, name, tags, favorite, privacy, and
   `statsCache`. Rows are ordered by `updatedAt`.
 - `segments`: one continuous recording interval, indexed by trip and order.
 - `trackChunks`: up to 400 points per row, linked to a trip and segment by sequence.
   Chunking keeps IndexedDB writes small and avoids rewriting a whole track.
+- `trackSnapshots`: durable pre-clean point snapshots, linked to a trip and segment.
 - `waypoints`: nodes with type, note, time, hidden flag, and linked media ids.
 - `media`: EXIF-stripped photo blobs and thumbnails, linked to a trip.
 - `elevCache`: elevation lookups with fetch time.
@@ -85,8 +88,12 @@ Dexie database `localtrace`, schema version 2:
   this internal deduplication index is not part of user backup payloads.
 
 `loadTripFull` assembles a trip with ordered segments, flattened chunks, waypoints,
-and media metadata. User preferences live separately in `localStorage` through
-`core/settings.ts`; that is why a preferences reset cannot delete trips.
+and media metadata. `loadTripPreview` caps startup/recovery reads at 16 chunks and
+500 points and omits media blobs. User preferences live separately in
+`localStorage` through `core/settings.ts`; that is why a preferences reset cannot
+delete trips. Backup/restore summaries live in the independent
+`localtrace-backup-history` database so trip deletion, preference reset, and full
+trip-database erasure do not remove them; only its explicit clear action does.
 
 Backups serialize every table plus binary media into a `.trip` ZIP:
 
@@ -95,14 +102,27 @@ Backups serialize every table plus binary media into a `.trip` ZIP:
   payload (key order and non-finite numbers do not change the digest).
 - `integrity.files` records byte length and SHA-256 per media file.
 - Version 1 archives are still accepted and reported as “no checksum”; version 2
-  archives block restore when payload or media verification fails.
+  and v3 archives require valid integrity metadata and block restore when payload
+  or media verification fails. A prepared inspection is reverified before restore,
+  with media Blobs hashed incrementally again so mutating the cached manifest or
+  files cannot reuse a stale successful result.
+- Ordinary ZIP inspection consumes `File.stream()` incrementally. Decoder input is
+  sliced at 4 KiB so a highly compressible chunk cannot allocate an unbounded
+  decoded buffer before entry limits run. The manifest is decoded under a 16 MiB
+  cap, and each media entry is hashed and assembled from bounded parts while
+  enforcing actual-byte, entry, archive, and compression-ratio limits. The ZIP end
+  record and central directory must agree with observed local entries. Legacy
+  encrypted envelopes remain a one-shot compatibility path because AES-GCM
+  decryption currently materializes the complete ciphertext and plaintext.
 - Inspection enforces size, entry-count, compression-ratio, duplicate-path,
   manifest-size, point-count, and path/ID whitelist limits before decompression.
   Manifest counts and trip/segment/chunk/waypoint/media relationships are checked
   before restore; missing media blocks the restore.
 - Restore reuses the inspected archive and writes all tables plus overwrite
   deletions in one IndexedDB transaction, so a failed media write rolls back
-  previously deleted trips.
+  previously deleted trips. Abort is checked inside the transaction; once the
+  transaction commits, a late cancellation does not turn stored data into a
+  reported failure.
 - Full-library backups can optionally be password-encrypted into a
   `.roametch.enc` file (older `.trackmint.enc` backups remain restorable): a
   `TRKMBKP1` header, 16-byte random salt, 12-byte nonce,
@@ -114,6 +134,35 @@ Backups serialize every table plus binary media into a `.trip` ZIP:
   detection, not authenticity, because an attacker who rewrites the archive can
   recompute the checksums. Use the password option whenever the file leaves your
   own devices.
+
+## Maintenance and atomic edits
+
+- Gap repair resolves routes before writing, then replaces every affected segment
+  in one transaction. The transaction rechecks `updatedAt` and exact point identity;
+  undo/redo rejects deleted or subsequently edited target segments. Cancellation is
+  rechecked after progress callbacks and bound to the active write transaction.
+- GPS cleaning uses the same transaction-local chunk replacement helpers. Its
+  Worker preview returns removal indexes and compact issue summaries rather than a
+  second full trajectory; submission recomputes the plan before applying it.
+  Cleanup and snapshot restoration bind cancellation to their write transactions.
+- Storage-health scans use primary-key cursors in 500-row batches, yield between
+  batches, retain only counters/sets/sample IDs, and expose progress plus abort.
+  Media rows are processed one at a time and their Blob bytes are hashed in 64 KiB
+  chunks, so same-size replacements do not evade revision checks or retain a media
+  batch in memory. Table counts detect concurrent structural changes; a final
+  cursor pass and count check share one read transaction and compare bounded
+  content revisions to detect equal-count updates. The scan retries and fails
+  explicitly if writes continue instead of returning a false corruption report.
+- Original-track snapshot summaries aggregate through a cursor instead of loading
+  every snapshot chunk into memory.
+- The guided restore drill seeds synthetic rows and media in two uniquely named
+  temporary databases, runs the real v3 export/inspect/restore pipeline, verifies
+  exact media hashes plus skip/overwrite and corruption rollback, then deletes both
+  databases. The main trip database is never passed as a target.
+- Record finish, rename, quick-photo save/undo, and interrupted-trip recovery use
+  track/waypoint reads or bounded previews. Active-recording reattachment also uses
+  a bounded preview. Full media blobs are loaded only when analysis or export is
+  explicitly opened.
 
 ## Recording pipeline
 

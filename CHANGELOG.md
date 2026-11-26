@@ -4,6 +4,54 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.5.0] - 2026-11-27
+
+### Added
+
+- Added privacy-safe backup history and a guided restore rehearsal that exercises
+  export, integrity checks, conflict handling, corruption rejection, and rollback
+  in isolated temporary databases without reading or writing real trips.
+- Added a 52-cell physical-iPhone release-evidence contract and verifier covering
+  Safari/PWA, large tracks and backups, offline use, lifecycle interruptions,
+  quota, memory pressure, and system termination. Real-device evidence remains
+  required before that release gate can pass.
+- Added production Chromium memory regressions for 20,000-point cold startup,
+  storage-health scans, GPS cleanup/restore, and recording-spill recovery, with
+  heap, task, script, transient-node, and retained-node budgets.
+
+### Changed
+
+- Gap repair and GPS cleanup now prepare all results before writing and commit
+  through version-guarded transactions; stale or concurrently changed tracks are
+  rejected instead of overwritten.
+- Ordinary ZIP backup imports decode bounded 4 KiB slices, validate the ZIP end
+  record and central directory, cancel pending reads immediately, and preserve
+  committed restores when cancellation arrives at the commit boundary. Legacy
+  encrypted imports retain their one-shot compatibility path.
+- Storage-health scans, cleanup previews, recording recovery, and snapshot summaries
+  now use bounded reads, compact Worker plans, streamed media-content revisions, or
+  cursor aggregation instead of retaining complete large-track and media arrays.
+
+### Fixed
+
+- Temporary restore-drill databases are closed and deleted on success, abort,
+  failure, blocked deletion, and timeout; incomplete cleanup never reports success.
+- Backup history records committed restores before user callbacks, imports legacy
+  history before the first new row, and excludes passwords, paths, blobs,
+  coordinates, and track data.
+- Version 2/3 backups without valid integrity metadata are rejected; prepared
+  inspections reverify payload and media digests before restore, and cancelled
+  routing, progress callbacks, transactions, or unavailable-Worker fallbacks no
+  longer continue sensitive or expensive work after cancellation.
+- Storage-health scans retry when concurrent inserts change table counts or a
+  final consistent read transaction detects equal-count updates, and fail
+  explicitly if writes continue instead of reporting transient state as corruption.
+- Gap repair, GPS cleanup/restoration, and backup restore bind cancellation to the
+  active write transaction so pre-commit cancellation rolls back while an already
+  committed restore remains successful.
+- Quick-photo save/undo and active-recording reattachment refresh waypoints or use
+  bounded previews without materializing the full track and media library.
+
 ## [3.4.0] - 2026-11-26
 
 ### Added

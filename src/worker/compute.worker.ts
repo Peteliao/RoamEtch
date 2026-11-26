@@ -3,9 +3,11 @@ import { computeStats } from '../core/stats';
 import { computeDistanceSplits } from '../core/distanceSplits';
 import { simplify } from '../core/geo';
 import { wgs84ToGcj02, gcj02ToWgs84 } from '../core/coords';
+import { previewTrackCleanup } from '../core/gpsQuality';
 
 self.onmessage = (e) => {
   const { id, type, payload } = e.data;
+  if (type === 'cancel') return;
   try {
     let result;
     switch (type) {
@@ -26,6 +28,9 @@ self.onmessage = (e) => {
         });
         break;
       }
+      case 'cleanup-preview':
+        result = previewTrackCleanup(payload.segments, payload.activity, payload.opts);
+        break;
       default:
         throw new Error('unknown task ' + type);
     }

@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => {
   db.version.mockReturnValue(db);
   db.stores.mockReturnValue(db);
   db.upgrade.mockReturnValue(db);
-  return { db, trips, segments, chunks };
+  return { db, trips, segments, chunks, previewChunkReads: [] as string[] };
 });
 
 vi.mock('dexie', () => ({
@@ -43,6 +43,7 @@ beforeEach(() => {
   mocks.trips.clear();
   mocks.segments.length = 0;
   mocks.chunks.length = 0;
+  mocks.previewChunkReads.length = 0;
   mocks.db.version.mockReturnValue(mocks.db);
   mocks.db.stores.mockReturnValue(mocks.db);
   mocks.db.upgrade.mockReturnValue(mocks.db);
@@ -66,7 +67,13 @@ beforeEach(() => {
             count: async () => rows().length,
             last: async () => rows().at(-1),
             offset: (offset: number) => ({
-              limit: (limit: number) => ({ toArray: async () => rows().slice(offset, offset + limit) })
+              limit: (limit: number) => ({
+                toArray: async () => {
+                  const selected = rows().slice(offset, offset + limit);
+                  mocks.previewChunkReads.push(...selected.map((chunk) => chunk.id));
+                  return selected;
+                }
+              })
             }),
             reverse: () => ({
               each: async (visit) => {
@@ -178,6 +185,8 @@ describe('trip loading', () => {
     const preview = await loadTripPreview('trip-1');
 
     expect(preview?.readOnly).toBe(true);
+    expect(mocks.previewChunkReads).toHaveLength(16);
+    expect(new Set(mocks.previewChunkReads).size).toBe(16);
     expect(preview?.segments.flatMap((segment) => segment.points)).toHaveLength(500);
     expect(preview?.segments[0].points[0].t).toBe(0);
     expect(preview?.segments[1].points.length).toBeGreaterThan(0);

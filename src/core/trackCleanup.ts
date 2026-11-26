@@ -1,40 +1,57 @@
-import { cleanTrackSegments } from './gpsQuality';
+import { buildTrackCleanupEdits, sameTrackCleanupPreview } from './gpsQuality';
+import { previewTrackCleanupAsync } from './workerBridge';
 import { pushAction } from './history';
 import { emit } from './events';
 import {
-  db, loadTripFull, loadTrackSnapshot, replaceSegmentPoints,
-  saveTrackSnapshot, updateTrip
+  db, loadTripTrack, loadTrackSnapshot, replaceSegmentPointsInTx,
+  saveTrackSnapshotInTx, updateTripInTx, abortTransactionOnSignal
 } from './store';
 
-export async function cleanGpsTrack(tripId, { activity, preview = null, expectedUpdatedAt = null }: any = {}) {
-  const full = await loadTripFull(tripId);
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw signal.reason ?? new DOMException('Track cleanup aborted.', 'AbortError');
+}
+
+export async function cleanGpsTrack(tripId, { activity, preview = null, expectedUpdatedAt = null, signal }: any = {}) {
+  throwIfAborted(signal);
+  const full = await loadTripTrack(tripId);
+  throwIfAborted(signal);
   if (!full) return { removed: 0, segments: 0 };
   if (expectedUpdatedAt != null && full.trip.updatedAt !== expectedUpdatedAt) throw new Error('track-changed');
-  const result = preview || cleanTrackSegments(full.segments, activity || full.trip.activity || 'hike');
-  if (!Array.isArray(result.segments) || result.segments.length !== full.segments.length) throw new Error('invalid-preview');
-
-  const edits = full.segments.map((seg, index) => {
-    const after = result.segments[index]?.points;
-    if (!Array.isArray(after) || !isSubsequence(seg.points, after)) throw new Error('invalid-preview');
-    return {
-      segmentId: seg.id,
-      before: seg.points.map((point) => ({ ...point })),
-      after: after.map((point) => ({ ...point }))
-    };
-  }).filter((edit) => !samePoints(edit.before, edit.after));
+  const resolvedActivity = activity || full.trip.activity || 'hike';
+  const result = await previewTrackCleanupAsync(full.segments, resolvedActivity, {}, { signal });
+  throwIfAborted(signal);
+  if (preview && !sameTrackCleanupPreview(preview, result)) throw new Error('track-changed');
+  const edits = buildTrackCleanupEdits(full.segments, result);
   const removed = edits.reduce((sum, edit) => sum + edit.before.length - edit.after.length, 0);
   if (!removed) return { removed: 0, segments: 0 };
 
-  const write = async (useAfter, guard) => db.transaction('rw', [db.trackChunks, db.trackSnapshots, db.segments, db.trips, db.waypoints, db.media], async () => {
-    const trip = await db.trips.get(tripId);
-    if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
-    if (!trackMatches(await loadTripFull(tripId), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
-    if (useAfter) await saveTrackSnapshot(tripId, full.segments);
-    for (const edit of edits) await replaceSegmentPoints(edit.segmentId, tripId, useAfter ? edit.after : edit.before);
-    await updateTrip(tripId, { statsCache: null, thumbPoints: null });
-  });
+  const write = async (useAfter, guard, operationSignal?: AbortSignal) => {
+    throwIfAborted(operationSignal);
+    let detachAbort: (() => void) | undefined;
+    try {
+      await db.transaction('rw', [db.trackChunks, db.trackSnapshots, db.segments, db.trips], async (transaction) => {
+        detachAbort = abortTransactionOnSignal(transaction, operationSignal);
+        throwIfAborted(operationSignal);
+        const trip = await db.trips.get(tripId);
+        throwIfAborted(operationSignal);
+        if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
+        if (!trackMatches(await loadTripTrack(tripId), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
+        throwIfAborted(operationSignal);
+        if (useAfter) await saveTrackSnapshotInTx(tripId, full.segments);
+        for (const edit of edits) {
+          throwIfAborted(operationSignal);
+          await replaceSegmentPointsInTx(edit.segmentId, tripId, useAfter ? edit.after : edit.before);
+        }
+        throwIfAborted(operationSignal);
+        await updateTripInTx(tripId, { statsCache: null, thumbPoints: null, reportedDistance: null });
+        throwIfAborted(operationSignal);
+      });
+    } finally {
+      detachAbort?.();
+    }
+  };
 
-  await write(true, { segments: full.segments, expectedUpdatedAt, allowAdditional: false });
+  await write(true, { segments: full.segments, expectedUpdatedAt, allowAdditional: false }, signal);
   pushAction({
     label: 'gps-clean',
     undo: async () => {
@@ -79,18 +96,10 @@ function sameSnapshots(a, b) {
   });
 }
 
-function isSubsequence(before, after) {
-  let cursor = 0;
-  for (const point of after) {
-    while (cursor < before.length && !samePoints([before[cursor]], [point])) cursor++;
-    if (cursor === before.length) return false;
-    cursor++;
-  }
-  return true;
-}
-
-export async function restoreGpsTrack(tripId, { expectedUpdatedAt = null } = {}) {
-  const [full, snapshot] = await Promise.all([loadTripFull(tripId), loadTrackSnapshot(tripId)]);
+export async function restoreGpsTrack(tripId, { expectedUpdatedAt = null, signal }: any = {}) {
+  throwIfAborted(signal);
+  const [full, snapshot] = await Promise.all([loadTripTrack(tripId), loadTrackSnapshot(tripId)]);
+  throwIfAborted(signal);
   if (!full || !snapshot.length) return { restored: 0 };
   if (expectedUpdatedAt != null && full.trip.updatedAt !== expectedUpdatedAt) throw new Error('track-changed');
   const original = new Map(snapshot.map((segment) => [segment.id, segment.points]));
@@ -100,20 +109,37 @@ export async function restoreGpsTrack(tripId, { expectedUpdatedAt = null } = {})
     after: original.get(segment.id).map((point) => ({ ...point }))
   })).filter((edit) => !samePoints(edit.before, edit.after));
 
-  const write = async (useOriginal, guard) => db.transaction('rw', [db.trackChunks, db.trackSnapshots, db.segments, db.trips, db.waypoints, db.media], async () => {
-    const trip = await db.trips.get(tripId);
-    if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
-    if (!trackMatches(await loadTripFull(tripId), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
-    if (!sameSnapshots(snapshot, await loadTrackSnapshot(tripId))) throw new Error('track-changed');
-    for (const edit of edits) await replaceSegmentPoints(edit.segmentId, tripId, useOriginal ? edit.after : edit.before);
-    await updateTrip(tripId, {
-      statsCache: null, thumbPoints: null,
-      ...(useOriginal ? { gpsRestoredAt: Date.now() } : {})
-    });
-  });
+  const write = async (useOriginal, guard, operationSignal?: AbortSignal) => {
+    throwIfAborted(operationSignal);
+    let detachAbort: (() => void) | undefined;
+    try {
+      await db.transaction('rw', [db.trackChunks, db.trackSnapshots, db.segments, db.trips], async (transaction) => {
+        detachAbort = abortTransactionOnSignal(transaction, operationSignal);
+        throwIfAborted(operationSignal);
+        const trip = await db.trips.get(tripId);
+        throwIfAborted(operationSignal);
+        if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
+        if (!trackMatches(await loadTripTrack(tripId), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
+        if (!sameSnapshots(snapshot, await loadTrackSnapshot(tripId))) throw new Error('track-changed');
+        throwIfAborted(operationSignal);
+        for (const edit of edits) {
+          throwIfAborted(operationSignal);
+          await replaceSegmentPointsInTx(edit.segmentId, tripId, useOriginal ? edit.after : edit.before);
+        }
+        throwIfAborted(operationSignal);
+        await updateTripInTx(tripId, {
+          statsCache: null, thumbPoints: null, reportedDistance: null,
+          ...(useOriginal ? { gpsRestoredAt: Date.now() } : {})
+        });
+        throwIfAborted(operationSignal);
+      });
+    } finally {
+      detachAbort?.();
+    }
+  };
 
   if (!edits.length) return { restored: 0 };
-  await write(true, { segments: full.segments, expectedUpdatedAt, allowAdditional: false });
+  await write(true, { segments: full.segments, expectedUpdatedAt, allowAdditional: false }, signal);
   pushAction({
     label: 'gps-restore',
     undo: async () => {

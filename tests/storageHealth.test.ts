@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import {
   analyzeStorageHealth,
   inspectStorageHealth,
   type StorageHealthIssueType,
+  type StorageHealthProgress,
   type StorageHealthResult,
   type StorageHealthTables
 } from '../src/core/storageHealth';
@@ -11,6 +12,11 @@ const mocks = vi.hoisted(() => {
   const writeMethods = ['add', 'put', 'update', 'delete', 'clear', 'bulkDelete', 'modify'] as const;
   const makeTable = () => ({
     toArray: vi.fn(),
+    count: vi.fn(),
+    each: vi.fn(),
+    get: vi.fn(),
+    where: vi.fn(),
+    offset: vi.fn(),
     add: vi.fn(),
     put: vi.fn(),
     update: vi.fn(),
@@ -34,6 +40,67 @@ vi.mock('../src/core/store', () => ({ db: mocks.db }));
 
 type Fixture = { [K in keyof StorageHealthTables]: any[] };
 const tableNames = ['trips', 'segments', 'trackChunks', 'trackSnapshots', 'waypoints', 'media'] as const;
+
+type ScanCursor = {
+  primaryKey?: unknown;
+  key?: unknown;
+  continue: () => void;
+  stop: () => void;
+  fail: (error: unknown) => void;
+};
+
+type ScanCallback = (value: unknown, cursor: ScanCursor, advance?: (next: () => void) => void) => unknown;
+
+function mockTableRows(table: any, getRows: () => Iterable<unknown>) {
+  const scans: Mock[] = [];
+  const scan = async (callback: ScanCallback, after: unknown, useAfter: boolean, offset = 0) => {
+    let skipped = 0;
+    for (const value of getRows()) {
+      const primaryKey = (value as any)?.id;
+      if (useAfter && (primaryKey as any) <= (after as any)) continue;
+      if (skipped++ < offset) continue;
+      let stopped = false;
+      await new Promise<void>((resolve, reject) => {
+        let paused = false;
+        const cursor: ScanCursor = {
+          primaryKey,
+          key: primaryKey,
+          continue: resolve,
+          stop: () => { stopped = true; resolve(); },
+          fail: reject
+        };
+        try {
+          callback(value, cursor, () => { paused = true; });
+          if (!paused) resolve();
+        } catch {
+          // Dexie cursor callbacks swallow synchronous exceptions.
+          resolve();
+        }
+      });
+      if (stopped) return;
+    }
+  };
+  const collection = (after: unknown, useAfter: boolean, offset?: number) => {
+    const each = vi.fn((callback: ScanCallback) => scan(callback, after, useAfter, offset));
+    scans.push(each);
+    return { each };
+  };
+
+  scans.push(table.each);
+  table.each.mockImplementation((callback: ScanCallback) => scan(callback, undefined, false));
+  table.get.mockImplementation(async (key: unknown) => {
+    const rows = getRows();
+    if (Array.isArray(rows)) return rows.find((value) => (value as any)?.id === key);
+    for (const value of rows) if ((value as any)?.id === key) return value;
+    return undefined;
+  });
+  table.where.mockImplementation(() => ({
+    above: vi.fn((key: unknown) => collection(key, true))
+  }));
+  table.offset.mockImplementation((offset: number) => collection(undefined, false, offset));
+  table.count.mockImplementation(async () => Array.from(getRows()).length);
+  return { scans };
+}
 
 function point(lat = 30, lon = 120, t = 1000) {
   return { lat, lon, t };
@@ -84,9 +151,25 @@ function getIssue(result: StorageHealthResult, type: StorageHealthIssueType) {
   return issue!;
 }
 
+function expectNoWrites() {
+  for (const table of Object.values(mocks.tables)) {
+    for (const method of mocks.writeMethods) expect(table[method]).not.toHaveBeenCalled();
+  }
+  for (const [mode] of mocks.db.transaction.mock.calls) expect(mode).toBe('r');
+  expect(mocks.db.delete).not.toHaveBeenCalled();
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  for (const table of Object.values(mocks.tables)) table.toArray.mockResolvedValue([]);
+  mocks.db.transaction.mockReset().mockImplementation(async (_mode, _tables, run) => run());
+  for (const table of Object.values(mocks.tables)) {
+    table.toArray.mockReset().mockResolvedValue([]);
+    table.count.mockReset().mockResolvedValue(0);
+    table.each.mockReset().mockResolvedValue(undefined);
+    table.get.mockReset().mockResolvedValue(undefined);
+    table.where.mockReset();
+    table.offset.mockReset();
+  }
 });
 
 describe('analyzeStorageHealth', () => {
@@ -438,27 +521,295 @@ describe('analyzeStorageHealth', () => {
 });
 
 describe('inspectStorageHealth', () => {
-  it('reads all six tables, returns the pure result, and performs no writes', async () => {
+  it('reads all six tables and verifies revisions inside one read-only transaction', async () => {
     const tables = cleanTables();
-    for (const name of tableNames) mocks.tables[name].toArray.mockResolvedValue(tables[name]);
+    for (const name of tableNames) mockTableRows(mocks.tables[name], () => tables[name]);
 
     const result = await inspectStorageHealth();
 
     expect(result).toEqual(analyzeStorageHealth(tables));
     for (const name of tableNames) {
       const table = mocks.tables[name];
-      expect(table.toArray).toHaveBeenCalledTimes(1);
-      for (const method of mocks.writeMethods) expect(table[method]).not.toHaveBeenCalled();
+      expect(table.toArray).not.toHaveBeenCalled();
+      expect(table.each).toHaveBeenCalledTimes(2);
     }
-    expect(mocks.db.transaction).not.toHaveBeenCalled();
-    expect(mocks.db.delete).not.toHaveBeenCalled();
+    expect(mocks.db.transaction).toHaveBeenCalledWith('r', tableNames.map((name) => mocks.tables[name]), expect.any(Function));
+    expectNoWrites();
+  });
+
+  it('retries when concurrent inserts change table counts during a scan', async () => {
+    const tables = cleanTables();
+    for (const name of tableNames) mockTableRows(mocks.tables[name], () => tables[name]);
+    const scan = mocks.tables.trackChunks.each.getMockImplementation()!;
+    let inserted = false;
+    mocks.tables.trackChunks.each.mockImplementation(async (callback: ScanCallback) => {
+      await scan(callback);
+      if (!inserted) {
+        inserted = true;
+        tables.trackChunks.push({
+          id: 'chunk-2', tripId: 'trip-1', segmentId: 'segment-1', seq: 2,
+          points: [point(30.3, 120.3, 4000)]
+        });
+      }
+    });
+
+    const result = await inspectStorageHealth();
+
+    expect(result).toEqual(analyzeStorageHealth(tables));
+    expect(result.healthy).toBe(true);
+    expect(mocks.tables.trackChunks.each).toHaveBeenCalledTimes(3);
+    expectNoWrites();
+  });
+
+  it('retries when an in-place update leaves table counts unchanged', async () => {
+    const tables = cleanTables();
+    for (const name of tableNames) mockTableRows(mocks.tables[name], () => tables[name]);
+    const scan = mocks.tables.trackChunks.each.getMockImplementation()!;
+    let updated = false;
+    mocks.tables.trackChunks.each.mockImplementation(async (callback: ScanCallback) => {
+      await scan(callback);
+      if (!updated) {
+        updated = true;
+        tables.trackChunks[0].points[0].lat = 30.01;
+      }
+    });
+
+    const result = await inspectStorageHealth();
+
+    expect(result).toEqual(analyzeStorageHealth(tables));
+    expect(result.healthy).toBe(true);
+    expect(mocks.tables.trackChunks.each).toHaveBeenCalledTimes(4);
+    expectNoWrites();
+  });
+
+  it('retries when a same-size media Blob changes bytes without changing table counts', async () => {
+    const tables = cleanTables();
+    for (const name of tableNames) mockTableRows(mocks.tables[name], () => tables[name]);
+    const count = mocks.tables.media.count.getMockImplementation()!;
+    let countCalls = 0;
+    mocks.tables.media.count.mockImplementation(async () => {
+      const result = await count();
+      countCalls++;
+      if (countCalls === 2) tables.media[0].blob = new Blob(['other']);
+      return result;
+    });
+
+    const result = await inspectStorageHealth();
+
+    expect(tables.media[0].blob.size).toBe(5);
+    expect(result).toEqual(analyzeStorageHealth(tables));
+    expect(result.healthy).toBe(true);
+    expect(countCalls).toBe(6);
+    expect(mocks.tables.media.each).toHaveBeenCalledTimes(4);
+    expectNoWrites();
+  });
+
+  it('fails instead of reporting corruption when writes continue throughout every attempt', async () => {
+    const tables = cleanTables();
+    for (const name of tableNames) mockTableRows(mocks.tables[name], () => tables[name]);
+    const scan = mocks.tables.trackChunks.each.getMockImplementation()!;
+    mocks.tables.trackChunks.each.mockImplementation(async (callback: ScanCallback) => {
+      await scan(callback);
+      const seq = tables.trackChunks.length;
+      tables.trackChunks.push({
+        id: `chunk-${seq}`, tripId: 'trip-1', segmentId: 'segment-1', seq,
+        points: [point(30, 120, seq + 1)]
+      });
+    });
+
+    await expect(inspectStorageHealth()).rejects.toMatchObject({ code: 'storage-health-concurrent' });
+    expect(mocks.tables.trackChunks.each).toHaveBeenCalledTimes(3);
+    expectNoWrites();
+  });
+
+  it('matches pure analysis for malformed, duplicate, missing, and orphaned rows', async () => {
+    const tables = cleanTables();
+    tables.segments.push({ id: 'segment-empty', tripId: 'trip-1', index: 1 });
+    tables.trackChunks.push(
+      { id: 'chunk-gap', tripId: 'trip-1', segmentId: 'segment-1', seq: 4, points: [point(NaN, 120, 1)] },
+      { id: 'chunk-duplicate', tripId: 'trip-1', segmentId: 'segment-1', seq: 0, points: [point(30, 120, 1000)] },
+      null
+    );
+    tables.trackSnapshots.push(
+      { id: 'snapshot-gap', tripId: 'trip-1', segmentId: 'segment-1', segmentIndex: 0, seq: 2, createdAt: 1, points: null },
+      { id: 'snapshot-duplicate', tripId: 'trip-1', segmentId: 'segment-1', segmentIndex: 0, seq: 0, createdAt: 1, points: [point(91, 120, NaN)] }
+    );
+    tables.waypoints.push({ id: 'waypoint-orphan', tripId: 'missing', lat: 91, lon: 120, mediaIds: ['media-missing'] });
+    tables.media.push({ id: 'media-unused', tripId: 'trip-1', blob: null });
+    for (const name of tableNames) mockTableRows(mocks.tables[name], () => tables[name]);
+
+    expect(await inspectStorageHealth()).toEqual(analyzeStorageHealth(tables));
+    expectNoWrites();
+  });
+
+  it('reports bounded progress, resumes cursors by primary key, and yields to the event loop', async () => {
+    const tables = cleanTables();
+    tables.trackChunks = Array.from({ length: 1001 }, (_, index) => ({
+      id: `chunk-${String(index).padStart(4, '0')}`,
+      tripId: 'trip-1', segmentId: 'segment-1', seq: index,
+      points: [point(30, 120, index + 1)]
+    }));
+    const scans = new Map<string, Mock[]>();
+    for (const name of tableNames) scans.set(name, mockTableRows(mocks.tables[name], () => tables[name]).scans);
+
+    const progress: StorageHealthProgress[] = [];
+    let eventLoopTurned = false;
+    const eventLoopProbe = setTimeout(() => { eventLoopTurned = true; }, 0);
+    const result = await inspectStorageHealth({ onProgress: (update) => progress.push(update) });
+    clearTimeout(eventLoopProbe);
+
+    expect(result).toEqual(analyzeStorageHealth(tables));
+    expect(eventLoopTurned).toBe(true);
+    expect([...new Set(progress.map((update) => update.phase))]).toEqual(tableNames);
+    for (const name of tableNames) {
+      const updates = progress.filter((update) => update.phase === name);
+      expect(updates[0]).toEqual({ phase: name, processed: 0 });
+      expect(updates.at(-1)).toEqual({ phase: name, processed: tables[name].length });
+      for (let index = 1; index < updates.length; index++) {
+        expect(updates[index].processed).toBeGreaterThanOrEqual(updates[index - 1].processed);
+      }
+    }
+    const chunkProgress = progress.filter((update) => update.phase === 'trackChunks');
+    expect(chunkProgress).toContainEqual({ phase: 'trackChunks', processed: 500 });
+    expect(chunkProgress).toContainEqual({ phase: 'trackChunks', processed: 1000 });
+    expect(scans.get('trackChunks')).toHaveLength(5);
+    expect(mocks.tables.trackChunks.where).toHaveBeenCalledTimes(4);
+    expect(mocks.tables.trackChunks.where).toHaveBeenCalledWith(':id');
+    for (const table of Object.values(mocks.tables)) expect(table.toArray).not.toHaveBeenCalled();
+    expectNoWrites();
+  });
+
+  it('does not start reading when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    const reason = new Error('cancelled before scan');
+    controller.abort(reason);
+
+    await expect(inspectStorageHealth({ signal: controller.signal })).rejects.toBe(reason);
+    for (const table of Object.values(mocks.tables)) expect(table.each).not.toHaveBeenCalled();
+    expectNoWrites();
+  });
+
+  it('cancels at a batch boundary without reading later tables', async () => {
+    const tables = cleanTables();
+    tables.trackChunks = Array.from({ length: 2000 }, (_, index) => ({
+      id: `chunk-${String(index).padStart(4, '0')}`,
+      tripId: 'trip-1', segmentId: 'segment-1', seq: index, points: []
+    }));
+    for (const name of tableNames) mockTableRows(mocks.tables[name], () => tables[name]);
+    const controller = new AbortController();
+    const reason = new Error('cancelled during scan');
+    let processedAtCancellation = 0;
+
+    await expect(inspectStorageHealth({
+      signal: controller.signal,
+      onProgress: (update) => {
+        if (update.phase !== 'trackChunks' || update.processed === 0) return;
+        processedAtCancellation = update.processed;
+        controller.abort(reason);
+      }
+    })).rejects.toBe(reason);
+
+    expect(processedAtCancellation).toBe(500);
+    expect(processedAtCancellation).toBeLessThan(tables.trackChunks.length);
+    expect(mocks.tables.trackSnapshots.each).not.toHaveBeenCalled();
+    expect(mocks.tables.media.each).not.toHaveBeenCalled();
+    for (const table of Object.values(mocks.tables)) expect(table.toArray).not.toHaveBeenCalled();
+    expectNoWrites();
+  });
+
+  it('releases point arrays and Blob payloads after each bounded batch', async () => {
+    const tables = cleanTables();
+    const weakChunks: WeakRef<object>[] = [];
+    const weakPoints: WeakRef<object>[] = [];
+    const weakBlobs: WeakRef<object>[] = [];
+    function* chunkRows() {
+      for (let index = 0; index < 1001; index++) {
+        const points = [point(30, 120, index + 1)];
+        const chunk = {
+          id: `chunk-${String(index).padStart(4, '0')}`,
+          tripId: 'trip-1', segmentId: 'segment-1', seq: index, points
+        };
+        weakChunks.push(new WeakRef(chunk));
+        weakPoints.push(new WeakRef(points));
+        yield chunk;
+      }
+    }
+    function* mediaRows() {
+      for (let index = 0; index < 501; index++) {
+        const blob = new Blob(['photo']);
+        weakBlobs.push(new WeakRef(blob));
+        yield { id: `media-${String(index).padStart(4, '0')}`, tripId: 'trip-1', blob };
+      }
+    }
+    for (const name of tableNames) mockTableRows(mocks.tables[name], () => tables[name]);
+    mockTableRows(mocks.tables.trackChunks, chunkRows);
+    mockTableRows(mocks.tables.media, mediaRows);
+
+    const v8Module = 'node:v8';
+    const vmModule = 'node:vm';
+    const [v8, vm] = await Promise.all([
+      import(/* @vite-ignore */ v8Module),
+      import(/* @vite-ignore */ vmModule)
+    ]);
+    v8.setFlagsFromString('--expose_gc');
+    const gc = vm.runInNewContext('gc') as () => void;
+    const collectGarbage = () => {
+      for (let index = 0; index < 5; index++) gc();
+    };
+    let chunksReleased = false;
+    let blobsReleased = false;
+    const result = await inspectStorageHealth({
+      onProgress: (update) => {
+        if (update.processed !== (update.phase === 'media' ? 500 : 1000)) return;
+        if (update.phase === 'trackChunks') {
+          collectGarbage();
+          expect(weakChunks.slice(0, 500).every((reference) => reference.deref() === undefined)).toBe(true);
+          expect(weakPoints.slice(0, 500).every((reference) => reference.deref() === undefined)).toBe(true);
+          chunksReleased = true;
+        }
+        if (update.phase === 'media') {
+          collectGarbage();
+          expect(weakBlobs.slice(0, 500).every((reference) => reference.deref() === undefined)).toBe(true);
+          blobsReleased = true;
+        }
+      }
+    });
+
+    expect(chunksReleased).toBe(true);
+    expect(blobsReleased).toBe(true);
+    expect(result.counts.trackChunks).toBe(1001);
+    expect(result.counts.media).toBe(501);
+    expect(result.counts.photoBytes).toBe(2505);
+    expectNoWrites();
+  });
+
+  it('continues media pagination when a collected batch is deleted before row reads', async () => {
+    const tables = cleanTables();
+    tables.media = Array.from({ length: 501 }, (_, index) => ({
+      id: `media-${String(index).padStart(4, '0')}`, tripId: 'trip-1', blob: new Blob(['photo'])
+    }));
+    for (const name of tableNames) mockTableRows(mocks.tables[name], () => tables[name]);
+    const scan = mocks.tables.media.each.getMockImplementation()!;
+    let deletedBatch = false;
+    mocks.tables.media.each.mockImplementation(async (callback: ScanCallback) => {
+      await scan(callback);
+      if (!deletedBatch) {
+        deletedBatch = true;
+        tables.media.splice(0, 500);
+      }
+    });
+
+    const result = await inspectStorageHealth();
+
+    expect(result.counts.media).toBe(1);
+    expect(mocks.tables.media.where).toHaveBeenCalledWith(':id');
+    expect(mocks.tables.media.where.mock.results[0].value.above).toHaveBeenCalledWith('media-0499');
+    expectNoWrites();
   });
 
   it('propagates database read failures without attempting repairs', async () => {
-    mocks.tables.media.toArray.mockRejectedValue(new Error('read failed'));
+    mocks.tables.media.each.mockRejectedValue(new Error('read failed'));
     await expect(inspectStorageHealth()).rejects.toThrow('read failed');
-    for (const table of Object.values(mocks.tables)) {
-      for (const method of mocks.writeMethods) expect(table[method]).not.toHaveBeenCalled();
-    }
+    expectNoWrites();
   });
 });

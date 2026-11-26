@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { assessGpsQuality, cleanTrackSegments } from '../src/core/gpsQuality';
+import {
+  assessGpsQuality, assessTrackGpsQuality, buildTrackCleanupEdits, cleanTrackSegments,
+  previewTrackCleanup, sameTrackCleanupPreview
+} from '../src/core/gpsQuality';
 
 function fix(t, acc = 5, alt = 100) {
   return { lat: 30, lon: 120, t, acc, alt };
@@ -12,6 +15,16 @@ describe('GPS quality', () => {
     expect(q.rating).toBe('excellent');
     expect(q.gaps).toBe(0);
     expect(q.avgAcc).toBe(5);
+  });
+
+  it('assesses segments without flattening a second point array', () => {
+    const segments = [
+      { points: [fix(0), fix(30_000)] },
+      { points: [fix(60_000), fix(90_000)] }
+    ];
+    expect(assessTrackGpsQuality(segments)).toEqual(
+      assessGpsQuality(segments.flatMap((segment) => segment.points))
+    );
   });
 
   it('penalises poor accuracy and long gaps', () => {
@@ -106,5 +119,50 @@ describe('GPS quality', () => {
     expect(result.issues[0]).toMatchObject({ segmentId: 's1', count: 3, reason: 'speed' });
     expect(result.issues[0].distance).toBeGreaterThan(300);
     expect(result.impactDistance).toBeCloseTo(result.issues[0].distance);
+  });
+
+  it('builds a lightweight preview without retaining a second full track', () => {
+    const point = (lon, t) => ({ lat: 30, lon: 120 + lon / 95_600, t, acc: 5, alt: 100 });
+    const forward = [0, -100, -200, -300, -400].map((lon, i) => point(lon, i * 5_000));
+    const falseCluster = [-100, -200, -300].map((lon, i) => point(lon, (i + 5) * 5_000));
+    const segments = [{ id: 's1', points: [...forward, ...falseCluster, point(-450, 40_000)] }];
+
+    const preview = previewTrackCleanup(segments, 'drive');
+    const edits = buildTrackCleanupEdits(segments, preview);
+
+    expect(preview).toMatchObject({ version: 1, activity: 'drive', removed: 3 });
+    expect(preview).not.toHaveProperty('segments');
+    expect(preview).not.toHaveProperty('removedPoints');
+    expect(preview.removals.map((removal) => removal.index)).toEqual([5, 6, 7]);
+    expect(edits).toEqual([{ segmentId: 's1', before: segments[0].points, after: [...forward, segments[0].points[8]] }]);
+  });
+
+  it('compares preview point identity consistently including NaN metadata', () => {
+    const point = (lon, t) => ({ lat: 30, lon: 120 + lon / 95_600, t, acc: 5, alt: 100 });
+    const points = [0, -100, -200, -300, -400].map((lon, i) => ({ ...point(lon, i * 5_000), alt: NaN }));
+    const first = previewTrackCleanup([{ id: 's1', points }], 'drive');
+    const second = previewTrackCleanup([{ id: 's1', points: points.map((p) => ({ ...p })) }], 'drive');
+
+    expect(sameTrackCleanupPreview(first, second)).toBe(true);
+    expect(sameTrackCleanupPreview({ ...first, removals: null }, second)).toBe(false);
+    expect(sameTrackCleanupPreview({ ...first, issues: {} }, second)).toBe(false);
+  });
+
+  it('rejects malformed or inconsistent cleanup edit plans', () => {
+    const segments = [{ id: 's1', points: [
+      { lat: 30, lon: 120, t: 0 }, { lat: 30, lon: 120.01, t: 5_000 }
+    ] }];
+    const preview = previewTrackCleanup(segments, 'drive');
+    const invalid = [
+      null,
+      { ...preview, removed: 1 },
+      { ...preview, removals: [{ segmentId: 's1', segmentIndex: 0, index: 0, reason: 'speed', distance: 0 }] },
+      { ...preview, removals: [{ segmentId: 'other', segmentIndex: 0, index: 1, reason: 'speed', distance: 0 }] },
+      { ...preview, removals: [
+        { segmentId: 's1', segmentIndex: 0, index: 1, reason: 'speed', distance: 0 },
+        { segmentId: 's1', segmentIndex: 0, index: 1, reason: 'speed', distance: 0 }
+      ] }
+    ];
+    for (const plan of invalid) expect(() => buildTrackCleanupEdits(segments, plan)).toThrow('invalid-preview');
   });
 });

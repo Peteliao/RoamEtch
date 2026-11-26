@@ -24,6 +24,7 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:offline
+      - run: npm run test:memory
       - name: Package static build
         run: cd dist && zip -qr ../roametch-dist.zip .
       - uses: actions/upload-artifact@v4

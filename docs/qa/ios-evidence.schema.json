@@ -1,0 +1,273 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/roametch/ios-evidence.schema.json",
+  "title": "RoamEtch P0-4 iOS real-device evidence",
+  "description": "Release-gating evidence from physical iPhones only. Playwright WebKit, iPhone simulators, and desktop Chromium CDP metrics are not iOS hardware evidence. Pending work is represented by an absent evidence file, never by fabricated runs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "matrixVersion", "capturedAt", "buildFingerprint", "artifact", "iosPolicy", "runs"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "matrixVersion": { "const": "p0-4-v1" },
+    "capturedAt": { "type": "string", "format": "date-time" },
+    "buildFingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "fileCount", "totalBytes"],
+      "properties": {
+        "path": { "const": "dist" },
+        "fileCount": { "type": "integer", "minimum": 1 },
+        "totalBytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "iosPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum", "latest"],
+      "properties": {
+        "minimum": { "$ref": "#/$defs/iosRelease" },
+        "latest": { "$ref": "#/$defs/iosRelease" }
+      }
+    },
+    "runs": {
+      "type": "array",
+      "minItems": 52,
+      "maxItems": 52,
+      "items": { "$ref": "#/$defs/run" }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "iosRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "build", "source", "verifiedAt"],
+      "properties": {
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+(?:\\.\\d+)?$" },
+        "build": { "type": "string", "minLength": 1 },
+        "source": { "type": "string", "format": "uri", "pattern": "^https?://(?:[^/]*\\.)?(?:support|developer)\\.apple\\.com(?:/|$)" },
+        "verifiedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tier", "model", "udid", "ramGb", "physical"],
+      "properties": {
+        "tier": { "enum": ["legacy-low-memory", "current"] },
+        "model": { "type": "string", "minLength": 1, "not": { "pattern": "[sS][iI][mM][uU][lL][aA][tT][oO][rR]|[eE][mM][uU][lL][aA][tT][oO][rR]|[pP][lL][aA][yY][wW][rR][iI][gG][hH][tT]|[wW][eE][bB][kK][iI][tT]-[iI][pP][hH][oO][nN][eE]" } },
+        "udid": { "type": "string", "pattern": "^(?:[a-fA-F0-9]{40}|[a-fA-F0-9]{8}-[a-fA-F0-9]{16})$" },
+        "ramGb": { "type": "integer", "minimum": 1 },
+        "physical": { "const": true }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "tier": { "const": "legacy-low-memory" } }, "required": ["tier"] },
+          "then": {
+            "properties": {
+              "model": { "const": "iPhone SE (2nd generation)" },
+              "ramGb": { "const": 3 }
+            }
+          },
+          "else": {
+            "properties": {
+              "model": { "pattern": "^iPhone .+" },
+              "ramGb": { "minimum": 8 }
+            }
+          }
+        }
+      ]
+    },
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trackPoints", "mediaCount", "mediaBytes", "backupBytes"],
+      "properties": {
+        "trackPoints": { "type": "integer", "minimum": 0 },
+        "mediaCount": { "type": "integer", "minimum": 0 },
+        "mediaBytes": { "type": "integer", "minimum": 0 },
+        "backupBytes": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expected", "actual", "countsCorrect", "pageErrors", "crashes", "dataLoss", "systemTerminations"],
+      "properties": {
+        "expected": {},
+        "actual": {},
+        "countsCorrect": { "const": true },
+        "pageErrors": { "const": 0 },
+        "crashes": { "const": 0 },
+        "dataLoss": { "const": false },
+        "systemTerminations": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "peakBytes", "pressureEvents", "jetsamEvents"],
+      "properties": {
+        "source": { "enum": ["xcode-instruments", "metric-kit", "device-log"] },
+        "peakBytes": { "type": "integer", "minimum": 1 },
+        "pressureEvents": { "type": "integer", "minimum": 0 },
+        "jetsamEvents": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "evidenceReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "path", "sha256"],
+      "properties": {
+        "type": { "enum": ["screenshot", "video", "log", "trace", "xcode-instruments", "device-log"] },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?![a-zA-Z]:)(?!.*\\\\\\\\)(?!\\.\\.(?:/|$))(?!.*\\/\\.\\.(?:/|$)).+$"
+        },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "tester", "device", "os", "mode", "displayMode", "scenario", "status", "startedAt", "completedAt", "dataset", "result", "memory", "evidence"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "tester": { "type": "string", "minLength": 1 },
+        "device": { "$ref": "#/$defs/device" },
+        "os": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["band", "version", "build"],
+          "properties": {
+            "band": { "enum": ["minimum", "latest"] },
+            "version": { "type": "string", "pattern": "^\\d+\\.\\d+(?:\\.\\d+)?$" },
+            "build": { "type": "string", "minLength": 1 }
+          }
+        },
+        "mode": { "enum": ["safari", "pwa"] },
+        "displayMode": { "enum": ["browser", "standalone"] },
+        "scenario": {
+          "enum": [
+            "cold-start",
+            "large-track",
+            "health-check",
+            "gps-cleaning",
+            "gps-restore",
+            "recording-recovery",
+            "large-backup",
+            "offline",
+            "lock-screen",
+            "background",
+            "quota",
+            "memory-pressure",
+            "system-termination"
+          ]
+        },
+        "status": { "const": "passed" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "dataset": { "$ref": "#/$defs/dataset" },
+        "result": { "$ref": "#/$defs/result" },
+        "memory": { "$ref": "#/$defs/memory" },
+        "evidence": {
+          "type": "array",
+          "minItems": 2,
+          "items": { "$ref": "#/$defs/evidenceReference" },
+          "allOf": [
+            { "contains": { "properties": { "type": { "enum": ["screenshot", "video"] } }, "required": ["type"] } },
+            { "contains": { "properties": { "type": { "enum": ["log", "trace", "xcode-instruments", "device-log"] } }, "required": ["type"] } }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "safari" } }, "required": ["mode"] },
+          "then": { "properties": { "displayMode": { "const": "browser" } } },
+          "else": { "properties": { "displayMode": { "const": "standalone" } } }
+        },
+        {
+          "if": { "properties": { "device": { "properties": { "tier": { "const": "legacy-low-memory" } }, "required": ["tier"] } }, "required": ["device"] },
+          "then": { "properties": { "os": { "properties": { "band": { "const": "minimum" } } } } },
+          "else": { "properties": { "os": { "properties": { "band": { "const": "latest" } } } } }
+        },
+        {
+          "if": { "properties": { "scenario": { "enum": ["large-track", "health-check", "gps-cleaning", "gps-restore", "recording-recovery", "large-backup"] } }, "required": ["scenario"] },
+          "then": { "properties": { "dataset": { "properties": { "trackPoints": { "minimum": 20000 } } } } }
+        },
+        {
+          "if": { "properties": { "scenario": { "const": "large-backup" } }, "required": ["scenario"] },
+          "then": {
+            "properties": {
+              "dataset": {
+                "properties": {
+                  "backupBytes": { "minimum": 52428800 },
+                  "mediaCount": { "minimum": 20 },
+                  "mediaBytes": { "minimum": 41943040 }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "scenario": { "const": "system-termination" } }, "required": ["scenario"] },
+          "then": {
+            "properties": {
+              "result": { "properties": { "systemTerminations": { "minimum": 1 } } },
+              "memory": { "properties": { "jetsamEvents": { "minimum": 0 } } }
+            }
+          },
+          "else": {
+            "properties": {
+              "result": { "properties": { "systemTerminations": { "const": 0 } } },
+              "memory": { "properties": { "jetsamEvents": { "const": 0 } } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "scenario": { "const": "memory-pressure" } }, "required": ["scenario"] },
+          "then": {
+            "properties": {
+              "memory": { "properties": { "pressureEvents": { "minimum": 1 } } },
+              "result": { "properties": { "actual": { "type": "object", "required": ["recovered"], "properties": { "recovered": { "const": true } } } } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "scenario": { "const": "quota" } }, "required": ["scenario"] },
+          "then": {
+            "properties": {
+              "result": { "properties": { "actual": { "type": "object", "required": ["quotaTriggered"], "properties": { "quotaTriggered": { "const": true } } } } }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "x-required-matrix": {
+    "version": "p0-4-v1",
+    "requiredCells": 52,
+    "environments": [
+      { "tier": "legacy-low-memory", "model": "iPhone SE (2nd generation)", "ramGb": 3, "osBand": "minimum" },
+      { "tier": "current", "model": "Record the physical current model, e.g. iPhone 15 Pro or newer", "ramGbMinimum": 8, "osBand": "latest" }
+    ],
+    "modes": ["safari", "pwa"],
+    "scenarios": [
+      "cold-start",
+      "large-track",
+      "health-check",
+      "gps-cleaning",
+      "gps-restore",
+      "recording-recovery",
+      "large-backup",
+      "offline",
+      "lock-screen",
+      "background",
+      "quota",
+      "memory-pressure",
+      "system-termination"
+    ]
+  }
+}

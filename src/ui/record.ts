@@ -11,14 +11,14 @@ import { availableBasemaps } from '../core/providers';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine, bearing } from '../core/geo';
 import { estimateCalories } from '../core/calories';
 import { altSourceShortKey, altSourceTagClass } from '../core/elevation';
-import { loadTripFull, loadTripPreview, updateTrip, getTrip, addPhotoWaypoint, deletePhotoWaypoint } from '../core/store';
+import { loadTripTrack, loadTripPreview, listWaypoints, updateTrip, getTrip, addPhotoWaypoint, deletePhotoWaypoint } from '../core/store';
 import { onBroadcast } from '../core/locks';
 import { clearHistory } from '../core/history';
 import { TrackMap } from './map';
 import { WP_ICONS } from '../core/waypointMeta';
 import { rewalk, stopRewalk, toggleMute, startSim, stopSim, getRewalkNavigation, markExternalNavigation, EXTERNAL_NAV_MIN_M } from '../core/rewalk';
 import type { NavigationPlatform } from '../core/navigation';
-import { appState, setActiveTrip, refreshActiveTrip } from './state';
+import { appState, setActiveTrip } from './state';
 import { openWaypointModal, moveWaypoint, moveVertex, insertVertex, deleteVertex, undoEdit, redoEdit, histState } from './editor';
 import { el, icon, toast, modal, hasOpenOverlay } from './helpers';
 import { openCamera } from './camera';
@@ -99,6 +99,10 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     map.observeViewportInset(controls);
     syncPowerLockEntry();
     return map;
+  }
+  async function loadTripMapData(tripId) {
+    const [track, waypoints] = await Promise.all([loadTripTrack(tripId), listWaypoints(tripId)]);
+    return track ? { ...track, waypoints } : null;
   }
   async function renderFinishedTrip(full, fit = true) {
     const target = map;
@@ -758,8 +762,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
         takenAt: shot.takenAt,
         nameFor: (n) => t('record.photoNodeName', { n })
       });
-      const full = await refreshActiveTrip(tripId);
-      refreshRecordingWaypoints(full);
+      await refreshRecordingWaypointsOnly(tripId);
       const thumbUrl = URL.createObjectURL(shot.thumb);
       return {
         ok: true,
@@ -767,8 +770,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
         thumbUrl,
         undo: async () => {
           await deletePhotoWaypoint(saved.waypoint.id, tripId, saved.media.id);
-          const full = await refreshActiveTrip(tripId);
-          refreshRecordingWaypoints(full);
+          await refreshRecordingWaypointsOnly(tripId);
         }
       };
     } catch (e) {
@@ -928,16 +930,6 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
         if (appState.activeTripFull?.trip.id === sheet.tripId) {
           appState.activeTripFull = { ...appState.activeTripFull, trip: { ...appState.activeTripFull.trip, name } };
         }
-        try {
-          const full = await refreshActiveTrip(sheet.tripId);
-          if (full && viewingTrip?.trip.id === sheet.tripId) {
-            viewingTrip = full;
-            renderViewBar();
-          }
-        } catch (e) {
-          // The rename is already durable; a stale in-memory copy must not block dismissal.
-          console.warn('trip refresh after rename failed', e);
-        }
         toast(t('record.tripNamed'), 'ok');
         return true;
       } catch (e) {
@@ -968,10 +960,8 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
         if (!(await saveResultName(sheet))) return false;
         if (action === 'analysis' || action === 'export') {
           try {
-            if (appState.activeTripId !== sheet.tripId || !appState.activeTripFull) {
-              const full = await setActiveTrip(sheet.tripId);
-              if (!full) throw new Error('finished trip is unavailable');
-            }
+            const full = await setActiveTrip(sheet.tripId);
+            if (!full) throw new Error('finished trip is unavailable');
           } catch (e) {
             console.error('result navigation failed', e);
             showResultError(sheet, t('common.unavailable'), false);
@@ -1003,7 +993,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     sheet.closePromise = close;
     return close;
   }
-  function showResultSheet({ tripId, full, defaultName, savedName, initialError = false }) {
+  function showResultSheet({ tripId, defaultName, savedName, initialError = false }) {
     if (resultSheet) return false;
     const titleId = 'record-result-title';
     const inputId = 'record-result-name';
@@ -1060,7 +1050,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       el('div', { style: { display: 'flex', gap: '8px' } }, actions)
     );
     const sheet = {
-      tripId, full, node, input, error, closeButton, actions,
+      tripId, node, input, error, closeButton, actions,
       savedName, savePromise: null, closePromise: null, closed: false, historyId: 0
     };
     closeButton.onclick = () => { void closeResultSheet('done'); };
@@ -1101,7 +1091,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     let full = null;
     let loadFailed = false;
     try {
-      full = await loadTripFull(id);
+      full = await loadTripMapData(id);
     } catch (e) {
       loadFailed = true;
       console.error('finished trip load failed', e);
@@ -1110,7 +1100,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       loadFailed = true;
       try {
         const trip = await getTrip(id);
-        if (trip) full = { trip, segments: [], waypoints: [], media: [] };
+        if (trip) full = { trip, segments: [], waypoints: [] };
       } catch (e) {
         console.error('finished trip metadata load failed', e);
       }
@@ -1132,14 +1122,6 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     viewingTripEditable = false;
     viewingTrip = full;
     renderViewBar();
-    try {
-      const active = await setActiveTrip(id);
-      if (active) full = active;
-    } catch (e) {
-      console.error('finished trip activation failed', e);
-      toast(t('common.unavailable'), 'err', 5200);
-    }
-    viewingTrip = full;
     if (wasOled) {
       try {
         await setPowerLock(false, { guardUnlockClick: false });
@@ -1154,7 +1136,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     renderBanners();
     renderViewBar();
     toast(t('record.stopped'), 'ok');
-    showResultSheet({ tripId: id, full, defaultName, savedName, initialError: initialNameError });
+    showResultSheet({ tripId: id, defaultName, savedName, initialError: initialNameError });
   }
   function onStop() {
     if (stopFlowPromise) return stopFlowPromise;
@@ -1175,6 +1157,16 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     if (!full || full.trip.id !== rec.tripId) return;
     try {
       if (map && !psActive) map.setWaypoints(full.waypoints);
+    } catch (e) {
+      console.warn('waypoint refresh failed', e);
+    }
+  }
+  async function refreshRecordingWaypointsOnly(tripId = rec.tripId) {
+    if (!tripId) return;
+    const waypoints = await listWaypoints(tripId);
+    if (tripId !== rec.tripId) return;
+    try {
+      if (map && !psActive) map.setWaypoints(waypoints);
     } catch (e) {
       console.warn('waypoint refresh failed', e);
     }
@@ -1692,12 +1684,12 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     // rebuilt while a recording is active (e.g. language switch): reattach to live trip
     if (rec.tripId && (rec.status === 'recording' || rec.status === 'paused')) {
       liveActivity = (await getTrip(rec.tripId))?.activity || get('activity');
-      const full = await loadTripFull(rec.tripId);
-      if (full) {
-        map.setTrackData(full.segments, full.waypoints);
+      const preview = await loadTripPreview(rec.tripId);
+      if (preview) {
+        map.setTrackData(preview.segments, preview.waypoints);
         map.liveMode = true;
         map._liveFeats = new Map();
-        const last = full.segments[full.segments.length - 1]?.points.slice(-1)[0];
+        const last = preview.segments[preview.segments.length - 1]?.points.slice(-1)[0];
         if (last) { map.updatePosition(last.lat, last.lon, last.acc, null); map.fitTrack(); }
       }
       renderButtons();
@@ -1710,8 +1702,8 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     renderButtons();
     renderRewalk();
     if (rewalk.active) {
-      const full = await loadTripFull(rewalk.tripId);
-      if (full) { map.setTrackData(full.segments, full.waypoints); setTimeout(() => map.fitTrack(), 600); }
+      const preview = await loadTripPreview(rewalk.tripId);
+      if (preview) { map.setTrackData(preview.segments, preview.waypoints); setTimeout(() => map.fitTrack(), 600); }
       return;
     }
     if (appState.showTripInRecord && appState.activeTripFull) {

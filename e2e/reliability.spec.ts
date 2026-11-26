@@ -633,3 +633,138 @@ test('persistent save failures show the bounded degraded state and recover', asy
   await expect(page.locator('#view-record .lp-save')).toHaveText('已保存');
   expect(pageErrors).toEqual([]);
 });
+
+test('a second segment write failure rolls back the entire real IndexedDB gap repair', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await blockExternal(page);
+  await page.route('https://brouter.de/brouter**', async (route) => {
+    const url = new URL(route.request().url());
+    const [from, to] = (url.searchParams.get('lonlats') || '').split('|').map((pair) => pair.split(',').map(Number));
+    const middle = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ features: [{ geometry: { type: 'LineString', coordinates: [from, middle, to] } }] })
+    });
+  });
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+
+  const result = await page.evaluate(async () => {
+    const { store } = (window as any).__lt;
+    const { repairTrackGaps } = await import('/src/core/gapRepair.ts');
+    const trip = await store.createTrip({ name: '断点修复整笔回滚', activity: 'drive', status: 'finished' });
+    const segmentStarts = [
+      [[120, 30], [120.001, 30]],
+      [[120.01, 30.001], [120.011, 30.001]],
+      [[120.02, 30.002], [120.021, 30.002]]
+    ];
+    for (const [segmentIndex, coordinates] of segmentStarts.entries()) {
+      const segment = await store.addSegment(trip.id, 1000 + segmentIndex * 10_000);
+      await store.appendPoints(segment.id, trip.id, coordinates.map(([lon, lat], pointIndex) => ({
+        lat, lon, t: 1000 + segmentIndex * 10_000 + pointIndex * 1000, acc: 5
+      })));
+    }
+    const snapshot = async () => ({
+      trip: await store.getTrip(trip.id),
+      track: await store.loadTripTrack(trip.id),
+      chunks: (await store.db.trackChunks.where('tripId').equals(trip.id).toArray()).sort((a: any, b: any) => a.id.localeCompare(b.id))
+    });
+    const before = await snapshot();
+    const originalAdd = store.db.trackChunks.add;
+    let writeCalls = 0;
+    let failure = '';
+    try {
+      store.db.trackChunks.add = async function (row: any) {
+        if (++writeCalls === 2) throw new DOMException('forced second-segment failure', 'QuotaExceededError');
+        return originalAdd.call(this, row);
+      };
+      await repairTrackGaps(trip.id);
+    } catch (error: any) {
+      failure = error?.message || String(error);
+    } finally {
+      store.db.trackChunks.add = originalAdd;
+    }
+    const after = await snapshot();
+    await store.deleteTrip(trip.id);
+    return { before, after, failure, writeCalls };
+  });
+
+  expect(result.failure).toContain('forced second-segment failure');
+  expect(result.writeCalls).toBe(2);
+  expect(result.after).toEqual(result.before);
+  expect(result.after.track.segments.every((segment: any) => segment.points.every((point: any) => !point.synth))).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
+test('backup history shows safe export metadata and clears only its own records', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await blockExternal(page);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+  const exported = await page.evaluate(async () => {
+    const { exportBackupFlow } = await import('/src/ui/backupFlow.ts');
+    return exportBackupFlow({ promptEncryption: false });
+  });
+  expect(exported).toBe(true);
+
+  await page.evaluate(() => (window as any).__lt.shell.navigate('settings'));
+  const history = page.locator('.backup-history');
+  await expect(history).toBeVisible();
+  await expect(history).toContainText('导出 · 已导出');
+  await expect(history).toContainText('roametch-backup-');
+  await expect(history).toContainText('来源：手动');
+  await expect(page.locator('#view-settings')).toContainText('不保存密码、轨迹或照片');
+
+  await page.getByRole('button', { name: '清空历史', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '清空历史', exact: true });
+  await expect(dialog).toContainText('不删除任何行程或备份文件');
+  await dialog.getByRole('button', { name: '清空历史', exact: true }).click();
+  await expect(history).toBeHidden();
+  expect(await page.evaluate(async () => {
+    const { listBackupHistory } = await import('/src/core/backupHistory.ts');
+    return listBackupHistory();
+  })).toEqual([]);
+  expect(pageErrors).toEqual([]);
+});
+
+test('guided restore drill uses temporary databases and records a safe result', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await blockExternal(page);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+  const before = await page.evaluate(async () => {
+    const { db } = (window as any).__lt.store;
+    const names = ['trips', 'segments', 'trackChunks', 'trackSnapshots', 'waypoints', 'media', 'elevCache', 'shareImports'];
+    const counts = await Promise.all(names.map((name) => db[name].count()));
+    return { counts, databases: typeof indexedDB.databases === 'function' ? (await indexedDB.databases()).map((item: any) => item.name) : [] };
+  });
+
+  await page.evaluate(() => (window as any).__lt.shell.navigate('settings'));
+  await expect(page.locator('#view-settings')).toContainText('不读写真实行程');
+  await page.getByRole('button', { name: '恢复演练', exact: true }).click();
+  await expect(page.locator('#restore-drill-status')).toContainText('恢复演练通过', { timeout: 30_000 });
+  await expect(page.getByRole('button', { name: '取消演练', exact: true })).toBeHidden();
+  const history = page.locator('.backup-history');
+  await expect(history).toContainText('恢复演练 · 演练通过');
+  await expect(history).toContainText('restore-drill.trip');
+  await expect(history).toContainText('来源：恢复演练');
+
+  const after = await page.evaluate(async () => {
+    const { db } = (window as any).__lt.store;
+    const { listBackupHistory } = await import('/src/core/backupHistory.ts');
+    const names = ['trips', 'segments', 'trackChunks', 'trackSnapshots', 'waypoints', 'media', 'elevCache', 'shareImports'];
+    const counts = await Promise.all(names.map((name) => db[name].count()));
+    const databases = typeof indexedDB.databases === 'function' ? (await indexedDB.databases()).map((item: any) => item.name) : [];
+    return { counts, databases, record: (await listBackupHistory()).find((item: any) => item.kind === 'drill') };
+  });
+  expect(after.counts).toEqual(before.counts);
+  expect(after.databases.filter((name) => name.startsWith('localtrace-restore-drill-'))).toEqual([]);
+  expect(after.record).toMatchObject({
+    kind: 'drill', status: 'drill-passed', source: 'drill', filename: 'restore-drill.trip',
+    trips: 1, segments: 1, chunks: 1, waypoints: 1, media: 1, mediaChecked: 2, mediaFailed: 0
+  });
+  expect(pageErrors).toEqual([]);
+});

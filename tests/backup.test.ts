@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { Zip, ZipDeflate, UnzipInflate, strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { sha256Hex, stableStringify } from '../src/core/integrity';
 
 const mock = vi.hoisted(() => {
@@ -63,13 +63,27 @@ const mock = vi.hoisted(() => {
   db.transaction = async (...args) => {
     const fn = args[args.length - 1];
     const snapshot = new Map(names.map((n) => [n, new Map(state[n])]));
+    let aborted = false;
+    const transaction: any = {
+      active: true,
+      abort: () => {
+        if (!transaction.active) return;
+        transaction.active = false;
+        aborted = true;
+      }
+    };
     txCalls++;
     transactionModes.push(args[0]);
     transactionScopes.push(args[1]);
     activeTransactions++;
     try {
-      return await fn();
+      const result = await fn(transaction);
+      await Promise.resolve();
+      if (aborted) throw new DOMException('Aborted', 'AbortError');
+      transaction.active = false;
+      return result;
     } catch (e) {
+      transaction.active = false;
       for (const n of names) state[n] = snapshot.get(n);
       throw e;
     } finally {
@@ -88,13 +102,26 @@ const mock = vi.hoisted(() => {
   return { db };
 });
 
-vi.mock('../src/core/store', () => ({ db: mock.db, TRIP_SCHEMA_VERSION: 1 }));
+vi.mock('../src/core/store', () => ({
+  db: mock.db,
+  TRIP_SCHEMA_VERSION: 1,
+  abortTransactionOnSignal: (transaction: any, signal?: AbortSignal) => {
+    if (!signal) return () => {};
+    const abort = () => {
+      if (!transaction.active) return;
+      try { transaction.abort(); } catch { /* commit-wins */ }
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) abort();
+    return () => signal.removeEventListener('abort', abort);
+  }
+}));
 vi.mock('../src/core/events', () => ({ emit: vi.fn() }));
 
 const { exportBackup, inspectBackup, restoreBackup } = await import('../src/core/backup');
 
-function asFile(blob) {
-  return { size: blob.size, arrayBuffer: () => blob.arrayBuffer() };
+function asFile(blob, arrayBuffer = () => blob.arrayBuffer()) {
+  return { size: blob.size, arrayBuffer, stream: () => blob.stream() };
 }
 
 function validManifest(overrides = {}) {
@@ -108,6 +135,25 @@ function validManifest(overrides = {}) {
 
 function zipFile(files) {
   return asFile(new Blob([zipSync(files)]));
+}
+
+function descriptorZipFile(files: Record<string, Uint8Array>) {
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  let zipError: unknown = null;
+  const zip = new Zip((error, chunk) => {
+    if (error) zipError = error;
+    else if (chunk.byteLength) chunks.push(chunk);
+  });
+  for (const [name, bytes] of Object.entries(files)) {
+    const entry = new ZipDeflate(name);
+    zip.add(entry);
+    entry.push(bytes);
+    entry.push(new Uint8Array(), true);
+    if (zipError) throw zipError;
+  }
+  zip.end();
+  if (zipError) throw zipError;
+  return asFile(new Blob(chunks));
 }
 
 async function historicalManifest(version: number) {
@@ -139,6 +185,92 @@ async function historicalManifest(version: number) {
 
 function manifestFile(manifest) {
   return zipFile({ 'manifest.json': strToU8(JSON.stringify(manifest)) });
+}
+
+function patternedBytes(length: number, seed = 1) {
+  const bytes = new Uint8Array(length);
+  for (let i = 0; i < length; i++) bytes[i] = (i * 31 + seed) & 255;
+  return bytes;
+}
+
+async function archiveWithMedia(media: { id: string; data: Uint8Array; thumb?: Uint8Array }[]) {
+  const manifest: any = validManifest({
+    trips: [{ id: 't1' }],
+    mediaMeta: media.map(({ id }) => ({ id, tripId: 't1', width: 100, height: 80, createdAt: 1 }))
+  });
+  const entries: Record<string, Uint8Array> = {};
+  const hashes = {};
+  for (const item of media) {
+    const path = `media/${item.id}.jpg`;
+    entries[path] = item.data;
+    hashes[path] = { bytes: item.data.byteLength, sha256: await sha256Hex(item.data) };
+    if (item.thumb) {
+      const thumbPath = `media/${item.id}.thumb.jpg`;
+      entries[thumbPath] = item.thumb;
+      hashes[thumbPath] = { bytes: item.thumb.byteLength, sha256: await sha256Hex(item.thumb) };
+    }
+  }
+  const { integrity, ...payload } = manifest;
+  manifest.integrity = { algo: 'SHA-256', payload: await sha256Hex(stableStringify(payload)), files: hashes };
+  entries['manifest.json'] = strToU8(JSON.stringify(manifest));
+  return new Blob([zipSync(entries, { level: 0 })]);
+}
+
+function trackedFile(bytes: Uint8Array, { chunkSize = 4093, onRead = null } = {}) {
+  let offset = 0;
+  let reads = 0;
+  const cancel = vi.fn(async () => {});
+  const releaseLock = vi.fn();
+  const file = {
+    size: bytes.byteLength,
+    arrayBuffer: vi.fn(async () => bytes.slice().buffer),
+    stream: () => ({
+      getReader: () => ({
+        read: async () => {
+          reads++;
+          onRead?.(reads);
+          if (offset >= bytes.byteLength) return { done: true, value: undefined };
+          const end = Math.min(offset + chunkSize, bytes.byteLength);
+          const value = bytes.subarray(offset, end);
+          offset = end;
+          return { done: false, value };
+        },
+        cancel,
+        releaseLock
+      })
+    })
+  };
+  return { file, cancel, releaseLock };
+}
+
+function localEntryOffset(bytes: Uint8Array, name: string) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+  while (offset + 30 <= bytes.byteLength) {
+    if (view.getUint32(offset, false) !== 0x504b0304) throw new Error('local entry not found');
+    const compressedSize = view.getUint32(offset + 18, true);
+    const nameLength = view.getUint16(offset + 26, true);
+    const extraLength = view.getUint16(offset + 28, true);
+    const dataOffset = offset + 30 + nameLength + extraLength;
+    const entryName = strFromU8(bytes.subarray(offset + 30, offset + 30 + nameLength));
+    if (entryName === name) return dataOffset;
+    offset = dataOffset + compressedSize;
+  }
+  throw new Error('local entry not found');
+}
+
+function centralEntryOffset(bytes: Uint8Array, name: string) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let offset = 0; offset + 46 <= bytes.byteLength; offset++) {
+    if (view.getUint32(offset, true) !== 0x02014b50) continue;
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const entryName = strFromU8(bytes.subarray(offset + 46, offset + 46 + nameLength));
+    if (entryName === name) return offset;
+    offset += 45 + nameLength + extraLength + commentLength;
+  }
+  throw new Error('central entry not found');
 }
 
 beforeEach(() => mock.db.__reset());
@@ -180,19 +312,23 @@ describe('backup integrity', () => {
     expect(mock.db.__state().trackSnapshots.get('snapshot-1')?.points).toHaveLength(1);
   });
 
-  it('wraps an encrypted backup and requires the password to inspect it', async () => {
+  it('keeps encrypted backups compatible with one-shot AES-GCM decryption', async () => {
     const backup = await exportBackup({ password: 'correct horse battery' });
     expect(backup.encrypted).toBe(true);
     expect(backup.filename).toMatch(/^roametch-backup-\d{8}\.roametch\.enc$/);
     const bytes = new Uint8Array(await backup.blob.arrayBuffer());
     expect(new TextDecoder().decode(bytes.subarray(0, 8))).toBe('TRKMBKP1');
-    await expect(inspectBackup(asFile(backup.blob))).rejects.toMatchObject({ code: 'backup-password-required' });
-    await expect(inspectBackup(asFile(backup.blob), 'wrong password')).rejects.toMatchObject({ code: 'backup-decrypt-failed' });
-    const inspected = await inspectBackup(asFile(backup.blob), 'correct horse battery');
+    const arrayBuffer = vi.fn(() => backup.blob.arrayBuffer());
+    const encryptedFile = asFile(backup.blob, arrayBuffer);
+    await expect(inspectBackup(encryptedFile)).rejects.toMatchObject({ code: 'backup-password-required' });
+    await expect(inspectBackup(encryptedFile, 'wrong password')).rejects.toMatchObject({ code: 'backup-decrypt-failed' });
+    const inspected = await inspectBackup(encryptedFile, 'correct horse battery');
+    expect(arrayBuffer).toHaveBeenCalled();
     expect(inspected.encrypted).toBe(true);
     expect(inspected.integrity.ok).toBe(true);
+    expect(inspected.files['media/m1.jpg']).toBeInstanceOf(Blob);
     expect(inspected.manifest.trips[0].name).toBe('Test trip');
-    const restored = await restoreBackup(asFile(backup.blob), 'overwrite', inspected);
+    const restored = await restoreBackup(encryptedFile, 'overwrite', inspected);
     expect(restored).toBe(1);
   });
 
@@ -237,12 +373,56 @@ describe('backup integrity', () => {
   });
 
   it('adds the current trip schema version when restoring legacy records', async () => {
-    const legacy = zipFile({
-      'manifest.json': strToU8(JSON.stringify(validManifest({ version: 2, trips: [{ id: 'legacy-1', name: 'Legacy' }] })))
-    });
+    const manifest: any = validManifest({ version: 2, trips: [{ id: 'legacy-1', name: 'Legacy' }] });
+    const { integrity, ...payload } = manifest;
+    manifest.integrity = { algo: 'SHA-256', payload: await sha256Hex(stableStringify(payload)), files: {} };
+    const legacy = manifestFile(manifest);
     const inspected = await inspectBackup(legacy);
     await restoreBackup(legacy, 'skip', inspected);
     expect(mock.db.__state().trips.get('legacy-1')?.schemaVersion).toBe(1);
+  });
+
+  it.each([2, 3])('rejects version %i backups without integrity metadata', async (version) => {
+    const manifest = validManifest({ version, ...(version === 3 ? { trackSnapshots: [] } : {}) });
+    await expect(inspectBackup(manifestFile(manifest))).rejects.toThrow('invalid manifest');
+  });
+
+  it.each([2, 3])('rejects a prepared version %i inspection whose integrity metadata was removed', async (version) => {
+    const archive = manifestFile(await historicalManifest(version));
+    const inspected = await inspectBackup(archive);
+    delete inspected.manifest.integrity;
+    await expect(restoreBackup(archive, 'skip', inspected)).rejects.toThrow('invalid manifest');
+    expect(mock.db.__state().trips.has('legacy-trip')).toBe(false);
+  });
+
+  it.each([2, 3])('rechecks payload integrity when a prepared version %i manifest is mutated', async (version) => {
+    const archive = manifestFile(await historicalManifest(version));
+    const inspected = await inspectBackup(archive);
+    inspected.manifest.trips[0].name = 'tampered after inspection';
+    await expect(restoreBackup(archive, 'skip', inspected)).rejects.toThrow('backup integrity check failed');
+    expect(mock.db.__state().trips.has('legacy-trip')).toBe(false);
+  });
+
+  it('rechecks media integrity when a prepared inspection replaces a Blob', async () => {
+    const backup = await exportBackup();
+    const archive = asFile(backup.blob);
+    const inspected = await inspectBackup(archive);
+    const original = mock.db.__state().media.get('m1')?.blob;
+    inspected.files['media/m1.jpg'] = new Blob([new Uint8Array([9, 9, 9])]);
+    await expect(restoreBackup(archive, 'overwrite', inspected)).rejects.toThrow('backup integrity check failed');
+    expect(mock.db.__state().media.get('m1')?.blob).toBe(original);
+  });
+
+  it('reverifies and restores Uint8Array media from an older prepared inspection', async () => {
+    const backup = await exportBackup();
+    const archive = asFile(backup.blob);
+    const inspected = await inspectBackup(archive);
+    inspected.files['media/m1.jpg'] = new Uint8Array([1, 2, 3]) as any;
+
+    await expect(restoreBackup(archive, 'overwrite', inspected)).resolves.toBe(1);
+    const restored = mock.db.__state().media.get('m1')?.blob;
+    expect(restored).toBeInstanceOf(Blob);
+    expect([...new Uint8Array(await restored.arrayBuffer())]).toEqual([1, 2, 3]);
   });
 
   it.each([1, 2, 3])('restores a complete version %i backup into the current schema', async (version) => {
@@ -282,6 +462,124 @@ describe('backup integrity', () => {
   });
 });
 
+describe('streaming backup import', () => {
+  it('bounds every deflate input slice before decompression can allocate output', async () => {
+    const backup = await exportBackup();
+    const push = vi.spyOn(UnzipInflate.prototype, 'push');
+    try {
+      await inspectBackup(asFile(backup.blob));
+      expect(push).toHaveBeenCalled();
+      expect(Math.max(...push.mock.calls.map((call) => call[0].byteLength))).toBeLessThanOrEqual(4096);
+    } finally {
+      push.mockRestore();
+    }
+  });
+
+  it('inspects plain ZIPs through stream without arrayBuffer and reuses media Blobs on restore', async () => {
+    const backup = await exportBackup();
+    const arrayBuffer = vi.fn(() => { throw new Error('whole-file read is not allowed'); });
+    const file = asFile(backup.blob, arrayBuffer);
+    const onProgress = vi.fn();
+    const inspected = await inspectBackup(file, '', { onProgress });
+
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(onProgress.mock.calls.at(-1)?.[0]).toEqual({ phase: 'read', loaded: file.size, total: file.size });
+    expect(inspected.files['media/m1.jpg']).toBeInstanceOf(Blob);
+    expect(inspected.integrity.ok).toBe(true);
+
+    await restoreBackup(file, 'overwrite', inspected);
+    expect(mock.db.__state().media.get('m1')?.blob).toBe(inspected.files['media/m1.jpg']);
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it('bounds work per entry while handling multiple large media Blobs', async () => {
+    const entryBytes = 7 * 1024 * 1024;
+    const archive = await archiveWithMedia([
+      { id: 'm1', data: patternedBytes(entryBytes, 1) },
+      { id: 'm2', data: patternedBytes(entryBytes, 2), thumb: patternedBytes(1024, 3) },
+      { id: 'm3', data: patternedBytes(entryBytes, 4) }
+    ]);
+    const bytes = new Uint8Array(await archive.arrayBuffer());
+    const tracked = trackedFile(bytes, { chunkSize: 65521 });
+    const inspected = await inspectBackup(tracked.file);
+
+    expect(tracked.file.arrayBuffer).not.toHaveBeenCalled();
+    expect(Object.keys(inspected.files)).toHaveLength(4);
+    expect(inspected.files['media/m1.jpg'].size).toBe(entryBytes);
+    expect(inspected.files['media/m2.jpg'].size).toBe(entryBytes);
+    expect(inspected.files['media/m2.thumb.jpg'].size).toBe(1024);
+    expect(inspected.files['media/m3.jpg'].size).toBe(entryBytes);
+    expect(inspected.integrity).toMatchObject({ ok: true, checked: 4, failed: [] });
+
+    await restoreBackup(tracked.file, 'overwrite', inspected);
+    expect(mock.db.__state().media.get('m2')?.blob).toBe(inspected.files['media/m2.jpg']);
+    expect(mock.db.__state().media.get('m2')?.thumb).toBe(inspected.files['media/m2.thumb.jpg']);
+  });
+
+  it('verifies incremental media hashes across SHA-256 block boundaries', async () => {
+    const lengths = [0, 55, 56, 63, 64, 65, 127, 128, 129];
+    const archive = await archiveWithMedia(lengths.map((length, index) => ({
+      id: `m${index}`,
+      data: patternedBytes(length, index + 1)
+    })));
+    const inspected = await inspectBackup(asFile(archive));
+    expect(inspected.integrity).toMatchObject({ ok: true, checked: lengths.length, failed: [] });
+  });
+
+  it('cancels a pending reader immediately when aborted', async () => {
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const cancel = vi.fn(async () => {});
+    const releaseLock = vi.fn();
+    const file = {
+      size: 100,
+      stream: () => ({
+        getReader: () => ({
+          read: () => { markStarted(); return new Promise(() => {}); },
+          cancel,
+          releaseLock
+        })
+      })
+    };
+    const controller = new AbortController();
+    const pending = inspectBackup(file, '', { signal: controller.signal });
+    await started;
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(releaseLock).toHaveBeenCalledOnce();
+  });
+
+  it('cancels the reader and releases its lock when aborted', async () => {
+    const backup = await exportBackup();
+    const bytes = new Uint8Array(await backup.blob.arrayBuffer());
+    const controller = new AbortController();
+    const tracked = trackedFile(bytes, {
+      chunkSize: Math.max(1, Math.floor(bytes.byteLength / 2)),
+      onRead: (read) => { if (read === 2) controller.abort(); }
+    });
+
+    await expect(inspectBackup(tracked.file, '', { signal: controller.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(tracked.cancel).toHaveBeenCalledOnce();
+    expect(tracked.releaseLock).toHaveBeenCalledOnce();
+    expect(tracked.file.arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it('rejects a truncated compressed entry and cleans up the stream', async () => {
+    const archive = await archiveWithMedia([{ id: 'm1', data: patternedBytes(128 * 1024) }]);
+    const bytes = new Uint8Array(await archive.arrayBuffer());
+    const mediaOffset = localEntryOffset(bytes, 'media/m1.jpg');
+    const truncated = bytes.subarray(0, mediaOffset + 1);
+    const tracked = trackedFile(truncated, { chunkSize: 257 });
+
+    await expect(inspectBackup(tracked.file)).rejects.toThrow('not a zip');
+    expect(tracked.cancel).toHaveBeenCalledOnce();
+    expect(tracked.releaseLock).toHaveBeenCalledOnce();
+  });
+});
+
 describe('backup archive hardening', () => {
   it('rejects unsafe paths', async () => {
     const archive = zipFile({
@@ -289,6 +587,24 @@ describe('backup archive hardening', () => {
       '../evil.txt': strToU8('x')
     });
     await expect(inspectBackup(archive)).rejects.toThrow('unsafe archive path');
+  });
+
+  it('rejects an archive without a complete end-of-central-directory record', async () => {
+    const backup = await exportBackup();
+    const bytes = new Uint8Array(await backup.blob.arrayBuffer());
+    const truncated = bytes.subarray(0, bytes.byteLength - 22);
+
+    await expect(inspectBackup(asFile(new Blob([truncated])))).rejects.toThrow('not a zip');
+  });
+
+  it('rejects central-directory metadata that disagrees with local entries', async () => {
+    const backup = await exportBackup();
+    const bytes = new Uint8Array(await backup.blob.arrayBuffer());
+    const central = centralEntryOffset(bytes, 'media/m1.jpg');
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    view.setUint32(central + 24, view.getUint32(central + 24, true) + 1, true);
+
+    await expect(inspectBackup(asFile(new Blob([bytes])))).rejects.toThrow('not a zip');
   });
 
   it('rejects oversized entries and suspicious compression ratios', async () => {
@@ -303,6 +619,12 @@ describe('backup archive hardening', () => {
       'media/bomb.jpg': new Uint8Array(9 * 1024 * 1024)
     });
     await expect(inspectBackup(bomb)).rejects.toThrow('suspicious compression ratio');
+
+    const streamedBomb = descriptorZipFile({
+      'manifest.json': strToU8(JSON.stringify(validManifest())),
+      'media/bomb.jpg': new Uint8Array(9 * 1024 * 1024)
+    });
+    await expect(inspectBackup(streamedBomb)).rejects.toThrow('suspicious compression ratio');
   });
 
   it('rejects manifest count and relationship mismatches', async () => {
@@ -323,12 +645,13 @@ describe('backup archive hardening', () => {
   });
 
   it('rejects missing media and invalid coordinates', async () => {
-    const missingMedia = zipFile({
-      'manifest.json': strToU8(JSON.stringify(validManifest({
-        trips: [{ id: 't1' }],
-        mediaMeta: [{ id: 'm1', tripId: 't1' }]
-      })))
+    const manifest: any = validManifest({
+      trips: [{ id: 't1' }],
+      mediaMeta: [{ id: 'm1', tripId: 't1' }]
     });
+    const { integrity, ...payload } = manifest;
+    manifest.integrity = { algo: 'SHA-256', payload: await sha256Hex(stableStringify(payload)), files: {} };
+    const missingMedia = manifestFile(manifest);
     await expect(inspectBackup(missingMedia)).rejects.toThrow('missing media');
 
     const badCoords = zipFile({
@@ -500,5 +823,50 @@ describe('backup restore', () => {
     expect(inspected.conflicts).toEqual(['t1']);
     await expect(restoreBackup(archive, 'skip', inspected)).rejects.toThrow('archive id collision');
     expect(mock.db.__state().segments.get('s1')?.tripId).toBe('t1');
+  });
+
+  it('keeps a committed restore successful when cancellation arrives at the commit boundary', async () => {
+    const archive = manifestFile(validManifest({ version: 1, trips: [{ id: 't2', name: 'Two' }] }));
+    const inspected = await inspectBackup(archive);
+    const controller = new AbortController();
+    const transaction = mock.db.transaction;
+    mock.db.transaction = async (...args) => {
+      const result = await transaction(...args);
+      controller.abort();
+      return result;
+    };
+    try {
+      await expect(restoreBackup(archive, 'skip', inspected, { signal: controller.signal })).resolves.toBe(1);
+      expect(mock.db.__state().trips.get('t2')?.name).toBe('Two');
+    } finally {
+      mock.db.transaction = transaction;
+    }
+  });
+
+  it('rolls back when cancellation is queued after the final progress callback but before commit', async () => {
+    const archive = manifestFile(validManifest({ version: 1, trips: [{ id: 't2', name: 'Two' }] }));
+    const inspected = await inspectBackup(archive);
+    const controller = new AbortController();
+    const onProgress = vi.fn(() => { queueMicrotask(() => controller.abort()); });
+
+    await expect(restoreBackup(archive, 'skip', inspected, { signal: controller.signal, onProgress }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(onProgress).toHaveBeenCalledTimes(1);
+    expect(mock.db.__state().trips.has('t2')).toBe(false);
+  });
+
+  it('rolls back the restore transaction when aborted', async () => {
+    const archive = manifestFile(validManifest({
+      version: 1,
+      trips: [{ id: 't2', name: 'Two' }, { id: 't3', name: 'Three' }]
+    }));
+    const inspected = await inspectBackup(archive);
+    const controller = new AbortController();
+    const onProgress = vi.fn(() => controller.abort());
+
+    await expect(restoreBackup(archive, 'skip', inspected, { signal: controller.signal, onProgress }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(mock.db.__state().trips.has('t2')).toBe(false);
+    expect(mock.db.__state().trips.has('t3')).toBe(false);
   });
 });

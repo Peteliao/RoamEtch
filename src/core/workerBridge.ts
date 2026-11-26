@@ -3,6 +3,7 @@ import { computeStats } from './stats';
 import { computeDistanceSplits } from './distanceSplits';
 import { simplify } from './geo';
 import { wgs84ToGcj02, gcj02ToWgs84 } from './coords';
+import { previewTrackCleanup } from './gpsQuality';
 
 let worker = null;
 let seq = 0;
@@ -11,6 +12,7 @@ const pending = new Map();
 function settle(task) {
   if (task.timer != null) clearTimeout(task.timer);
   task.timer = null;
+  task.signal?.removeEventListener('abort', task.cancel);
 }
 
 function resolveFallback(task) {
@@ -68,24 +70,40 @@ function fallback(type, payload) {
       const fn = payload.dir === 'toGcj' ? wgs84ToGcj02 : gcj02ToWgs84;
       return payload.points.map((p) => { const [lon, lat] = fn(p.lon, p.lat); return { ...p, lon, lat }; });
     }
+    case 'cleanup-preview': return previewTrackCleanup(payload.segments, payload.activity, payload.opts);
     default: throw new Error('unknown task');
   }
 }
 
-export function runTask(type, payload) {
+export function runTask(type, payload, { signal, timeoutMs = 15000 }: { signal?: AbortSignal; timeoutMs?: number } = {}) {
+  if (signal?.aborted) return Promise.reject(new DOMException('Aborted', 'AbortError'));
   const instance = ensureWorker();
-  if (!instance) return Promise.resolve().then(() => fallback(type, payload));
+  if (!instance) return Promise.resolve().then(() => {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    return fallback(type, payload);
+  });
   return new Promise((resolve, reject) => {
     const id = ++seq;
     const task = {
-      type, payload, resolve, reject, timer: null as ReturnType<typeof setTimeout> | null
+      type, payload, resolve, reject, timer: null as ReturnType<typeof setTimeout> | null, signal, cancel: null
     };
+    const cancel = () => {
+      if (!pending.delete(id)) return;
+      settle(task);
+      reject(new DOMException('Aborted', 'AbortError'));
+      try { instance.postMessage({ id, type: 'cancel' }); } catch {}
+    };
+    task.cancel = cancel;
     pending.set(id, task);
-    task.timer = setTimeout(() => discardWorker(instance), 15000);
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (timeoutMs > 0) task.timer = setTimeout(() => discardWorker(instance), timeoutMs);
     try {
       instance.postMessage({ id, type, payload });
     } catch {
-      if (!discardWorker(instance) && pending.delete(id)) resolveFallback(task);
+      if (!discardWorker(instance) && pending.delete(id)) {
+        settle(task);
+        resolveFallback(task);
+      }
     }
   });
 }
@@ -96,3 +114,5 @@ export const computeDistanceSplitsAsync = (segments, intervalM = 1000, opts = {}
   runTask('splits', { segments, intervalM, opts });
 export const simplifyAsync = (points, tolerance) => runTask('simplify', { points, tolerance });
 export const transformAsync = (points, dir) => runTask('transform', { points, dir });
+export const previewTrackCleanupAsync = (segments, activity = 'hike', opts = {}, options: { signal?: AbortSignal } = {}) =>
+  runTask('cleanup-preview', { segments, activity, opts }, options);

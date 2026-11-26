@@ -8,14 +8,14 @@ import { on } from '../core/events';
 import { getTrackSnapshotSummary, listTrips } from '../core/store';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, usableTrackPoints } from '../core/geo';
 import { findTrackGaps, repairTrackGaps } from '../core/gapRepair';
-import { assessGpsQuality, cleanTrackSegments } from '../core/gpsQuality';
+import { assessTrackGpsQuality } from '../core/gpsQuality';
 import { cleanGpsTrack, restoreGpsTrack } from '../core/trackCleanup';
 import { TrackMap } from './map';
 import { WP_ICONS } from '../core/waypointMeta';
 import { canvasPalette } from '../core/palette';
 import { effectiveTheme } from '../core/theme';
 import { buildProfile, altitudeUnit, distanceInUnit, distanceUnit, speedUnit } from '../core/profileChart';
-import { computeDistanceSplitsAsync } from '../core/workerBridge';
+import { computeDistanceSplitsAsync, previewTrackCleanupAsync } from '../core/workerBridge';
 import { appState, setActiveTrip, refreshActiveTrip, isTripSectionActive } from './state';
 import { el, icon, confirmModal, toast } from './helpers';
 import { renderTripEmptyState } from './tripEmptyState';
@@ -74,6 +74,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
   let mapTrackKey = '';
   let renderSequence = 0;
   let qualitySequence = 0;
+  let qualityController: AbortController | null = null;
   let splitSequence = 0;
   let splitResult = [];
   let splitTrackKey = '';
@@ -122,23 +123,40 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
 
   async function renderQuality() {
     const sequence = ++qualitySequence;
+    qualityController?.abort();
+    const controller = new AbortController();
+    qualityController = controller;
     qualityBox.innerHTML = '';
     const full = appState.activeTripFull;
     if (!full) return;
     const tripId = full.trip.id;
     const updatedAt = full.trip.updatedAt;
-    const points = full.segments.flatMap((s) => s.points) || [];
     const activity = full.trip.activity || 'hike';
-    const q = assessGpsQuality(points, { activity });
-    const snapshot = await getTrackSnapshotSummary(tripId);
-    if (sequence !== qualitySequence || appState.activeTripId !== tripId || appState.activeTripFull?.trip.updatedAt !== updatedAt) return;
-    if (q.score == null && !snapshot) return;
+    const q = assessTrackGpsQuality(full.segments, { activity });
     const recording = full.trip.status === 'recording';
+    let snapshot, previewResult;
+    try {
+      [snapshot, previewResult] = await Promise.all([
+        getTrackSnapshotSummary(tripId),
+        recording ? null : previewTrackCleanupAsync(full.segments, activity, {}, { signal: controller.signal })
+      ]);
+    } catch (e) {
+      if (controller.signal.aborted || e?.name === 'AbortError') return;
+      if (sequence !== qualitySequence || appState.activeTripId !== tripId
+        || appState.activeTripFull?.trip.updatedAt !== updatedAt) return;
+      console.error(e);
+      qualityBox.append(el('div', { class: 'card quality-card' },
+        el('div', { class: 'small muted', 'aria-live': 'polite' }, t('analysis.qualityPreviewFail'))));
+      return;
+    }
+    if (sequence !== qualitySequence || appState.activeTripId !== tripId
+      || appState.activeTripFull?.trip.updatedAt !== updatedAt || controller.signal.aborted) return;
+    if (q.score == null && !snapshot) return;
     const tone = q.rating === 'excellent' || q.rating === 'good'
       ? 'var(--accent)' : q.rating === 'fair' ? 'var(--warn)' : 'var(--danger)';
     const metric = (label, value) => el('div', { class: 'quality-metric' },
       el('div', { class: 'v' }, value), el('div', { class: 'k' }, label));
-    const preview = recording ? { removed: 0, issues: [], impactDistance: 0 } : cleanTrackSegments(full.segments, activity);
+    const preview = recording ? { removed: 0, issues: [], impactDistance: 0 } : previewResult;
     const children = [
       el('div', { class: 'quality-head' },
         el('h3', {}, icon('shield', 18), t('analysis.qualityTitle')),

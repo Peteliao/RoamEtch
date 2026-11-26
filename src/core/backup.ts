@@ -1,6 +1,6 @@
 // Full-database backup / restore as a .trip ZIP archive (JSON tables + media binaries).
-import { Zip, ZipDeflate, unzipSync, strToU8, strFromU8 } from 'fflate';
-import { db, TRIP_SCHEMA_VERSION } from './store';
+import { Zip, ZipDeflate, Unzip, UnzipInflate, strToU8, type UnzipFile } from 'fflate';
+import { db, TRIP_SCHEMA_VERSION, abortTransactionOnSignal } from './store';
 import { emit } from './events';
 import { sha256Hex, stableStringify } from './integrity';
 import { decryptBackupBytes, encryptBackupBlob, ENCRYPTED_BACKUP_EXT, isEncryptedBackupBytes } from './backupCrypto';
@@ -15,11 +15,192 @@ const MAX_ENTRY_BYTES = 20 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 16 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES = 20_000;
 const MAX_POINTS = 3_000_000;
+const MAX_CENTRAL_DIRECTORY_BYTES = 4 * 1024 * 1024;
+const ZIP_INPUT_CHUNK_BYTES = 4 * 1024;
+const ZIP_TAIL_BYTES = MAX_CENTRAL_DIRECTORY_BYTES + 22 + 65535;
 const SAFE_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const MEDIA_PATH = /^media\/[A-Za-z0-9_-]{1,80}(?:\.thumb)?\.jpg$/;
+const EMPTY_BYTES = new Uint8Array();
+
+export interface BackupImportProgress {
+  phase: 'read' | 'restore';
+  loaded: number;
+  total: number;
+}
+
+export type BackupTarget = Pick<typeof db,
+  'trips' | 'segments' | 'trackChunks' | 'trackSnapshots' | 'waypoints' | 'media' | 'elevCache' | 'shareImports' | 'transaction'>;
+
+export interface BackupImportOptions {
+  signal?: AbortSignal;
+  onProgress?: (progress: BackupImportProgress) => void;
+  /** Defaults to the main database. A custom target never emits restore events. */
+  target?: BackupTarget;
+}
+
+export interface BackupExportOptions {
+  password?: string;
+  /** Defaults to the main database. */
+  target?: BackupTarget;
+}
+
+interface MediaEntryInfo {
+  bytes: number;
+  sha256: string;
+}
+
+interface ZipEntryObservation {
+  name: string;
+  compression: number;
+  compressed: number;
+  bytes: number;
+}
+
+interface ParsedZip {
+  manifest: any;
+  files: Record<string, Blob>;
+  mediaInfo: Record<string, MediaEntryInfo>;
+  inspectionVersion: 2;
+}
+
+class ArchiveLimitError extends Error {}
+
+function archiveLimit(message: string) {
+  return new ArchiveLimitError(message);
+}
+
+function abortError(signal: AbortSignal) {
+  if (signal.reason instanceof Error) return signal.reason;
+  if (typeof DOMException !== 'undefined') return new DOMException('The operation was aborted.', 'AbortError');
+  const error = new Error('The operation was aborted.');
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw abortError(signal);
+}
+
+// WebCrypto digest is one-shot. This small incremental hasher lets each streamed
+// media entry be verified without concatenating it or calling Blob.arrayBuffer().
+const SHA256_K = new Uint32Array([
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+]);
+
+class IncrementalSha256 {
+  private state = new Uint32Array([
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
+  ]);
+  private buffer = new Uint8Array(64);
+  private buffered = 0;
+  private bytes = 0;
+  private words = new Uint32Array(64);
+
+  private rotate(value: number, bits: number) {
+    return (value >>> bits) | (value << (32 - bits));
+  }
+
+  private block(data: Uint8Array) {
+    const view = new DataView(data.buffer, data.byteOffset, 64);
+    const words = this.words;
+    for (let i = 0; i < 16; i++) words[i] = view.getUint32(i * 4, false);
+    for (let i = 16; i < 64; i++) {
+      const s0 = this.rotate(words[i - 15], 7) ^ this.rotate(words[i - 15], 18) ^ (words[i - 15] >>> 3);
+      const s1 = this.rotate(words[i - 2], 17) ^ this.rotate(words[i - 2], 19) ^ (words[i - 2] >>> 10);
+      words[i] = (words[i - 16] + s0 + words[i - 7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, h] = this.state;
+    for (let i = 0; i < 64; i++) {
+      const s1 = this.rotate(e, 6) ^ this.rotate(e, 11) ^ this.rotate(e, 25);
+      const choice = (e & f) ^ (~e & g);
+      const temp1 = (h + s1 + choice + SHA256_K[i] + words[i]) >>> 0;
+      const s0 = this.rotate(a, 2) ^ this.rotate(a, 13) ^ this.rotate(a, 22);
+      const majority = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (s0 + majority) >>> 0;
+      h = g; g = f; f = e; e = (d + temp1) >>> 0;
+      d = c; c = b; b = a; a = (temp1 + temp2) >>> 0;
+    }
+    this.state[0] = (this.state[0] + a) >>> 0;
+    this.state[1] = (this.state[1] + b) >>> 0;
+    this.state[2] = (this.state[2] + c) >>> 0;
+    this.state[3] = (this.state[3] + d) >>> 0;
+    this.state[4] = (this.state[4] + e) >>> 0;
+    this.state[5] = (this.state[5] + f) >>> 0;
+    this.state[6] = (this.state[6] + g) >>> 0;
+    this.state[7] = (this.state[7] + h) >>> 0;
+  }
+
+  update(data: Uint8Array) {
+    this.bytes += data.byteLength;
+    let offset = 0;
+    if (this.buffered) {
+      const take = Math.min(64 - this.buffered, data.byteLength);
+      this.buffer.set(data.subarray(0, take), this.buffered);
+      this.buffered += take;
+      offset += take;
+      if (this.buffered === 64) {
+        this.block(this.buffer);
+        this.buffered = 0;
+      }
+    }
+    while (offset + 64 <= data.byteLength) {
+      this.block(data.subarray(offset, offset + 64));
+      offset += 64;
+    }
+    if (offset < data.byteLength) {
+      this.buffer.set(data.subarray(offset));
+      this.buffered = data.byteLength - offset;
+    }
+  }
+
+  hex() {
+    const bitLength = this.bytes * 8;
+    this.buffer[this.buffered++] = 0x80;
+    if (this.buffered > 56) {
+      while (this.buffered < 64) this.buffer[this.buffered++] = 0;
+      this.block(this.buffer);
+      this.buffered = 0;
+    }
+    while (this.buffered < 56) this.buffer[this.buffered++] = 0;
+    const view = new DataView(this.buffer.buffer);
+    view.setUint32(56, Math.floor(bitLength / 0x100000000), false);
+    view.setUint32(60, bitLength >>> 0, false);
+    this.block(this.buffer);
+    return Array.from(this.state, (word) => word.toString(16).padStart(8, '0')).join('');
+  }
+}
 
 async function blobToU8(blob) {
   return new Uint8Array(await blob.arrayBuffer());
+}
+
+async function blobDigest(data: Blob | Uint8Array, signal?: AbortSignal) {
+  const hash = new IncrementalSha256();
+  if (!(data instanceof Blob)) {
+    throwIfAborted(signal);
+    hash.update(data);
+    return hash.hex();
+  }
+  const reader = data.stream().getReader();
+  try {
+    for (;;) {
+      throwIfAborted(signal);
+      const { done, value } = await reader.read();
+      throwIfAborted(signal);
+      if (done) return hash.hex();
+      if (value?.byteLength) hash.update(value);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch { /* a failed read may already hold the lock */ }
+  }
 }
 
 function payloadOf(manifest) {
@@ -40,13 +221,13 @@ function mediaFilesOf(files, manifest) {
   return [...paths];
 }
 
-export async function exportBackup({ password = '' }: { password?: string } = {}) {
-  const [trips, segments, trackChunks, trackSnapshots, waypoints, media, elevCache] = await db.transaction(
+export async function exportBackup({ password = '', target = db }: BackupExportOptions = {}) {
+  const [trips, segments, trackChunks, trackSnapshots, waypoints, media, elevCache] = await target.transaction(
     'r',
-    [db.trips, db.segments, db.trackChunks, db.trackSnapshots, db.waypoints, db.media, db.elevCache],
+    [target.trips, target.segments, target.trackChunks, target.trackSnapshots, target.waypoints, target.media, target.elevCache],
     () => Promise.all([
-      db.trips.toArray(), db.segments.toArray(), db.trackChunks.toArray(), db.trackSnapshots.toArray(),
-      db.waypoints.toArray(), db.media.toArray(), db.elevCache.toArray()
+      target.trips.toArray(), target.segments.toArray(), target.trackChunks.toArray(), target.trackSnapshots.toArray(),
+      target.waypoints.toArray(), target.media.toArray(), target.elevCache.toArray()
     ])
   );
   const exportedAt = new Date().toISOString();
@@ -112,37 +293,248 @@ export async function exportBackup({ password = '' }: { password?: string } = {}
   return { blob, filename, tripCount: trips.length, exportedAt, counts: manifest.counts, encrypted };
 }
 
-function readZipLimited(u8) {
-  let total = 0;
-  let count = 0;
-  const names = new Set();
-  let files;
-  try {
-    files = unzipSync(u8, {
-      filter(info) {
-        count++;
-        if (count > MAX_ARCHIVE_ENTRIES) throw new Error('too many files');
-        if (names.has(info.name)) throw new Error('duplicate archive entry');
-        names.add(info.name);
-        if (info.name !== 'manifest.json' && !MEDIA_PATH.test(info.name)) throw new Error('unsafe archive path');
-        if (info.originalSize > MAX_ENTRY_BYTES) throw new Error('archive entry too large');
-        if (info.originalSize > 8 * 1024 * 1024 && info.size > 0 && info.originalSize / info.size > 200) {
-          throw new Error('suspicious compression ratio');
-        }
-        total += info.originalSize;
-        if (total > MAX_UNCOMPRESSED_BYTES) throw new Error('archive expands too large');
-        return true;
-      }
-    });
-  } catch (e) {
-    const msg = String(e?.message || e);
-    if (/(too many|duplicate|unsafe|too large|suspicious|expands)/.test(msg)) throw e;
+async function* byteChunks(data: Uint8Array, signal?: AbortSignal) {
+  for (let offset = 0; offset < data.byteLength; offset += ZIP_INPUT_CHUNK_BYTES) {
+    throwIfAborted(signal);
+    yield data.subarray(offset, offset + ZIP_INPUT_CHUNK_BYTES);
+  }
+}
+
+function normalizeZipError(error: unknown, signal?: AbortSignal): never {
+  if (signal?.aborted) throw abortError(signal);
+  if (error instanceof ArchiveLimitError) throw error;
+  throw new Error('not a zip');
+}
+
+function joinTail(parts: Uint8Array[], head: number, length: number) {
+  const tail = new Uint8Array(length);
+  let offset = 0;
+  for (let index = head; index < parts.length; index++) {
+    tail.set(parts[index], offset);
+    offset += parts[index].byteLength;
+  }
+  return tail;
+}
+
+function validateZipDirectory(tail: Uint8Array, archiveBytes: number, entries: ZipEntryObservation[]) {
+  const view = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
+  const firstEocd = Math.max(0, tail.byteLength - 22 - 65535);
+  let eocd = -1;
+  for (let offset = tail.byteLength - 22; offset >= firstEocd; offset--) {
+    if (view.getUint32(offset, true) !== 0x06054b50) continue;
+    if (offset + 22 + view.getUint16(offset + 20, true) === tail.byteLength) { eocd = offset; break; }
+  }
+  if (eocd < 0) throw new Error('not a zip');
+
+  const disk = view.getUint16(eocd + 4, true);
+  const directoryDisk = view.getUint16(eocd + 6, true);
+  const diskEntries = view.getUint16(eocd + 8, true);
+  const totalEntries = view.getUint16(eocd + 10, true);
+  const directorySize = view.getUint32(eocd + 12, true);
+  const directoryOffset = view.getUint32(eocd + 16, true);
+  if (disk !== 0 || directoryDisk !== 0 || diskEntries !== totalEntries || totalEntries !== entries.length) throw new Error('not a zip');
+  if (diskEntries === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff) {
+    throw archiveLimit('zip64 directory is not supported');
+  }
+  if (directorySize > MAX_CENTRAL_DIRECTORY_BYTES || directoryOffset + directorySize !== archiveBytes - tail.byteLength + eocd) {
     throw new Error('not a zip');
   }
-  const manifestBytes = files['manifest.json'];
-  if (!manifestBytes) throw new Error('missing manifest');
-  if (manifestBytes.byteLength > MAX_MANIFEST_BYTES) throw new Error('manifest too large');
-  return files;
+
+  const tailOffset = archiveBytes - tail.byteLength;
+  if (directoryOffset < tailOffset) throw new Error('not a zip');
+  const directoryStart = directoryOffset - tailOffset;
+  const directoryEnd = directoryStart + directorySize;
+  const byName = new Map(entries.map((entry) => [entry.name, entry]));
+  const localOffsets = new Set<number>();
+  const decoder = new TextDecoder();
+  let cursor = directoryStart;
+  for (let index = 0; index < totalEntries; index++) {
+    if (cursor + 46 > directoryEnd || view.getUint32(cursor, true) !== 0x02014b50) throw new Error('not a zip');
+    const flags = view.getUint16(cursor + 8, true);
+    const compression = view.getUint16(cursor + 10, true);
+    const compressed = view.getUint32(cursor + 20, true);
+    const bytes = view.getUint32(cursor + 24, true);
+    const nameLength = view.getUint16(cursor + 28, true);
+    const extraLength = view.getUint16(cursor + 30, true);
+    const commentLength = view.getUint16(cursor + 32, true);
+    const entryDisk = view.getUint16(cursor + 34, true);
+    const localOffset = view.getUint32(cursor + 42, true);
+    const next = cursor + 46 + nameLength + extraLength + commentLength;
+    if (next > directoryEnd || entryDisk !== 0 || flags & 1 || localOffset >= directoryOffset || localOffsets.has(localOffset)) {
+      throw new Error('not a zip');
+    }
+    const name = decoder.decode(tail.subarray(cursor + 46, cursor + 46 + nameLength));
+    const observed = byName.get(name);
+    if (!observed || observed.compression !== compression || observed.compressed !== compressed || observed.bytes !== bytes) {
+      throw new Error('not a zip');
+    }
+    localOffsets.add(localOffset);
+    cursor = next;
+  }
+  if (cursor !== directoryEnd || localOffsets.size !== entries.length) throw new Error('not a zip');
+}
+
+async function readZip(chunks: AsyncIterable<Uint8Array>, options: BackupImportOptions): Promise<ParsedZip> {
+  const files: Record<string, Blob> = {};
+  const mediaInfo: Record<string, MediaEntryInfo> = {};
+  const names = new Set<string>();
+  let manifestText = '';
+  let manifestSeen = false;
+  let archiveStarted = false;
+  let entryCount = 0;
+  let totalUncompressed = 0;
+  let archiveBytes = 0;
+  let tailBytes = 0;
+  let tailHead = 0;
+  const tailParts: Uint8Array[] = [];
+  const observations: ZipEntryObservation[] = [];
+  let activeFile: UnzipFile | null = null;
+  let current: {
+    file: UnzipFile;
+    name: string;
+    kind: 'manifest' | 'media';
+    bytes: number;
+    accounted: number;
+    compressed: number;
+    parts: Uint8Array<ArrayBuffer>[];
+    decoder: TextDecoder | null;
+    hash: IncrementalSha256 | null;
+  } | null = null;
+
+  class RatioCheckingUnzipInflate extends UnzipInflate {
+    static compression = 8;
+    push(chunk: Uint8Array, final: boolean) {
+      const entry = current;
+      if (entry) entry.compressed += chunk.byteLength;
+      super.push(chunk, final);
+      // Streaming ZIP local headers may omit sizes when a data descriptor is
+      // used. Enforce the same ratio limit from observed bytes in that case.
+      if (entry && entry.bytes > 8 * 1024 * 1024 && entry.compressed > 0
+        && entry.bytes / entry.compressed > 200) throw archiveLimit('suspicious compression ratio');
+    }
+  }
+
+  const finishEntry = () => {
+    if (!current) return;
+    observations.push({
+      name: current.name,
+      compression: current.file.compression,
+      compressed: current.file.compression === 0 ? current.bytes : current.compressed,
+      bytes: current.bytes
+    });
+    if (current.kind === 'manifest') {
+      manifestText += current.decoder!.decode();
+      manifestSeen = true;
+    } else {
+      files[current.name] = new Blob(current.parts, { type: 'image/jpeg' });
+      mediaInfo[current.name] = { bytes: current.bytes, sha256: current.hash!.hex() };
+    }
+    current.parts.length = 0;
+    current = null;
+    activeFile = null;
+  };
+
+  const unzip = new Unzip((file) => {
+    throwIfAborted(options.signal);
+    archiveStarted = true;
+    entryCount++;
+    if (entryCount > MAX_ARCHIVE_ENTRIES) throw archiveLimit('too many files');
+    if (names.has(file.name)) throw archiveLimit('duplicate archive entry');
+    names.add(file.name);
+    if (file.name !== 'manifest.json' && !MEDIA_PATH.test(file.name)) throw archiveLimit('unsafe archive path');
+
+    const declaredSize = file.originalSize;
+    if (declaredSize != null && (!Number.isSafeInteger(declaredSize) || declaredSize < 0)) throw new Error('not a zip');
+    if ((declaredSize ?? 0) > MAX_ENTRY_BYTES) throw archiveLimit('archive entry too large');
+    if ((declaredSize ?? 0) > 8 * 1024 * 1024 && (file.size ?? 0) > 0 && declaredSize! / file.size! > 200) {
+      throw archiveLimit('suspicious compression ratio');
+    }
+    totalUncompressed += declaredSize ?? 0;
+    if (totalUncompressed > MAX_UNCOMPRESSED_BYTES) throw archiveLimit('archive expands too large');
+
+    const kind: 'manifest' | 'media' = file.name === 'manifest.json' ? 'manifest' : 'media';
+    if (kind === 'manifest' && (declaredSize ?? 0) > MAX_MANIFEST_BYTES) throw archiveLimit('manifest too large');
+    const entry = {
+      file,
+      name: file.name,
+      kind,
+      bytes: 0,
+      accounted: declaredSize ?? 0,
+      compressed: 0,
+      parts: [] as Uint8Array<ArrayBuffer>[],
+      decoder: kind === 'manifest' ? new TextDecoder('utf-8') : null,
+      hash: kind === 'media' ? new IncrementalSha256() : null
+    };
+    current = entry;
+    activeFile = file;
+    file.ondata = (error, data, final) => {
+      if (error) throw new Error('not a zip');
+      throwIfAborted(options.signal);
+      if (data?.byteLength) {
+        entry.bytes += data.byteLength;
+        if (entry.bytes > MAX_ENTRY_BYTES) throw archiveLimit('archive entry too large');
+        if (kind === 'manifest' && entry.bytes > MAX_MANIFEST_BYTES) throw archiveLimit('manifest too large');
+        const accounted = Math.max(entry.accounted, entry.bytes);
+        totalUncompressed += accounted - entry.accounted;
+        entry.accounted = accounted;
+        if (totalUncompressed > MAX_UNCOMPRESSED_BYTES) throw archiveLimit('archive expands too large');
+        if (kind === 'manifest') manifestText += entry.decoder!.decode(data, { stream: true });
+        else {
+          entry.parts.push(data);
+          entry.hash!.update(data);
+        }
+      }
+      if (final) finishEntry();
+    };
+    file.start();
+  });
+  unzip.register(RatioCheckingUnzipInflate);
+
+  const retainTail = (chunk: Uint8Array) => {
+    if (!chunk.byteLength) return;
+    tailParts.push(chunk);
+    tailBytes += chunk.byteLength;
+    while (tailBytes > ZIP_TAIL_BYTES && tailHead < tailParts.length) {
+      const excess = tailBytes - ZIP_TAIL_BYTES;
+      const first = tailParts[tailHead];
+      if (first.byteLength <= excess) {
+        tailBytes -= first.byteLength;
+        tailHead++;
+      } else {
+        tailParts[tailHead] = first.subarray(excess);
+        tailBytes -= excess;
+      }
+    }
+    if (tailHead > 1024 && tailHead * 2 >= tailParts.length) {
+      tailParts.splice(0, tailHead);
+      tailHead = 0;
+    }
+  };
+
+  try {
+    for await (const input of chunks) {
+      throwIfAborted(options.signal);
+      for (let offset = 0; offset < input.byteLength; offset += ZIP_INPUT_CHUNK_BYTES) {
+        const chunk = input.subarray(offset, offset + ZIP_INPUT_CHUNK_BYTES);
+        archiveBytes += chunk.byteLength;
+        retainTail(chunk);
+        try { unzip.push(chunk, false); } catch (error) { normalizeZipError(error, options.signal); }
+      }
+    }
+    throwIfAborted(options.signal);
+    try { unzip.push(EMPTY_BYTES, true); } catch (error) { normalizeZipError(error, options.signal); }
+    if (!archiveStarted) throw new Error('not a zip');
+    validateZipDirectory(joinTail(tailParts, tailHead, tailBytes), archiveBytes, observations);
+    if (!manifestSeen) throw new Error('missing manifest');
+    let manifest;
+    try { manifest = JSON.parse(manifestText); } catch { throw new Error('invalid manifest'); }
+    return { manifest, files, mediaInfo, inspectionVersion: 2 };
+  } finally {
+    try { activeFile?.terminate(); } catch { /* best-effort decoder cleanup */ }
+    // fflate 0.8 exposes per-file termination only; tolerate newer versions
+    // that also expose a stream-level terminator.
+    try { (unzip as Unzip & { terminate?: () => void }).terminate?.(); } catch { /* best-effort */ }
+  }
 }
 
 function invalidManifest() {
@@ -173,6 +565,14 @@ function validateManifest(manifest, files) {
   }
   if ((manifest.version === 3 && !Array.isArray(manifest.trackSnapshots))
     || (manifest.trackSnapshots != null && !Array.isArray(manifest.trackSnapshots))) invalidManifest();
+  if (manifest.version >= 2) {
+    const integrity = manifest.integrity;
+    if (!integrity || typeof integrity !== 'object' || Array.isArray(integrity)
+      || integrity.algo !== 'SHA-256' || typeof integrity.payload !== 'string'
+      || (integrity.files != null && (typeof integrity.files !== 'object' || Array.isArray(integrity.files)))) {
+      invalidManifest();
+    }
+  }
   const trackSnapshots = manifest.trackSnapshots || [];
 
   const countPairs = [
@@ -299,103 +699,262 @@ function validateManifest(manifest, files) {
   }
 }
 
-export async function inspectBackup(file, password = '') {
+async function finishInspection(parsed: ParsedZip, encrypted: boolean, options: BackupImportOptions) {
+  const { manifest, files, mediaInfo } = parsed;
+  const target = options.target ?? db;
+  throwIfAborted(options.signal);
+  validateManifest(manifest, files);
+  const existing = new Set((await target.trips.toArray()).map((t) => t.id));
+  throwIfAborted(options.signal);
+  const conflicts = manifest.trips.filter((t) => existing.has(t.id)).map((t) => t.id);
+  const integrity = await verifyIntegrity(manifest, files, mediaInfo, options.signal);
+  throwIfAborted(options.signal);
+  return { manifest, files, conflicts, integrity, encrypted, inspectionVersion: parsed.inspectionVersion };
+}
+
+async function inspectStreamingFile(file, password: string, options: BackupImportOptions) {
   const maxEnvelope = MAX_BACKUP_BYTES + 1024;
-  if (Number(file?.size) > maxEnvelope) throw new Error('backup file too large');
-  let u8 = new Uint8Array(await file.arrayBuffer());
+  const reader = file.stream().getReader();
+  const total = Number(file.size) || 0;
+  let loaded = 0;
+  let completed = false;
+  let cancelled = false;
+  const cancel = async () => {
+    if (cancelled || completed) return;
+    cancelled = true;
+    try { await reader.cancel(); } catch { /* preserve the original failure */ }
+  };
+  const read = async () => {
+    throwIfAborted(options.signal);
+    let result;
+    if (!options.signal) {
+      result = await reader.read();
+    } else {
+      let onAbort: () => void;
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = () => {
+          void cancel();
+          reject(abortError(options.signal!));
+        };
+        options.signal!.addEventListener('abort', onAbort, { once: true });
+      });
+      try {
+        result = await Promise.race([reader.read(), aborted]);
+      } finally {
+        options.signal!.removeEventListener('abort', onAbort!);
+      }
+    }
+    throwIfAborted(options.signal);
+    if (!result.done && result.value?.byteLength) {
+      loaded += result.value.byteLength;
+      if (loaded > maxEnvelope) throw new Error('backup file too large');
+      options.onProgress?.({ phase: 'read', loaded, total });
+    }
+    return result;
+  };
+
+  try {
+    const prefix: Uint8Array[] = [];
+    let prefixBytes = 0;
+    let eof = false;
+    while (prefixBytes < 8 && !eof) {
+      const result = await read();
+      if (result.done) eof = true;
+      else if (result.value?.byteLength) {
+        prefix.push(result.value);
+        prefixBytes += result.value.byteLength;
+      }
+    }
+    const header = new Uint8Array(Math.min(8, prefixBytes));
+    let headerOffset = 0;
+    for (const chunk of prefix) {
+      const take = Math.min(chunk.byteLength, header.byteLength - headerOffset);
+      header.set(chunk.subarray(0, take), headerOffset);
+      headerOffset += take;
+    }
+
+    if (isEncryptedBackupBytes(header)) {
+      await cancel();
+      throwIfAborted(options.signal);
+      // Compatibility boundary: the v1 AES-GCM envelope requires the complete
+      // ciphertext for one-shot decryption. Encrypted imports are deliberately
+      // not streaming; only the ZIP/media handling below is bounded per entry.
+      let wrapped = await blobToU8(file);
+      throwIfAborted(options.signal);
+      if (wrapped.byteLength > maxEnvelope) throw new Error('backup file too large');
+      let plain = await decryptBackupBytes(wrapped, password);
+      throwIfAborted(options.signal);
+      if (plain.byteLength > MAX_BACKUP_BYTES) throw new Error('backup file too large');
+      wrapped = EMPTY_BYTES;
+      const parsed = await readZip(byteChunks(plain, options.signal), options);
+      plain = EMPTY_BYTES;
+      const inspected = await finishInspection(parsed, true, options);
+      completed = true;
+      return inspected;
+    }
+
+    const chunks = (async function* () {
+      for (const chunk of prefix) yield chunk;
+      if (eof) return;
+      for (;;) {
+        const result = await read();
+        if (result.done) return;
+        if (result.value?.byteLength) yield result.value;
+      }
+    })();
+    const parsed = await readZip(chunks, options);
+    const inspected = await finishInspection(parsed, false, options);
+    completed = true;
+    return inspected;
+  } finally {
+    await cancel();
+    try { reader.releaseLock(); } catch { /* a cancelled pending read may already hold the lock */ }
+  }
+}
+
+async function inspectBufferedFile(file, password: string, options: BackupImportOptions) {
+  const maxEnvelope = MAX_BACKUP_BYTES + 1024;
+  let u8 = await blobToU8(file);
+  throwIfAborted(options.signal);
   if (u8.byteLength > maxEnvelope) throw new Error('backup file too large');
   const encrypted = isEncryptedBackupBytes(u8);
   if (encrypted) {
     u8 = await decryptBackupBytes(u8, password);
+    throwIfAborted(options.signal);
     if (u8.byteLength > MAX_BACKUP_BYTES) throw new Error('backup file too large');
   }
-  const files = readZipLimited(u8);
-  let manifest;
-  try { manifest = JSON.parse(strFromU8(files['manifest.json'])); } catch { throw new Error('invalid manifest'); }
-  validateManifest(manifest, files);
-  const existing = new Set((await db.trips.toArray()).map((t) => t.id));
-  const conflicts = manifest.trips.filter((t) => existing.has(t.id)).map((t) => t.id);
-  const integrity = await verifyIntegrity(manifest, files);
-  return { manifest, files, conflicts, integrity, encrypted };
+  const parsed = await readZip(byteChunks(u8, options.signal), options);
+  return await finishInspection(parsed, encrypted, options);
 }
 
-async function verifyIntegrity(manifest, files) {
+export async function inspectBackup(file, password = '', options: BackupImportOptions = {}) {
+  const maxEnvelope = MAX_BACKUP_BYTES + 1024;
+  if (Number(file?.size) > maxEnvelope) throw new Error('backup file too large');
+  throwIfAborted(options.signal);
+  // Blob/File inputs use their stream. The arrayBuffer fallback keeps older
+  // non-streaming callers compatible, but cannot provide the streaming guarantee.
+  return typeof file?.stream === 'function'
+    ? inspectStreamingFile(file, password, options)
+    : inspectBufferedFile(file, password, options);
+}
+
+async function verifyIntegrity(
+  manifest,
+  files: Record<string, Blob>,
+  mediaInfo: Record<string, MediaEntryInfo> | null,
+  signal?: AbortSignal
+) {
+  throwIfAborted(signal);
   if (!manifest.integrity) return { ok: null, checked: 0, failed: [] };
   if (manifest.integrity.algo !== 'SHA-256' || typeof manifest.integrity.payload !== 'string') {
     return { ok: false, checked: 0, failed: ['unsupported checksum'] };
   }
   const expected = manifest.integrity.payload;
   const actual = await payloadDigest(manifest);
+  throwIfAborted(signal);
   if (actual !== expected) return { ok: false, checked: 0, failed: ['manifest'] };
   const failed = [];
   let checked = 0;
   for (const path of mediaFilesOf(files, manifest)) {
+    throwIfAborted(signal);
     const meta = manifest.integrity.files?.[path];
     const data = files[path];
-    if (!meta || !data) { failed.push(path); continue; }
+    const binary = data as Blob | Uint8Array | undefined;
+    const info = mediaInfo === null && binary
+      ? {
+        bytes: binary instanceof Blob ? binary.size : binary.byteLength,
+        sha256: await blobDigest(binary, signal)
+      }
+      : mediaInfo?.[path];
+    if (!meta || !data || !info) { failed.push(path); continue; }
     checked++;
-    if (data.byteLength !== meta.bytes || await sha256Hex(data) !== meta.sha256) failed.push(path);
+    if (info.bytes !== meta.bytes || info.sha256 !== meta.sha256) failed.push(path);
   }
+  throwIfAborted(signal);
   return { ok: failed.length === 0, checked, failed };
 }
 
 /** strategy: 'skip' | 'overwrite' */
-export async function restoreBackup(file, strategy = 'skip', inspected = null) {
+export async function restoreBackup(file, strategy = 'skip', inspected = null, options: BackupImportOptions = {}) {
   if (strategy !== 'skip' && strategy !== 'overwrite') throw new Error('invalid strategy');
-  const data = inspected || await inspectBackup(file);
-  const { manifest, files, conflicts, integrity } = data;
-  if (integrity.ok === false) throw new Error('backup integrity check failed');
+  throwIfAborted(options.signal);
+  const target = options.target ?? db;
+  const data = inspected || await inspectBackup(file, '', options);
+  const { manifest, files, conflicts } = data;
   validateBackupSchemaVersion(manifest.tripSchemaVersion);
   for (const trip of manifest.trips) validateBackupSchemaVersion(trip.schemaVersion);
+  validateManifest(manifest, files);
+  const integrity = inspected
+    ? await verifyIntegrity(manifest, files, null, options.signal)
+    : data.integrity;
+  if (integrity.ok === false) throw new Error('backup integrity check failed');
+  throwIfAborted(options.signal);
   const skipIds = new Set(strategy === 'skip' ? conflicts : []);
   const trackSnapshots = manifest.trackSnapshots || [];
   let restored = 0;
   const noExisting = async (table, ids) => {
     if (!ids.length) return;
     const rows = await table.bulkGet(ids);
+    throwIfAborted(options.signal);
     if (rows.some(Boolean)) throw new Error('archive id collision');
   };
-  await db.transaction('rw', [db.trips, db.segments, db.trackChunks, db.trackSnapshots, db.waypoints, db.media, db.elevCache, db.shareImports], async () => {
-    restored = 0;
-    if (strategy === 'overwrite') {
-      for (const id of conflicts) {
-        await db.trackChunks.where('tripId').equals(id).delete();
-        await db.trackSnapshots.where('tripId').equals(id).delete();
-        await db.segments.where('tripId').equals(id).delete();
-        await db.waypoints.where('tripId').equals(id).delete();
-        await db.media.where('tripId').equals(id).delete();
-        await db.shareImports.where('tripId').equals(id).delete();
-        await db.trips.delete(id);
+  let detachAbort: (() => void) | undefined;
+  try {
+    await target.transaction('rw', [target.trips, target.segments, target.trackChunks, target.trackSnapshots, target.waypoints, target.media, target.elevCache, target.shareImports], async (transaction) => {
+      detachAbort = abortTransactionOnSignal(transaction, options.signal);
+      restored = 0;
+      throwIfAborted(options.signal);
+      if (strategy === 'overwrite') {
+        for (const id of conflicts) {
+          throwIfAborted(options.signal);
+          await target.trackChunks.where('tripId').equals(id).delete();
+          await target.trackSnapshots.where('tripId').equals(id).delete();
+          await target.segments.where('tripId').equals(id).delete();
+          await target.waypoints.where('tripId').equals(id).delete();
+          await target.media.where('tripId').equals(id).delete();
+          await target.shareImports.where('tripId').equals(id).delete();
+          await target.trips.delete(id);
+        }
       }
-    }
-    await noExisting(db.trips, manifest.trips.filter((t) => !skipIds.has(t.id)).map((t) => t.id));
-    await noExisting(db.segments, manifest.segments.filter((s) => !skipIds.has(s.tripId)).map((s) => s.id));
-    await noExisting(db.trackChunks, manifest.trackChunks.filter((c) => !skipIds.has(c.tripId)).map((c) => c.id));
-    await noExisting(db.trackSnapshots, trackSnapshots.filter((snapshot) => !skipIds.has(snapshot.tripId)).map((snapshot) => snapshot.id));
-    await noExisting(db.waypoints, manifest.waypoints.filter((w) => !skipIds.has(w.tripId)).map((w) => w.id));
-    await noExisting(db.media, manifest.mediaMeta.filter((m) => !skipIds.has(m.tripId)).map((m) => m.id));
-    for (const t of manifest.trips) {
-      if (skipIds.has(t.id)) continue;
-      await db.trips.put({ ...t, schemaVersion: t.schemaVersion ?? TRIP_SCHEMA_VERSION });
-      restored++;
-    }
-    for (const s of manifest.segments) if (!skipIds.has(s.tripId)) await db.segments.put(s);
-    for (const c of manifest.trackChunks) if (!skipIds.has(c.tripId)) await db.trackChunks.put(c);
-    for (const snapshot of trackSnapshots) if (!skipIds.has(snapshot.tripId)) await db.trackSnapshots.put(snapshot);
-    for (const w of manifest.waypoints) if (!skipIds.has(w.tripId)) await db.waypoints.put(w);
-    for (const e of manifest.elevCache || []) await db.elevCache.put(e);
-    for (const m of manifest.mediaMeta || []) {
-      if (skipIds.has(m.tripId)) continue;
-      const blobData = files[`media/${m.id}.jpg`];
-      if (!blobData) throw new Error('missing media');
-      const thumbData = files[`media/${m.id}.thumb.jpg`];
-      await db.media.put({
-        ...m,
-        blob: new Blob([blobData], { type: 'image/jpeg' }),
-        thumb: thumbData ? new Blob([thumbData], { type: 'image/jpeg' }) : null
-      });
-    }
-  });
-  emit('backup:restored', { restored });
+      await noExisting(target.trips, manifest.trips.filter((t) => !skipIds.has(t.id)).map((t) => t.id));
+      await noExisting(target.segments, manifest.segments.filter((s) => !skipIds.has(s.tripId)).map((s) => s.id));
+      await noExisting(target.trackChunks, manifest.trackChunks.filter((c) => !skipIds.has(c.tripId)).map((c) => c.id));
+      await noExisting(target.trackSnapshots, trackSnapshots.filter((snapshot) => !skipIds.has(snapshot.tripId)).map((snapshot) => snapshot.id));
+      await noExisting(target.waypoints, manifest.waypoints.filter((w) => !skipIds.has(w.tripId)).map((w) => w.id));
+      await noExisting(target.media, manifest.mediaMeta.filter((m) => !skipIds.has(m.tripId)).map((m) => m.id));
+      for (const t of manifest.trips) {
+        if (skipIds.has(t.id)) continue;
+        throwIfAborted(options.signal);
+        await target.trips.put({ ...t, schemaVersion: t.schemaVersion ?? TRIP_SCHEMA_VERSION });
+        restored++;
+        options.onProgress?.({ phase: 'restore', loaded: restored, total: manifest.trips.length });
+        throwIfAborted(options.signal);
+      }
+      for (const s of manifest.segments) if (!skipIds.has(s.tripId)) { throwIfAborted(options.signal); await target.segments.put(s); }
+      for (const c of manifest.trackChunks) if (!skipIds.has(c.tripId)) { throwIfAborted(options.signal); await target.trackChunks.put(c); }
+      for (const snapshot of trackSnapshots) if (!skipIds.has(snapshot.tripId)) { throwIfAborted(options.signal); await target.trackSnapshots.put(snapshot); }
+      for (const w of manifest.waypoints) if (!skipIds.has(w.tripId)) { throwIfAborted(options.signal); await target.waypoints.put(w); }
+      for (const e of manifest.elevCache || []) { throwIfAborted(options.signal); await target.elevCache.put(e); }
+      for (const m of manifest.mediaMeta || []) {
+        if (skipIds.has(m.tripId)) continue;
+        throwIfAborted(options.signal);
+        const blobData = files[`media/${m.id}.jpg`];
+        if (!blobData) throw new Error('missing media');
+        const thumbData = files[`media/${m.id}.thumb.jpg`];
+        // Inspections retain media as Blobs, so restore reuses those exact objects
+        // instead of materializing every entry again. The fallback accepts an
+        // inspection produced by an older caller that supplied Uint8Arrays.
+        const blob = blobData instanceof Blob ? blobData : new Blob([blobData], { type: 'image/jpeg' });
+        const thumb = thumbData
+          ? thumbData instanceof Blob ? thumbData : new Blob([thumbData], { type: 'image/jpeg' })
+          : null;
+        await target.media.put({ ...m, blob, thumb });
+      }
+      throwIfAborted(options.signal);
+    });
+  } finally {
+    detachAbort?.();
+  }
+  if (target === db) emit('backup:restored', { restored });
   return restored;
 }

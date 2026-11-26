@@ -1,7 +1,7 @@
 {
   "name": "roametch",
   "private": true,
-  "version": "3.4.0",
+  "version": "3.5.0",
   "type": "module",
   "license": "GPL-3.0-only",
   "description": "Pure-frontend trip recorder & analyzer with dual-region (CN/Global) adaptive service routing",
@@ -18,6 +18,8 @@
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium webkit",
     "test:offline": "npm run build && playwright test --config playwright.offline.config.ts",
+    "test:memory": "npm run build && playwright test --config playwright.memory.config.ts",
+    "verify:ios-evidence": "node scripts/verify-ios-evidence.mjs",
     "promo:webp": "node tools/make-demo-webp.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeDistanceSplits } from '../src/core/distanceSplits';
+import { previewTrackCleanup } from '../src/core/gpsQuality';
 
 const EARTH_RADIUS = 6371008.8;
 const segments = [{
@@ -123,5 +124,56 @@ describe('compute worker resilience', () => {
 
     await expect(pending).rejects.toThrow('invalid track');
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not dispatch a task when its signal is already aborted', async () => {
+    const { previewTrackCleanupAsync } = await import('../src/core/workerBridge');
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(previewTrackCleanupAsync(segments, 'hike', {}, { signal: controller.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(MockWorker.instances).toHaveLength(0);
+  });
+
+  it('cancels a pending cleanup and ignores its late worker response', async () => {
+    const { previewTrackCleanupAsync } = await import('../src/core/workerBridge');
+    const controller = new AbortController();
+    const pending = previewTrackCleanupAsync(segments, 'hike', {}, { signal: controller.signal });
+    const instance = MockWorker.instances[0];
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(instance.postMessage).toHaveBeenLastCalledWith({ id: 1, type: 'cancel' });
+    expect(vi.getTimerCount()).toBe(0);
+    instance.onmessage?.({ data: { id: 1, ok: true, result: { removed: 99 } } });
+    await Promise.resolve();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('uses the lightweight cleanup fallback when workers are unavailable', async () => {
+    vi.stubGlobal('Worker', class {
+      constructor() { throw new Error('workers unavailable'); }
+    });
+    const { previewTrackCleanupAsync } = await import('../src/core/workerBridge');
+
+    await expect(previewTrackCleanupAsync(segments, 'hike')).resolves.toEqual(
+      previewTrackCleanup(segments, 'hike')
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not start an unavailable-worker fallback after synchronous cancellation', async () => {
+    vi.stubGlobal('Worker', class {
+      constructor() { throw new Error('workers unavailable'); }
+    });
+    const { previewTrackCleanupAsync } = await import('../src/core/workerBridge');
+    const controller = new AbortController();
+    const pending = previewTrackCleanupAsync(segments, 'hike', {}, { signal: controller.signal });
+
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
   });
 });

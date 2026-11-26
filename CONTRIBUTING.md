@@ -18,8 +18,11 @@ npm run dev        # Vite dev server
 npm run typecheck  # tsc --noEmit
 npm test           # Vitest unit tests
 npm run test:e2e   # Playwright smoke tests (run npm run test:e2e:install once)
+npm run test:offline # production-build offline export tests
+npm run test:memory # 20k-point Chromium memory regression budgets
 npm run build      # typecheck + production build (dist/)
 npm run preview    # preview the production build
+npm run verify:ios-evidence # physical-iPhone release evidence (pending until captured)
 npm run promo:webp # regenerate the animated README demos
 ```
 
@@ -42,12 +45,17 @@ npm test
    demo track.
 3. Run `npm run typecheck && npm test && npm run build`. If you changed the relay,
    also run `cd relay && npm test`. If you changed recording, analysis, export,
-   backup, camera, QR join, or the iOS nudges, run `npm run test:e2e`. The public
-   broker test is opt-in because it needs internet access:
+   backup, camera, QR join, or the iOS nudges, run `npm run test:e2e`; run
+   `npm run test:offline` for offline/export changes and `npm run test:memory`
+   for large-track or memory-sensitive changes. The public broker test is opt-in
+   because it needs internet access:
    `MEET_PUBLIC_E2E=1 npx playwright test e2e/meetPublic.spec.ts`.
-4. For UI changes, test in a real browser at desktop and mobile widths. Include a
+4. `npm run verify:ios-evidence` is a physical-device release gate, not a local
+   emulator test. It must fail while `docs/qa/ios-evidence.json` is absent; only
+   captured and verifiable hardware evidence may satisfy it.
+5. For UI changes, test in a real browser at desktop and mobile widths. Include a
    screenshot or short recording in the PR when the layout changes.
-5. Use a commit message in the existing style: `feat(scope): ...`, `fix(scope): ...`,
+6. Use a commit message in the existing style: `feat(scope): ...`, `fix(scope): ...`,
    `docs: ...`, `test: ...`, `chore: ...`.
 
 ## Project invariants

@@ -4,9 +4,53 @@ import { get, set } from '../core/settings';
 import { emit } from '../core/events';
 import { exportBackup, inspectBackup, restoreBackup } from '../core/backup';
 import { isEncryptedBackupFile, MIN_BACKUP_PASSWORD } from '../core/backupCrypto';
+import { appendBackupHistory, type BackupHistoryRecord, type BackupHistorySource } from '../core/backupHistory';
+import { TRIP_SCHEMA_VERSION } from '../core/store';
+import { APP_VERSION } from '../core/version';
 import { triggerDownload } from '../core/gpx';
 import { isWeChat, wechatFileGuidance } from '../core/shareEnv';
 import { el, icon, modal, toast } from './helpers';
+
+function historyRecord({
+  kind, status, createdAt = Date.now(), filename, bytes = 0, encrypted = false,
+  manifest = {}, mediaChecked = 0, mediaFailed = 0, source = 'manual'
+}: {
+  kind: BackupHistoryRecord['kind'];
+  status: BackupHistoryRecord['status'];
+  createdAt?: number;
+  filename: string;
+  bytes?: number;
+  encrypted?: boolean;
+  manifest?: {
+    format?: string;
+    tripSchemaVersion?: number;
+    tripSchema?: number;
+    appVersion?: string;
+    counts?: Record<string, number>;
+    trips?: unknown[];
+    segments?: unknown[];
+    trackChunks?: unknown[];
+    waypoints?: unknown[];
+    mediaMeta?: unknown[];
+  };
+  mediaChecked?: number;
+  mediaFailed?: number;
+  source?: BackupHistorySource;
+}) {
+  const counts = manifest.counts || {};
+  return appendBackupHistory({
+    kind, status, createdAt, filename, bytes, encrypted,
+    backupFormat: manifest.format || 'localtrace-backup',
+    tripSchema: manifest.tripSchemaVersion ?? manifest.tripSchema ?? 0,
+    appVersion: manifest.appVersion || APP_VERSION,
+    trips: counts.trips ?? manifest.trips?.length ?? 0,
+    segments: counts.segments ?? manifest.segments?.length ?? 0,
+    chunks: counts.trackChunks ?? manifest.trackChunks?.length ?? 0,
+    waypoints: counts.waypoints ?? manifest.waypoints?.length ?? 0,
+    media: counts.media ?? manifest.mediaMeta?.length ?? 0,
+    mediaChecked, mediaFailed, source
+  });
+}
 
 function formatDate(iso) {
   if (!iso) return '—';
@@ -108,20 +152,50 @@ function askRestorePassword(name, wrong = false) {
   });
 }
 
-export async function exportBackupFlow({ silentOnWeChat = false, promptEncryption = true, password: fixedPassword = '' } = {}) {
+export async function exportBackupFlow({
+  silentOnWeChat = false, promptEncryption = true, password: fixedPassword = '', historySource = 'manual'
+}: {
+  silentOnWeChat?: boolean;
+  promptEncryption?: boolean;
+  password?: string;
+  historySource?: BackupHistorySource;
+} = {}) {
   let password = fixedPassword || '';
   if (promptEncryption) {
     const choice = await askExportPassword();
     if (!choice) return false;
     password = choice.password;
   }
-  const { blob, filename, tripCount, counts, exportedAt, encrypted } = await exportBackup({ password });
+  let exported;
+  try {
+    exported = await exportBackup({ password });
+  } catch (error) {
+    await historyRecord({
+      kind: 'export', status: 'failed', filename: 'roametch-backup-failed.trip',
+      encrypted: !!password, source: historySource
+    });
+    throw error;
+  }
+  const { blob, filename, tripCount, counts, exportedAt, encrypted } = exported;
   if (isWeChat()) {
     if (!silentOnWeChat) wechatFileGuidance();
     return false;
   }
-  triggerDownload(blob, filename);
-  set('lastBackupAt', Date.parse(exportedAt) || Date.now());
+  try {
+    triggerDownload(blob, filename);
+  } catch (error) {
+    await historyRecord({
+      kind: 'export', status: 'failed', createdAt: Date.parse(exportedAt) || Date.now(),
+      filename, bytes: blob.size, encrypted, source: historySource
+    });
+    throw error;
+  }
+  const createdAt = Date.parse(exportedAt) || Date.now();
+  set('lastBackupAt', createdAt);
+  await historyRecord({
+    kind: 'export', status: 'exported', createdAt, filename, bytes: blob.size,
+    encrypted, manifest: { format: 'localtrace-backup', tripSchemaVersion: TRIP_SCHEMA_VERSION, counts }, source: historySource
+  });
   emit('backup:exported', { tripCount, counts, encrypted });
   toast(t(encrypted ? 'backup.encryptedOk' : 'trips.backupOk', { n: tripCount }), 'ok');
   return true;
@@ -226,7 +300,9 @@ export async function restoreBackupFlow(file, { onRestored = null } = {}) {
   if (snapshotBeforeRestore) {
     let exported = false;
     try {
-      exported = await exportBackupFlow({ silentOnWeChat: true, promptEncryption: false, password: encrypted ? password : '' });
+      exported = await exportBackupFlow({
+        silentOnWeChat: true, promptEncryption: false, password: encrypted ? password : '', historySource: 'pre-restore'
+      });
     } catch (e) {
       console.error('pre-restore snapshot export failed', e);
     }
@@ -235,16 +311,28 @@ export async function restoreBackupFlow(file, { onRestored = null } = {}) {
       return false;
     }
   }
+  let restored;
   try {
-    const n = await restoreBackup(file, choice.strategy, inspected);
-    toast(t('trips.restoreOk', { n }), 'ok');
-    onRestored?.(n);
-    return true;
+    restored = await restoreBackup(file, choice.strategy, inspected);
   } catch (e) {
     console.error(e);
+    await historyRecord({
+      kind: 'restore', status: 'failed', filename: file?.name || 'backup.trip',
+      bytes: file?.size || 0, encrypted, manifest,
+      mediaChecked: integrity.checked || 0, mediaFailed: integrity.failed?.length || 0
+    });
     toast(t('trips.restoreErr'), 'err');
     return false;
   }
+  await historyRecord({
+    kind: 'restore', status: 'restored', filename: file?.name || 'backup.trip',
+    bytes: file?.size || 0, encrypted, manifest,
+    mediaChecked: integrity.checked || 0, mediaFailed: integrity.failed?.length || 0
+  });
+  emit('backup:restored', { restored, filename: file?.name || '' });
+  toast(t('trips.restoreOk', { n: restored }), 'ok');
+  onRestored?.(restored);
+  return true;
 }
 
 export function lastBackupLabel() {

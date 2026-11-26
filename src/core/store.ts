@@ -1,5 +1,5 @@
 // IndexedDB runtime schema (Dexie). All coordinates stored here are WGS-84, SI units.
-import Dexie from 'dexie';
+import Dexie, { type Transaction } from 'dexie';
 import { uuid } from './geo';
 import { DATABASE_MIGRATIONS, DATABASE_NAME, TRIP_SCHEMA_VERSION } from './migrations';
 
@@ -15,6 +15,17 @@ for (const migration of DATABASE_MIGRATIONS) {
 db.on?.('versionchange', () => db.close());
 
 export const CHUNK_SIZE = 400;
+
+export function abortTransactionOnSignal(transaction: Transaction, signal?: AbortSignal): () => void {
+  if (!signal) return () => {};
+  const abort = () => {
+    if (!transaction.active) return;
+    try { transaction.abort(); } catch { /* A commit that already won cannot be rolled back. */ }
+  };
+  signal.addEventListener('abort', abort, { once: true });
+  if (signal.aborted) abort();
+  return () => signal.removeEventListener('abort', abort);
+}
 
 // ---------- trips ----------
 export async function createTrip({ id = uuid(), name, activity = 'hike', status = 'recording', createdAt = Date.now(), hasTime, publish = true }: any = {}) {
@@ -35,19 +46,20 @@ function nextTripRevision(current) {
   return Math.max(Date.now(), previous + 1);
 }
 
+export async function updateTripInTx(id, patch, { touch = true }: { touch?: boolean } = {}) {
+  const current = touch || patch.activity != null ? await db.trips.get(id) : null;
+  const activityChanged = patch.activity != null && current && current.activity !== patch.activity;
+  await db.trips.update(id, {
+    ...patch,
+    ...(activityChanged ? { statsCache: null, reportedDistance: null } : {}),
+    ...(touch ? { updatedAt: nextTripRevision(current) } : {})
+  });
+}
+
 export async function updateTrip(id, patch, { touch = true }: { touch?: boolean } = {}) {
-  const write = async () => {
-    const current = touch || patch.activity != null ? await db.trips.get(id) : null;
-    const activityChanged = patch.activity != null && current && current.activity !== patch.activity;
-    await db.trips.update(id, {
-      ...patch,
-      ...(activityChanged ? { statsCache: null, reportedDistance: null } : {}),
-      ...(touch ? { updatedAt: nextTripRevision(current) } : {})
-    });
-  };
   // Allocate revisions atomically so same-millisecond edits get distinct tokens.
-  if (touch || patch.activity != null) await db.transaction('rw', db.trips, write);
-  else await write();
+  if (touch || patch.activity != null) await db.transaction('rw', db.trips, () => updateTripInTx(id, patch, { touch }));
+  else await updateTripInTx(id, patch, { touch });
 }
 export async function cacheTripStats(id, expectedUpdatedAt, statsCache) {
   return db.transaction('rw', db.trips, async () => {
@@ -233,46 +245,52 @@ export async function loadTripPreview(tripId) {
   };
 }
 
+export async function replaceSegmentPointsInTx(segmentId, tripId, points) {
+  await db.trackChunks.where('segmentId').equals(segmentId).delete();
+  if (points.length) {
+    for (let i = 0; i < points.length; i += CHUNK_SIZE) {
+      await db.trackChunks.add({
+        id: uuid(), tripId, segmentId, seq: Math.floor(i / CHUNK_SIZE),
+        points: points.slice(i, i + CHUNK_SIZE)
+      });
+    }
+  }
+  await db.segments.update(segmentId, {
+    startTime: points[0]?.t ?? null, endTime: points[points.length - 1]?.t ?? null
+  });
+}
+
 /** Replace all points of a segment (used by editor). */
 export async function replaceSegmentPoints(segmentId, tripId, points) {
   await db.transaction('rw', [db.trackChunks, db.segments, db.trips], async () => {
-    await db.trackChunks.where('segmentId').equals(segmentId).delete();
-    if (points.length) {
-      for (let i = 0; i < points.length; i += CHUNK_SIZE) {
-        await db.trackChunks.add({
-          id: uuid(), tripId, segmentId, seq: Math.floor(i / CHUNK_SIZE),
-          points: points.slice(i, i + CHUNK_SIZE)
-        });
-      }
-    }
-    await db.segments.update(segmentId, {
-      startTime: points[0]?.t ?? null, endTime: points[points.length - 1]?.t ?? null
-    });
+    await replaceSegmentPointsInTx(segmentId, tripId, points);
     const trip = await db.trips.get(tripId);
-    await updateTrip(tripId, {
+    await updateTripInTx(tripId, {
       statsCache: null, thumbPoints: null,
       ...(trip?.reportedDistance != null ? { reportedDistance: null } : {})
     });
   });
 }
 
-export async function saveTrackSnapshot(tripId, segments) {
-  return db.transaction('rw', [db.trackSnapshots, db.trips], async () => {
-    if (await db.trackSnapshots.where('tripId').equals(tripId).count()) return false;
-    const createdAt = Date.now();
-    for (const segment of segments) {
-      const points = segment.points || [];
-      for (let i = 0; i < points.length; i += CHUNK_SIZE) {
-        await db.trackSnapshots.add({
-          id: uuid(), tripId, segmentId: segment.id, segmentIndex: segment.index,
-          seq: Math.floor(i / CHUNK_SIZE), createdAt,
-          points: points.slice(i, i + CHUNK_SIZE).map((point) => ({ ...point }))
-        });
-      }
+export async function saveTrackSnapshotInTx(tripId, segments) {
+  if (await db.trackSnapshots.where('tripId').equals(tripId).count()) return false;
+  const createdAt = Date.now();
+  for (const segment of segments) {
+    const points = segment.points || [];
+    for (let i = 0; i < points.length; i += CHUNK_SIZE) {
+      await db.trackSnapshots.add({
+        id: uuid(), tripId, segmentId: segment.id, segmentIndex: segment.index,
+        seq: Math.floor(i / CHUNK_SIZE), createdAt,
+        points: points.slice(i, i + CHUNK_SIZE).map((point) => ({ ...point }))
+      });
     }
-    await db.trips.update(tripId, { gpsCleanedAt: createdAt, statsCache: null, thumbPoints: null });
-    return true;
-  });
+  }
+  await db.trips.update(tripId, { gpsCleanedAt: createdAt, statsCache: null, thumbPoints: null });
+  return true;
+}
+
+export async function saveTrackSnapshot(tripId, segments) {
+  return db.transaction('rw', [db.trackSnapshots, db.trips], () => saveTrackSnapshotInTx(tripId, segments));
 }
 
 function invalidTrackSnapshot() {
@@ -328,13 +346,17 @@ export async function loadTrackSnapshot(tripId) {
 }
 
 export async function getTrackSnapshotSummary(tripId) {
-  const chunks = await db.trackSnapshots.where('tripId').equals(tripId).toArray();
-  if (!chunks.length) return null;
-  return {
-    segments: new Set(chunks.map((chunk) => chunk.segmentId)).size,
-    points: chunks.reduce((sum, chunk) => sum + (chunk.points?.length || 0), 0),
-    createdAt: Math.min(...chunks.map((chunk) => chunk.createdAt))
-  };
+  const segmentIds = new Set();
+  let pointCount = 0;
+  let createdAt = Infinity;
+  let found = false;
+  await db.trackSnapshots.where('tripId').equals(tripId).each((chunk) => {
+    found = true;
+    segmentIds.add(chunk.segmentId);
+    pointCount += chunk.points?.length || 0;
+    createdAt = Math.min(createdAt, chunk.createdAt);
+  });
+  return found ? { segments: segmentIds.size, points: pointCount, createdAt } : null;
 }
 
 export async function restoreTrackSnapshot(tripId) {
@@ -345,10 +367,12 @@ export async function restoreTrackSnapshot(tripId) {
     let restored = 0;
     for (const segment of snapshot) {
       if (!currentIds.has(segment.id)) continue;
-      await replaceSegmentPoints(segment.id, tripId, segment.points.map((point) => ({ ...point })));
+      await replaceSegmentPointsInTx(segment.id, tripId, segment.points.map((point) => ({ ...point })));
       restored += segment.points.length;
     }
-    if (restored) await db.trips.update(tripId, { gpsRestoredAt: Date.now(), statsCache: null, thumbPoints: null });
+    if (restored) await updateTripInTx(tripId, {
+      gpsRestoredAt: Date.now(), statsCache: null, thumbPoints: null, reportedDistance: null
+    });
     return restored;
   });
 }

@@ -53,10 +53,24 @@ hosted demo is served from GitHub Pages and is rebuilt on every push to `main`.
   carry SHA-256 checksums so the app can detect corruption or modification before
   restoring, but checksums are neither confidentiality nor authenticity: an
   attacker who rewrites the archive can also recompute the checksums.
+- Version 2/3 archives must include valid SHA-256 integrity metadata; removing or
+  weakening it blocks inspection and restore. Prepared inspections are reverified
+  before restore, including incremental media rehashing, so stale cached results
+  cannot validate mutated manifest rows or replacement Blobs. Version 1 remains
+  checksum-less for backward compatibility.
 - Restore treats the archive as untrusted: it caps compressed/uncompressed size,
   entry count, per-entry size, manifest size, point count, and compression ratio;
   rejects duplicate or non-whitelisted paths; and verifies manifest counts and
-  record relationships before a single transactional write.
+  record relationships before a single transactional write. Ordinary ZIP input is
+  decoded incrementally through 4 KiB compressed slices, with bounded media parts,
+  ZIP end-record/central-directory validation, and immediate cancellation of pending
+  reads; the legacy encrypted-envelope path still materializes the complete
+  envelope for AES-GCM compatibility.
+- Backup/restore history is stored outside the trip database and projected onto an
+  allowlist of operation status, timestamps, filename, byte counts, format/schema
+  versions, and aggregate counts. Passwords, Blobs, file handles, paths, coordinates,
+  and trip contents are never persisted. Clearing trip data does not clear history;
+  only the explicit history-clear action does.
 
 ### Share links
 
@@ -224,4 +238,4 @@ README for the full data-boundary description.
 - 组队端到端加密目前仍没有发送者身份认证，也没有前向保密；邀请泄露等同于房间内容泄露。设备身份签名、发起人认证、成员变动后的密钥轮换与 MLS/前向保密属于下一阶段。
 - 聊天缩略图在网页内存中压缩后加密发送，原始图片上限 56 KB，加密传输包上限 128 KB；发送冷却 5 秒，接收按发送者限流，仅保留最新 20 张，不写入 IndexedDB 或备份。中继可看到密文大小与时间，但看不到图片内容或可选拍摄坐标。
 - 高清原图默认不传输。用户主动开启并加载后，才建立 DTLS 加密的一对一 WebRTC DataChannel：文件持有者固定为 Offerer，16 KiB 分片、SHA-256 与图片头校验，10 秒建连、30 秒空闲关闭；发送方最多 2 路并发、10 张/50 MB 缓存，接收方最多 4 张/64 MB。原图不经过组队中继、不落盘；但双方设备可见彼此网络 IP，STUN/TURN 可观察连接信息，TURN 还可能转发仍加密的字节。
-- 本机数据不加密，依赖设备解锁；整库备份 ZIP 同样未加密，请妥善保管。请定期导出整库备份。恢复时会把压缩包视为不可信输入：限制大小、条目数、压缩比与点数，拒绝异常路径，并在单个事务中写入。漏洞请走私密报告入口。
+- 本机数据不加密，依赖设备解锁；整库备份 ZIP 同样未加密，请妥善保管。请定期导出整库备份。恢复时会把压缩包视为不可信输入：限制大小、条目数、压缩比与点数，解压输入固定为 4 KiB 分块，校验 ZIP 结束记录与中央目录，拒绝异常路径，并在单个事务中写入。普通 ZIP 按条目流式解码；旧版加密信封仍须一次性载入解密。备份历史仅存白名单摘要，不存密码、Blob、路径或坐标，且只能显式清空。漏洞请走私密报告入口。
