@@ -4,6 +4,21 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.4.0] - 2026-11-26
+
+### Added
+
+- Added bounded recorder persistence with a 5,000-fix pending cap, explicit
+  degraded save status, coalesced flush requests, and emergency spill retention
+  until every accepted batch is durable.
+- Added unit and real IndexedDB/mobile-browser regressions for storage failure,
+  recovery, bounded altitude patches, and streaming altitude backfill.
+
+### Changed
+
+- Stream altitude backfill one track chunk at a time and bound late-altitude
+  correction to the newest 32 chunks to reduce peak memory on large trips.
+
 ## [3.3.0] - 2026-11-26
 
 ### Added

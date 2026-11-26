@@ -507,3 +507,129 @@ test('spill recovery uses chunk sequence order and appends only fresh points', a
   expect(recovered.spill).toBeNull();
   await page.evaluate((id) => (window as any).__lt.store.deleteTrip(id), recovered.tripId);
 });
+
+test('altitude patches stay bounded and backfill streams real IndexedDB chunks', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await blockExternal(page);
+  let elevationRequests = 0;
+  await page.route('**/__elevation**', async (route) => {
+    elevationRequests++;
+    const url = new URL(route.request().url());
+    const count = (url.searchParams.get('latitude') || '').split(',').filter(Boolean).length;
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ elevation: Array.from({ length: count }, () => 321) })
+    });
+  });
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+
+  const result = await page.evaluate(async () => {
+    const { store } = (window as any).__lt;
+    const { set } = await import('/src/core/settings.ts');
+    set('elevationEndpoint', '/__elevation');
+    const { patchFlushedAltitude, backfillTripAltitudes } = await import('/src/core/elevation.ts');
+    const trip = await store.createTrip({ name: '海拔分块回归', activity: 'hike', status: 'finished' });
+    const segment = await store.addSegment(trip.id);
+    const points = Array.from({ length: 40 }, (_, seq) => ({
+      lat: 30 + seq / 1000, lon: 120, t: 1000 + seq * 1000, alt: null, altSrc: null
+    }));
+    for (let seq = 0; seq < points.length; seq++) {
+      await store.db.trackChunks.add({
+        id: `altitude-chunk-${seq}`, tripId: trip.id, segmentId: segment.id, seq, points: [points[seq]]
+      });
+    }
+    const oldPatch = await patchFlushedAltitude(segment.id, { ...points[0], alt: 111, altSrc: 'svc' });
+    const latestPatch = await patchFlushedAltitude(segment.id, { ...points[39], alt: 222, altSrc: 'svc' });
+    const filled = await backfillTripAltitudes(trip.id);
+    const chunks = await store.db.trackChunks.where('segmentId').equals(segment.id).toArray();
+    const values = chunks.sort((a, b) => a.seq - b.seq).flatMap((chunk) => chunk.points);
+    return {
+      tripId: trip.id,
+      oldPatch,
+      latestPatch,
+      filled,
+      oldAlt: values[0].alt,
+      latestAlt: values[39].alt,
+      allFilled: values.every((point) => point.alt != null && point.altSrc === 'svc')
+    };
+  });
+
+  expect(elevationRequests).toBeGreaterThan(0);
+  expect(result).toMatchObject({
+    oldPatch: false,
+    latestPatch: true,
+    filled: 39,
+    oldAlt: 321,
+    latestAlt: 222,
+    allFilled: true
+  });
+  await page.evaluate((id) => (window as any).__lt.store.deleteTrip(id), result.tripId);
+  expect(pageErrors).toEqual([]);
+});
+
+test('persistent save failures show the bounded degraded state and recover', async ({ page }) => {
+  test.setTimeout(120_000);
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await blockExternal(page);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+  await page.evaluate(() => (window as any).__lt.shell.navigate('record'));
+  await expect(page.locator('#view-record')).toHaveClass(/active/);
+
+  const limited = await page.evaluate(async () => {
+    const { recorder, store } = (window as any).__lt;
+    const originalAdd = store.db.trackChunks.add;
+    const originalPut = store.db.trackChunks.put;
+    (window as any).__saveFailureOriginals = { originalAdd, originalPut };
+    store.db.trackChunks.add = async () => { throw new DOMException('quota', 'QuotaExceededError'); };
+    store.db.trackChunks.put = async () => { throw new DOMException('quota', 'QuotaExceededError'); };
+    if (!(await recorder.startRecording({ name: '保存降级回归', activity: 'hike', simulated: true }))) {
+      throw new Error('simulated recording did not start');
+    }
+    const start = Date.now();
+    for (let index = 0; index <= 5000; index++) {
+      await recorder.handleFix({
+        lat: 30 + index * 0.00006, lon: 120, t: start + index * 1000,
+        acc: 5, alt: 100 + index * 0.01, altAcc: 5, speed: 6.5
+      });
+    }
+    return {
+      tripId: recorder.rec.tripId,
+      pending: recorder.rec.saveState.pending,
+      degraded: recorder.rec.saveState.degraded,
+      pointCount: recorder.rec.live.pointCount
+    };
+  });
+
+  expect(limited).toMatchObject({ pending: 5000, degraded: true, pointCount: 5000 });
+  await expect(page.locator('#view-record .lp-save')).toHaveText('保存受限');
+  await expect(page.locator('#view-record')).toContainText('已达到待写入上限');
+
+  const recovered = await page.evaluate(async (tripId) => {
+    const { recorder, store } = (window as any).__lt;
+    const { originalAdd, originalPut } = (window as any).__saveFailureOriginals;
+    store.db.trackChunks.add = originalAdd;
+    store.db.trackChunks.put = originalPut;
+    delete (window as any).__saveFailureOriginals;
+    const flushed = await recorder.flushBuffer();
+    const state = { ...recorder.rec.saveState };
+    const stopped = await recorder.stopRecording();
+    const points = stopped
+      ? (await store.loadTripTrack(stopped)).segments.flatMap((segment) => segment.points).length
+      : 0;
+    if (stopped) await store.deleteTrip(stopped);
+    return { flushed, state, stopped: Boolean(stopped), points, tripId };
+  }, limited.tripId);
+
+  expect(recovered).toMatchObject({
+    flushed: true,
+    stopped: true,
+    points: 5000,
+    state: { pending: 0, error: null, degraded: false }
+  });
+  await expect(page.locator('#view-record .lp-save')).toHaveText('已保存');
+  expect(pageErrors).toEqual([]);
+});

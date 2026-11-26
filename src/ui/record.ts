@@ -411,7 +411,11 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     const s = rec.saveState;
     pSave.className = 'lp-save';
     if (!active) return;
-    if (s.error) {
+    if (s.degraded) {
+      pSave.classList.add('bad');
+      pSave.textContent = t('record.saveDegradedShort');
+      pSave.title = t('record.saveDegraded', { n: s.pending });
+    } else if (s.error) {
       pSave.classList.add('bad');
       pSave.textContent = t('record.saveFailedShort');
       pSave.title = t('record.saveFailed', { n: s.pending });
@@ -1204,7 +1208,9 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     }
     if (rec.saveState.error) {
       bannerBox.append(geoBanner(
-        t('record.saveFailed', { n: rec.saveState.pending }),
+        rec.saveState.degraded
+          ? t('record.saveDegraded', { n: rec.saveState.pending })
+          : t('record.saveFailed', { n: rec.saveState.pending }),
         rec.saveState.error === 'finalize' ? () => { void onStop(); } : () => { void retrySave(); },
         rec.saveState.error === 'finalize' ? t('record.stopRetry') : t('record.saveRetry')
       ));

@@ -24,6 +24,7 @@ const BG_NOTICE_MS = 15_000;   // background absence worth notifying about
 const RESUME_BREAK_MS = 45_000;// long silence → start a fresh segment on return
 const STALE_FIX_MS = 5_000;    // ignore cached fixes older than this
 const SAVE_RETRY_MS = 5000;
+export const MAX_PENDING_POINTS = 5000;
 const SPILL_KEY = 'roametch.pendingPoints.v1';
 migrateLegacyKey('trackmint.pendingPoints.v1', SPILL_KEY);
 
@@ -43,7 +44,7 @@ export const rec = {
   lastFixWall: 0,
   firstFixT: 0,
   startedAt: 0,
-  saveState: { pending: 0, lastSavedAt: 0, error: null }
+  saveState: { pending: 0, lastSavedAt: 0, error: null, degraded: false }
 };
 
 let watchId = null;
@@ -52,6 +53,8 @@ let inflight = null;
 let flushTimer = null;
 let saveRetryTimer = null;
 let flushChain = Promise.resolve(true);
+let flushRunning = false;
+let flushAgain = false;
 let tickTimer = null;
 let geoRetryTimer = null;
 let geoRetryAttempts = 0;
@@ -80,8 +83,22 @@ function freshLive() {
   };
 }
 
+function pendingPointCount() {
+  return buffer.length + (inflight?.length || 0);
+}
+
+function enterSaveDegraded() {
+  const entered = !rec.saveState.degraded;
+  rec.saveState.error = 'capacity';
+  rec.saveState.degraded = true;
+  if (entered) {
+    emit('recorder:saveerror', { error: 'capacity', pending: pendingPointCount() });
+    emitPersistence();
+  }
+}
+
 function emitPersistence() {
-  rec.saveState.pending = buffer.length + (inflight?.length || 0);
+  rec.saveState.pending = pendingPointCount();
   emit('recorder:persistence', { ...rec.saveState });
 }
 
@@ -106,7 +123,8 @@ function scheduleGeoRetry() {
 }
 
 function resetSaveState() {
-  rec.saveState = { pending: 0, lastSavedAt: 0, error: null };
+  flushAgain = false;
+  rec.saveState = { pending: 0, lastSavedAt: 0, error: null, degraded: false };
   emitPersistence();
 }
 
@@ -206,7 +224,7 @@ export async function startRecording({ tripId = null, name = '', activity = null
       rec.lastPoint = null;
       rec.tripActivity = 'auto';
       rec.simulated = false;
-      rec.saveState = { pending: 0, lastSavedAt: 0, error: null };
+      rec.saveState = { pending: 0, lastSavedAt: 0, error: null, degraded: false };
       if (lockHeld) releaseRecorderLock();
       if (createdTripId) await store.deleteTrip(createdTripId).catch(() => {});
     }
@@ -376,6 +394,10 @@ function feedAutoActivity(speed, dt, tripActivity) {
 }
 
 function acceptPoint(fix, now, acc, fixSpeed, activity, dist = 0, dt = 0, implied = null) {
+  if (pendingPointCount() >= MAX_PENDING_POINTS) {
+    enterSaveDegraded();
+    return false;
+  }
   const lat = Number(fix.lat), lon = Number(fix.lon);
   const absoluteLimit = physicsFor('travel').vmax * 1.3;
   const reported = fixSpeed != null && fixSpeed <= absoluteLimit ? fixSpeed : null;
@@ -447,6 +469,7 @@ function acceptPoint(fix, now, acc, fixSpeed, activity, dist = 0, dt = 0, implie
   if (buffer.length >= FLUSH_POINTS) void flushBuffer();
   else if (!flushTimer) flushTimer = setTimeout(flushBuffer, FLUSH_MS);
   emit('recorder:point', { point, live: L });
+  return true;
 }
 
 async function processFix(fix) {
@@ -459,6 +482,13 @@ async function processFix(fix) {
 
   // Cached/queued fixes from before a suspension must never rewind the track.
   if ((rec.lastFixT && now <= rec.lastFixT) || arrival - now > STALE_FIX_MS) return;
+  if (pendingPointCount() >= MAX_PENDING_POINTS) {
+    rec.lastFixWall = arrival;
+    rec.filteredCount++;
+    enterSaveDegraded();
+    emit('recorder:filtered', { reason: 'storage', count: rec.filteredCount });
+    return;
+  }
 
   rec.lastFixWall = arrival;
   if (rec.geoError && rec.geoError !== 'denied') {
@@ -517,7 +547,7 @@ async function processFix(fix) {
         if (cDt > 0) cImplied = cDist / (cDt / 1000);
       }
       const candidateActivity = rec.tripActivity === 'auto' ? (rec.activityGuess || 'auto') : rec.tripActivity;
-      acceptPoint(candidate, candidate.t, candidate.acc ?? null, candidate.speed ?? null, candidateActivity, cDist, cDt, cImplied);
+      if (!acceptPoint(candidate, candidate.t, candidate.acc ?? null, candidate.speed ?? null, candidateActivity, cDist, cDt, cImplied)) break;
       previous = rec.lastPoint;
     }
     return;
@@ -556,12 +586,34 @@ function patchFlushedAlt(point) {
 
 export function flushBuffer() {
   flushTimer = clearTimer(flushTimer);
-  const run = flushChain.then(doFlush, doFlush).catch((e) => {
+  if (flushRunning) {
+    flushAgain = true;
+    return flushChain;
+  }
+  flushRunning = true;
+  const run = flushChain.then(runFlushLoop, runFlushLoop).catch((e) => {
+    flushAgain = false;
     console.error('flush crashed', e);
     return false;
+  }).finally(() => {
+    flushRunning = false;
+    if (flushAgain) void flushBuffer();
   });
   flushChain = run;
   return run;
+}
+
+async function runFlushLoop() {
+  let ok = true;
+  do {
+    flushAgain = false;
+    ok = await doFlush();
+    if (!ok) {
+      flushAgain = false;
+      break;
+    }
+  } while (flushAgain || buffer.length);
+  return ok;
 }
 
 async function doFlush() {
@@ -576,9 +628,11 @@ async function doFlush() {
   try {
     await store.appendPoints(segId, rec.tripId, pts.map(stripInternal));
     inflight = null;
-    rec.saveState.error = null;
+    const pending = pendingPointCount();
+    rec.saveState.error = pending >= MAX_PENDING_POINTS ? 'capacity' : null;
+    rec.saveState.degraded = pending >= MAX_PENDING_POINTS;
     rec.saveState.lastSavedAt = Date.now();
-    clearSpill(segId);
+    if (!pending) clearSpill(segId);
     emit('recorder:saved', { count: pts.length });
     emitPersistence();
     return true;
@@ -586,8 +640,10 @@ async function doFlush() {
     console.error('flush failed', e);
     inflight = null;
     buffer.unshift(...pts);
-    rec.saveState.error = 'write';
-    emit('recorder:saveerror', { error: 'write', pending: buffer.length });
+    const pending = pendingPointCount();
+    rec.saveState.error = pending >= MAX_PENDING_POINTS ? 'capacity' : 'write';
+    rec.saveState.degraded = pending >= MAX_PENDING_POINTS;
+    emit('recorder:saveerror', { error: rec.saveState.error, pending });
     emitPersistence();
     scheduleSaveRetry();
     return false;
@@ -724,6 +780,8 @@ export async function pauseRecording() {
   resetMotionFilter(); breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
   await store.updateTrip(rec.tripId, { status: 'paused' }).catch((e) => console.error('trip status update failed', e));
   rec.saveState.pending = 0;
+  rec.saveState.error = null;
+  rec.saveState.degraded = false;
   emitPersistence();
   releaseWakeLock();
   disarmKeepAlive();
@@ -842,6 +900,7 @@ async function doStopRecording() {
     emit('recorder:stopped', { tripId: rec.tripId });
     rec.saveState.pending = 0;
     rec.saveState.error = null;
+    rec.saveState.degraded = false;
     emitPersistence();
     const id = rec.tripId;
     rec.tripId = null; rec.segmentId = null; rec.live = null; rec.lastPoint = null; rec.tripActivity = 'auto';
@@ -850,6 +909,7 @@ async function doStopRecording() {
     console.error('stop failed', e);
     rec.status = 'paused';
     rec.saveState.error = 'finalize';
+    rec.saveState.degraded = false;
     emit('recorder:saveerror', { error: 'finalize', pending: 0 });
     emitPersistence();
     return null;

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => {
   const db: any = {
     trackChunks: { where: vi.fn(), get: vi.fn(), put: vi.fn() },
-    segments: { get: vi.fn() },
+    segments: { get: vi.fn(), where: vi.fn() },
     trips: {},
     transaction: vi.fn()
   };
@@ -38,6 +38,33 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function mockChunkScan(chunks: any[]) {
+  const toArray = vi.fn(async () => chunks);
+  const first = vi.fn(async ([segmentId, minSeq]: [string, number]) => [...chunks]
+    .filter((chunk) => chunk.segmentId === segmentId && chunk.seq >= minSeq)
+    .sort((a, b) => a.seq - b.seq)[0]);
+  mocks.db.trackChunks.where.mockImplementation((index: string) => index === '[segmentId+seq]'
+    ? { between: (lower: [string, number]) => ({ first: () => first(lower) }) }
+    : { equals: () => ({ toArray }) });
+  return toArray;
+}
+
+function mockReverseChunks(chunks: any[], onVisit?: (chunk: any) => void) {
+  mocks.db.trackChunks.where.mockReturnValue({
+    between: () => ({
+      reverse: () => ({
+        limit: (count: number) => ({
+          toArray: async () => {
+            const limited = [...chunks].reverse().slice(0, count);
+            if (onVisit) limited.forEach(onVisit);
+            return limited;
+          }
+        })
+      })
+    })
+  });
+}
+
 const original = { lat: 30, lon: 120, t: 1000, alt: null, altSrc: null };
 
 beforeEach(() => {
@@ -45,6 +72,9 @@ beforeEach(() => {
   vi.stubGlobal('navigator', { onLine: true });
   mocks.db.transaction.mockImplementation(async (_mode, _tables, write) => write());
   mocks.db.trackChunks.put.mockResolvedValue(undefined);
+  mocks.db.segments.where.mockReturnValue({
+    equals: () => ({ sortBy: async () => [{ id: 'seg-1', tripId: 'trip-1', index: 0 }] })
+  });
   mocks.elevCacheGet.mockResolvedValue(null);
   mocks.elevCachePut.mockResolvedValue(undefined);
   mocks.updateTrip.mockResolvedValue(undefined);
@@ -57,9 +87,7 @@ describe('altitude backfill concurrency', () => {
     const response = deferred<any>();
     const fetch = vi.fn(() => response.promise);
     vi.stubGlobal('fetch', fetch);
-    mocks.db.trackChunks.where.mockReturnValue({
-      equals: () => ({ toArray: async () => [{ id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0, points: [original] }] })
-    });
+    mockChunkScan([{ id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0, points: [original] }]);
     mocks.db.trackChunks.get.mockResolvedValue(undefined);
 
     const pending = backfillTripAltitudes('trip-1');
@@ -76,9 +104,7 @@ describe('altitude backfill concurrency', () => {
     const fetch = vi.fn(() => response.promise);
     vi.stubGlobal('fetch', fetch);
     const appended = { lat: 30.001, lon: 120.001, t: 2000, alt: null, altSrc: null };
-    mocks.db.trackChunks.where.mockReturnValue({
-      equals: () => ({ toArray: async () => [{ id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0, points: [original] }] })
-    });
+    mockChunkScan([{ id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0, points: [original] }]);
     mocks.db.trackChunks.get.mockResolvedValue({
       id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0, points: [original, appended]
     });
@@ -103,9 +129,7 @@ describe('altitude backfill concurrency', () => {
     const response = deferred<any>();
     const fetch = vi.fn(() => response.promise);
     vi.stubGlobal('fetch', fetch);
-    mocks.db.trackChunks.where.mockReturnValue({
-      equals: () => ({ toArray: async () => [{ id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0, points: [original] }] })
-    });
+    mockChunkScan([{ id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0, points: [original] }]);
     mocks.db.trackChunks.get.mockResolvedValue({
       id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0,
       points: [{ ...original, lon: 121 }]
@@ -119,6 +143,16 @@ describe('altitude backfill concurrency', () => {
     expect(mocks.db.trackChunks.put).not.toHaveBeenCalled();
     expect(mocks.updateTrip).not.toHaveBeenCalled();
   });
+
+  it('streams trip chunks instead of materializing the full track', async () => {
+    const toArray = mockChunkScan([{
+      id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0,
+      points: [{ ...original, alt: 100 }]
+    }]);
+
+    await expect(backfillTripAltitudes('trip-1')).resolves.toBe(0);
+    expect(toArray).not.toHaveBeenCalled();
+  });
 });
 
 describe('flushed altitude patches', () => {
@@ -126,9 +160,7 @@ describe('flushed altitude patches', () => {
     const appended = { lat: 30.001, lon: 120.001, t: 2000, alt: null, altSrc: null };
     const chunk = { id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0, points: [original, appended] };
     mocks.db.segments.get.mockResolvedValue({ id: 'seg-1', tripId: 'trip-1' });
-    mocks.db.trackChunks.where.mockReturnValue({
-      equals: () => ({ sortBy: async () => [chunk] })
-    });
+    mockReverseChunks([chunk]);
 
     await expect(patchFlushedAltitude('seg-1', { ...original, alt: 123, altSrc: 'svc' })).resolves.toBe(true);
 
@@ -148,9 +180,7 @@ describe('flushed altitude patches', () => {
       points: [{ ...original, lon: 121 }]
     };
     mocks.db.segments.get.mockResolvedValue({ id: 'seg-1', tripId: 'trip-1' });
-    mocks.db.trackChunks.where.mockReturnValue({
-      equals: () => ({ sortBy: async () => [chunk] })
-    });
+    mockReverseChunks([chunk]);
 
     await expect(patchFlushedAltitude('seg-1', { ...original, alt: 123, altSrc: 'svc' })).resolves.toBe(false);
     mocks.db.segments.get.mockResolvedValue(undefined);
@@ -158,5 +188,20 @@ describe('flushed altitude patches', () => {
 
     expect(mocks.db.trackChunks.put).not.toHaveBeenCalled();
     expect(mocks.updateTrip).not.toHaveBeenCalled();
+  });
+
+  it('bounds late-altitude lookup to the most recent 32 chunks', async () => {
+    const chunks = Array.from({ length: 40 }, (_, seq) => ({
+      id: `chunk-${seq}`, tripId: 'trip-1', segmentId: 'seg-1', seq,
+      points: [{ ...original, t: 1000 + seq * 1000 }]
+    }));
+    let visited = 0;
+    mocks.db.segments.get.mockResolvedValue({ id: 'seg-1', tripId: 'trip-1' });
+    mockReverseChunks(chunks, () => { visited++; });
+
+    await expect(patchFlushedAltitude('seg-1', { ...original, alt: 123, altSrc: 'svc' })).resolves.toBe(false);
+    expect(mocks.db.trackChunks.where).toHaveBeenCalledWith('[segmentId+seq]');
+    expect(visited).toBe(32);
+    expect(mocks.db.trackChunks.put).not.toHaveBeenCalled();
   });
 });

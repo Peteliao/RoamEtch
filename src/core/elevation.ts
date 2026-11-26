@@ -9,6 +9,7 @@ const GPS_ACC_LIMIT = 30;      // metres altitudeAccuracy to trust GPS altitude
 const BATCH_WINDOW = 350;      // ms collect window
 const BATCH_MAX = 100;
 const FETCH_TIMEOUT = 5000;
+const MAX_ALTITUDE_LOOKUP_CHUNKS = 32;
 
 let queue = [];
 let timer = null;
@@ -103,7 +104,9 @@ export async function patchFlushedAltitude(segmentId, point) {
   return db.transaction('rw', [db.trackChunks, db.segments, db.trips], async () => {
     const segment = await db.segments.get(segmentId);
     if (!segment) return false;
-    const chunks = await db.trackChunks.where('segmentId').equals(segmentId).sortBy('seq');
+    const chunks = await db.trackChunks.where('[segmentId+seq]')
+      .between([segmentId, 0], [segmentId, Number.MAX_SAFE_INTEGER]).reverse()
+      .limit(MAX_ALTITUDE_LOOKUP_CHUNKS).toArray();
     for (const chunk of chunks) {
       if (!Array.isArray(chunk.points)) continue;
       const index = chunk.points.findIndex((candidate) => candidate && candidate.alt == null
@@ -123,36 +126,43 @@ export async function patchFlushedAltitude(segmentId, point) {
 /** Backfill null-altitude points of a trip in batches (after edits / back online). */
 export async function backfillTripAltitudes(tripId, { onProgress }: any = {}) {
   if (isServiceOffline() || !navigator.onLine) return 0;
-  const chunks = await db.trackChunks.where('tripId').equals(tripId).toArray();
   let filled = 0;
-  for (const chunk of chunks) {
-    if (!Array.isArray(chunk.points)) continue;
-    const missing = chunk.points.map((p, i) => ({ p, i })).filter(({ p }) => p && p.alt == null);
-    if (!missing.length) continue;
-    for (let s = 0; s < missing.length; s += BATCH_MAX) {
-      const slice = missing.slice(s, s + BATCH_MAX);
-      const fills = new Map();
-      const needFetch = [];
-      for (const m of slice) {
-        const cached = await elevCacheGet(m.p.lat, m.p.lon);
-        if (cached != null) {
-          fills.set(m.i, { lat: m.p.lat, lon: m.p.lon, t: m.p.t, alt: cached, src: 'cache' });
-        } else needFetch.push(m);
+  const segments = await db.segments.where('tripId').equals(tripId).sortBy('index');
+  for (const segment of segments) {
+    let nextSeq = 0;
+    while (true) {
+      const chunk = await db.trackChunks.where('[segmentId+seq]')
+        .between([segment.id, nextSeq], [segment.id, Number.MAX_SAFE_INTEGER]).first();
+      if (!chunk) break;
+      if (Array.isArray(chunk.points)) {
+        const missing = chunk.points.map((p, i) => ({ p, i })).filter(({ p }) => p && p.alt == null);
+        for (let s = 0; s < missing.length; s += BATCH_MAX) {
+          const slice = missing.slice(s, s + BATCH_MAX);
+          const fills = new Map();
+          const needFetch = [];
+          for (const m of slice) {
+            const cached = await elevCacheGet(m.p.lat, m.p.lon);
+            if (cached != null) {
+              fills.set(m.i, { lat: m.p.lat, lon: m.p.lon, t: m.p.t, alt: cached, src: 'cache' });
+            } else needFetch.push(m);
+          }
+          if (needFetch.length) {
+            try {
+              const els = await fetchBatch(needFetch.map((m) => [m.p.lat, m.p.lon]));
+              needFetch.forEach((m, i) => {
+                const el = els[i];
+                if (el != null && isFinite(el)) {
+                  fills.set(m.i, { lat: m.p.lat, lon: m.p.lon, t: m.p.t, alt: el, src: 'svc' });
+                  elevCachePut(m.p.lat, m.p.lon, el);
+                }
+              });
+            } catch { /* keep null — never fabricate */ }
+          }
+          if (fills.size) filled += await applyAltitudeFills(tripId, chunk.id, fills);
+          onProgress?.(filled);
+        }
       }
-      if (needFetch.length) {
-        try {
-          const els = await fetchBatch(needFetch.map((m) => [m.p.lat, m.p.lon]));
-          needFetch.forEach((m, i) => {
-            const el = els[i];
-            if (el != null && isFinite(el)) {
-              fills.set(m.i, { lat: m.p.lat, lon: m.p.lon, t: m.p.t, alt: el, src: 'svc' });
-              elevCachePut(m.p.lat, m.p.lon, el);
-            }
-          });
-        } catch { /* keep null — never fabricate */ }
-      }
-      if (fills.size) filled += await applyAltitudeFills(tripId, chunk.id, fills);
-      onProgress?.(filled);
+      nextSeq = chunk.seq + 1;
     }
   }
   if (filled) emit('elev:backfilled', { tripId, filled });
