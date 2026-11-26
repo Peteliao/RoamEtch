@@ -4,6 +4,31 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.3.0] - 2026-11-26
+
+### Added
+
+- Added production iPhone WebKit offline cold-start and GPX, HTML, vector-poster,
+  and backup export coverage, plus mobile Chromium media persistence and verified
+  binary backup coverage. CI, Pages deployment, and release verification now run
+  this offline gate.
+- Added bounded streaming GPX imports with batched point/waypoint writes, ZIP entry
+  streams, cancellation, malformed-entry draining, and transactional rollback of
+  unpublished imports.
+- Added read-only unreferenced-media cleanup previews, expiring one-time tokens,
+  explicit danger confirmation, and transactional reference revalidation.
+- Added atomic waypoint/media persistence so photo writes, reference updates, and
+  last-reference deletion roll back together.
+
+### Changed
+
+- Multi-trip ZIP and full-backup exports now compress entries incrementally instead
+  of materializing every uncompressed entry and an extra whole-archive copy.
+- ZIP extraction now bounds entry count, decompressed entry size, and queued bytes
+  across entries while preserving streamed parser input.
+- Storage health copy now distinguishes read-only inspection/preview from confirmed
+  destructive cleanup.
+
 ## [3.2.5] - 2026-11-26
 
 ### Changed
