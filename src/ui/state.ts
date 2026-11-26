@@ -1,5 +1,5 @@
 // Shared UI state: active trip selection + debounced worker recalculation.
-import { loadTripFull, updateTrip } from '../core/store';
+import { cacheTripStats, loadTripFull } from '../core/store';
 import { computeStatsAsync } from '../core/workerBridge';
 import { get, set } from '../core/settings';
 import { emit } from '../core/events';
@@ -93,8 +93,10 @@ export async function recalcNow() {
   const resolvedStats = reportedDistance != null && isFinite(reportedDistance) && reportedDistance >= 0
     ? { ...stats, distance: reportedDistance }
     : stats;
-  await updateTrip(id, { statsCache: { ...resolvedStats, series: undefined, segments: resolvedStats.segments } });
-  if (request !== statsRequest || appState.activeTripId !== id || appState.activeTripFull?.trip.id !== id) return null;
+  const cached = await cacheTripStats(id, full.trip.updatedAt, {
+    ...resolvedStats, series: undefined, segments: resolvedStats.segments
+  });
+  if (!cached || request !== statsRequest || appState.activeTripId !== id || appState.activeTripFull?.trip.id !== id) return null;
   appState.stats = resolvedStats;
   emit('trip:stats', resolvedStats);
   return resolvedStats;

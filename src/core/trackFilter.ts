@@ -149,12 +149,16 @@ export function createJumpGate({ confirmPoints = 3 } = {}) {
         const avgAcc = ((accuracy(anchor) ?? 15) + (accuracy(fix) ?? 15)) / 2;
         const nearOld = step.dist <= Math.max(physics.minRevDist, avgAcc * 2);
         if (nearOld && reason !== 'speed' && reason !== 'accel') {
+          const discarded = pending.entries.map((entry) => entry.fix);
+          const rejectedReason = pending.reason;
           pending = null;
-          return { action: 'accept', points: [fix] };
+          return { action: 'accept', points: [fix], discarded, reason: rejectedReason };
         }
         if (continuesOldTrack(anchor, history, fix, activity, reason)) {
+          const discarded = pending.entries.map((entry) => entry.fix);
+          const rejectedReason = pending.reason;
           pending = null;
-          return { action: 'accept', points: [fix] };
+          return { action: 'accept', points: [fix], discarded, reason: rejectedReason };
         }
         if (coherent(pending, fix, activity)) {
           const last = pending.entries[pending.entries.length - 1];
@@ -170,8 +174,10 @@ export function createJumpGate({ confirmPoints = 3 } = {}) {
           return { action: 'pending', points: [fix] };
         }
       }
+      const discarded = pending.entries.map((entry) => entry.fix);
+      const rejectedReason = pending.reason;
       pending = makePending(fix, anchor, history, activity, reason);
-      return { action: 'pending', points: [fix] };
+      return { action: 'pending', points: [fix], discarded, reason: rejectedReason };
     }
 
     if (reason) {

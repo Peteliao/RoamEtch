@@ -1,13 +1,13 @@
 // Full-database backup / restore as a .trip ZIP archive (JSON tables + media binaries).
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
-import { db } from './store';
+import { db, TRIP_SCHEMA_VERSION } from './store';
 import { emit } from './events';
 import { sha256Hex, stableStringify } from './integrity';
 import { decryptBackupBytes, encryptBackupBlob, ENCRYPTED_BACKUP_EXT, isEncryptedBackupBytes } from './backupCrypto';
 
 const FORMAT = 'localtrace-backup';
-const VERSION = 2;
-const SUPPORTED_VERSIONS = new Set([1, 2]);
+const VERSION = 3;
+const SUPPORTED_VERSIONS = new Set([1, 2, 3]);
 
 const MAX_BACKUP_BYTES = 256 * 1024 * 1024;
 const MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024;
@@ -41,18 +41,22 @@ function mediaFilesOf(files, manifest) {
 }
 
 export async function exportBackup({ password = '' }: { password?: string } = {}) {
-  const [trips, segments, trackChunks, waypoints, media, elevCache] = await Promise.all([
-    db.trips.toArray(), db.segments.toArray(), db.trackChunks.toArray(),
-    db.waypoints.toArray(), db.media.toArray(), db.elevCache.toArray()
-  ]);
+  const [trips, segments, trackChunks, trackSnapshots, waypoints, media, elevCache] = await db.transaction(
+    'r',
+    [db.trips, db.segments, db.trackChunks, db.trackSnapshots, db.waypoints, db.media, db.elevCache],
+    () => Promise.all([
+      db.trips.toArray(), db.segments.toArray(), db.trackChunks.toArray(), db.trackSnapshots.toArray(),
+      db.waypoints.toArray(), db.media.toArray(), db.elevCache.toArray()
+    ])
+  );
   const exportedAt = new Date().toISOString();
   const manifest: any = {
-    format: FORMAT, version: VERSION, exportedAt,
+    format: FORMAT, version: VERSION, exportedAt, tripSchemaVersion: TRIP_SCHEMA_VERSION,
     counts: {
       trips: trips.length, segments: segments.length, trackChunks: trackChunks.length,
-      waypoints: waypoints.length, media: media.length
+      trackSnapshots: trackSnapshots.length, waypoints: waypoints.length, media: media.length
     },
-    trips, segments, trackChunks, waypoints,
+    trips, segments, trackChunks, trackSnapshots, waypoints,
     mediaMeta: media.map((m) => ({ id: m.id, tripId: m.tripId, width: m.width, height: m.height, createdAt: m.createdAt })),
     elevCache
   };
@@ -136,11 +140,15 @@ function validateManifest(manifest, files) {
   for (const key of ['trips', 'segments', 'trackChunks', 'waypoints', 'mediaMeta', 'elevCache']) {
     if (!Array.isArray(manifest[key])) invalidManifest();
   }
+  if ((manifest.version === 3 && !Array.isArray(manifest.trackSnapshots))
+    || (manifest.trackSnapshots != null && !Array.isArray(manifest.trackSnapshots))) invalidManifest();
+  const trackSnapshots = manifest.trackSnapshots || [];
 
   const countPairs = [
     ['trips', manifest.trips],
     ['segments', manifest.segments],
     ['trackChunks', manifest.trackChunks],
+    ['trackSnapshots', trackSnapshots],
     ['waypoints', manifest.waypoints],
     ['media', manifest.mediaMeta]
   ];
@@ -160,19 +168,30 @@ function validateManifest(manifest, files) {
   }
 
   const segTrip = new Map();
+  const segIndex = new Map();
   for (const s of manifest.segments) {
     if (!s || typeof s !== 'object') invalidManifest();
     const id = checkId(s.id);
     if (segTrip.has(id) || !tripIds.has(s.tripId)) invalidManifest();
     segTrip.set(id, s.tripId);
+    segIndex.set(id, s.index);
   }
 
   let pointCount = 0;
   const chunkIds = new Set();
+  const chunkSeqs = new Set();
+  const chunkSeqsBySegment = new Map();
   for (const c of manifest.trackChunks) {
     if (!c || typeof c !== 'object') invalidManifest();
     const id = checkId(c.id);
-    if (chunkIds.has(id) || segTrip.get(c.segmentId) !== c.tripId || !Array.isArray(c.points)) invalidManifest();
+    const segmentId = checkId(c.segmentId);
+    if (chunkIds.has(id) || segTrip.get(segmentId) !== c.tripId
+      || !Number.isSafeInteger(c.seq) || c.seq < 0 || !Array.isArray(c.points)) invalidManifest();
+    const sequenceKey = `${segmentId}:${c.seq}`;
+    if (chunkSeqs.has(sequenceKey)) invalidManifest();
+    chunkSeqs.add(sequenceKey);
+    if (!chunkSeqsBySegment.has(segmentId)) chunkSeqsBySegment.set(segmentId, []);
+    chunkSeqsBySegment.get(segmentId).push(c.seq);
     chunkIds.add(id);
     pointCount += c.points.length;
     if (pointCount > MAX_POINTS) invalidManifest();
@@ -181,6 +200,47 @@ function validateManifest(manifest, files) {
         || Math.abs(p.lat) > 90 || Math.abs(p.lon) > 180) invalidManifest();
       if (p.t != null && !Number.isFinite(p.t)) invalidManifest();
     }
+  }
+
+  for (const seqs of chunkSeqsBySegment.values()) {
+    seqs.sort((a, b) => a - b);
+    if (seqs.some((seq, index) => seq !== index)) invalidManifest();
+  }
+
+  const snapshotIds = new Set();
+  const snapshotSeqs = new Set();
+  const snapshotSegmentSeqs = new Map();
+  const snapshotSegmentIndexes = new Map();
+  for (const snapshot of trackSnapshots) {
+    if (!snapshot || typeof snapshot !== 'object') invalidManifest();
+    const id = checkId(snapshot.id);
+    if (snapshotIds.has(id) || !tripIds.has(snapshot.tripId)) invalidManifest();
+    const segmentId = checkId(snapshot.segmentId);
+    if (segTrip.get(segmentId) !== snapshot.tripId) invalidManifest();
+    if (!Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0
+      || !Number.isSafeInteger(snapshot.segmentIndex) || snapshot.segmentIndex < 0
+      || segIndex.get(segmentId) !== snapshot.segmentIndex) invalidManifest();
+    const sequenceKey = `${segmentId}:${snapshot.seq}`;
+    if (snapshotSeqs.has(sequenceKey)) invalidManifest();
+    snapshotSeqs.add(sequenceKey);
+    if (snapshotSegmentIndexes.has(segmentId) && snapshotSegmentIndexes.get(segmentId) !== snapshot.segmentIndex) invalidManifest();
+    snapshotSegmentIndexes.set(segmentId, snapshot.segmentIndex);
+    if (!snapshotSegmentSeqs.has(segmentId)) snapshotSegmentSeqs.set(segmentId, []);
+    snapshotSegmentSeqs.get(segmentId).push(snapshot.seq);
+    if (!Number.isFinite(snapshot.createdAt) || !Array.isArray(snapshot.points)) invalidManifest();
+    snapshotIds.add(id);
+    pointCount += snapshot.points.length;
+    if (pointCount > MAX_POINTS) invalidManifest();
+    for (const p of snapshot.points) {
+      if (!p || !Number.isFinite(p.lat) || !Number.isFinite(p.lon)
+        || Math.abs(p.lat) > 90 || Math.abs(p.lon) > 180) invalidManifest();
+      if (p.t != null && !Number.isFinite(p.t)) invalidManifest();
+    }
+  }
+
+  for (const seqs of snapshotSegmentSeqs.values()) {
+    seqs.sort((a, b) => a - b);
+    if (seqs.some((seq, index) => seq !== index)) invalidManifest();
   }
 
   const waypointIds = new Set();
@@ -254,35 +314,40 @@ export async function restoreBackup(file, strategy = 'skip', inspected = null) {
   const { manifest, files, conflicts, integrity } = data;
   if (integrity.ok === false) throw new Error('backup integrity check failed');
   const skipIds = new Set(strategy === 'skip' ? conflicts : []);
+  const trackSnapshots = manifest.trackSnapshots || [];
   let restored = 0;
   const noExisting = async (table, ids) => {
     if (!ids.length) return;
     const rows = await table.bulkGet(ids);
     if (rows.some(Boolean)) throw new Error('archive id collision');
   };
-  await db.transaction('rw', [db.trips, db.segments, db.trackChunks, db.waypoints, db.media, db.elevCache], async () => {
+  await db.transaction('rw', [db.trips, db.segments, db.trackChunks, db.trackSnapshots, db.waypoints, db.media, db.elevCache, db.shareImports], async () => {
     restored = 0;
     if (strategy === 'overwrite') {
       for (const id of conflicts) {
         await db.trackChunks.where('tripId').equals(id).delete();
+        await db.trackSnapshots.where('tripId').equals(id).delete();
         await db.segments.where('tripId').equals(id).delete();
         await db.waypoints.where('tripId').equals(id).delete();
         await db.media.where('tripId').equals(id).delete();
+        await db.shareImports.where('tripId').equals(id).delete();
         await db.trips.delete(id);
       }
     }
     await noExisting(db.trips, manifest.trips.filter((t) => !skipIds.has(t.id)).map((t) => t.id));
     await noExisting(db.segments, manifest.segments.filter((s) => !skipIds.has(s.tripId)).map((s) => s.id));
     await noExisting(db.trackChunks, manifest.trackChunks.filter((c) => !skipIds.has(c.tripId)).map((c) => c.id));
+    await noExisting(db.trackSnapshots, trackSnapshots.filter((snapshot) => !skipIds.has(snapshot.tripId)).map((snapshot) => snapshot.id));
     await noExisting(db.waypoints, manifest.waypoints.filter((w) => !skipIds.has(w.tripId)).map((w) => w.id));
     await noExisting(db.media, manifest.mediaMeta.filter((m) => !skipIds.has(m.tripId)).map((m) => m.id));
     for (const t of manifest.trips) {
       if (skipIds.has(t.id)) continue;
-      await db.trips.put(t);
+      await db.trips.put({ ...t, schemaVersion: t.schemaVersion ?? TRIP_SCHEMA_VERSION });
       restored++;
     }
     for (const s of manifest.segments) if (!skipIds.has(s.tripId)) await db.segments.put(s);
     for (const c of manifest.trackChunks) if (!skipIds.has(c.tripId)) await db.trackChunks.put(c);
+    for (const snapshot of trackSnapshots) if (!skipIds.has(snapshot.tripId)) await db.trackSnapshots.put(snapshot);
     for (const w of manifest.waypoints) if (!skipIds.has(w.tripId)) await db.waypoints.put(w);
     for (const e of manifest.elevCache || []) await db.elevCache.put(e);
     for (const m of manifest.mediaMeta || []) {

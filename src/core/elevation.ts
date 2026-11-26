@@ -2,7 +2,7 @@
 // Never fabricates or interpolates missing altitude.
 import { get } from './settings';
 import { elevationEndpoint, isServiceOffline } from './providers';
-import { elevCacheGet, elevCachePut, gridKey, db } from './store';
+import { elevCacheGet, elevCachePut, gridKey, db, updateTrip } from './store';
 import { emit } from './events';
 
 const GPS_ACC_LIMIT = 30;      // metres altitudeAccuracy to trust GPS altitude
@@ -79,22 +79,65 @@ async function fetchBatch(coords) {
   }
 }
 
+async function applyAltitudeFills(tripId, chunkId, fills) {
+  return db.transaction('rw', [db.trackChunks, db.trips], async () => {
+    const chunk = await db.trackChunks.get(chunkId);
+    if (!chunk || chunk.tripId !== tripId || !Array.isArray(chunk.points)) return 0;
+    let filled = 0;
+    const points = chunk.points.map((point, index) => {
+      const fill = fills.get(index);
+      if (!fill || !point || point.alt != null
+        || !Object.is(point.lat, fill.lat) || !Object.is(point.lon, fill.lon)
+        || !Object.is(point.t, fill.t)) return point;
+      filled++;
+      return { ...point, alt: fill.alt, altSrc: fill.src };
+    });
+    if (!filled) return 0;
+    await db.trackChunks.put({ ...chunk, points });
+    await updateTrip(tripId, { statsCache: null });
+    return filled;
+  });
+}
+
+export async function patchFlushedAltitude(segmentId, point) {
+  return db.transaction('rw', [db.trackChunks, db.segments, db.trips], async () => {
+    const segment = await db.segments.get(segmentId);
+    if (!segment) return false;
+    const chunks = await db.trackChunks.where('segmentId').equals(segmentId).sortBy('seq');
+    for (const chunk of chunks) {
+      if (!Array.isArray(chunk.points)) continue;
+      const index = chunk.points.findIndex((candidate) => candidate && candidate.alt == null
+        && Object.is(candidate.lat, point.lat) && Object.is(candidate.lon, point.lon)
+        && Object.is(candidate.t, point.t));
+      if (index < 0) continue;
+      const points = chunk.points.slice();
+      points[index] = { ...points[index], alt: point.alt, altSrc: point.altSrc };
+      await db.trackChunks.put({ ...chunk, points });
+      await updateTrip(segment.tripId, { statsCache: null });
+      return true;
+    }
+    return false;
+  });
+}
+
 /** Backfill null-altitude points of a trip in batches (after edits / back online). */
 export async function backfillTripAltitudes(tripId, { onProgress }: any = {}) {
   if (isServiceOffline() || !navigator.onLine) return 0;
   const chunks = await db.trackChunks.where('tripId').equals(tripId).toArray();
   let filled = 0;
   for (const chunk of chunks) {
-    const missing = chunk.points.map((p, i) => ({ p, i })).filter(({ p }) => p.alt == null);
+    if (!Array.isArray(chunk.points)) continue;
+    const missing = chunk.points.map((p, i) => ({ p, i })).filter(({ p }) => p && p.alt == null);
     if (!missing.length) continue;
     for (let s = 0; s < missing.length; s += BATCH_MAX) {
       const slice = missing.slice(s, s + BATCH_MAX);
-      // cache first
+      const fills = new Map();
       const needFetch = [];
       for (const m of slice) {
         const cached = await elevCacheGet(m.p.lat, m.p.lon);
-        if (cached != null) { m.p.alt = cached; m.p.altSrc = 'cache'; filled++; }
-        else needFetch.push(m);
+        if (cached != null) {
+          fills.set(m.i, { lat: m.p.lat, lon: m.p.lon, t: m.p.t, alt: cached, src: 'cache' });
+        } else needFetch.push(m);
       }
       if (needFetch.length) {
         try {
@@ -102,15 +145,15 @@ export async function backfillTripAltitudes(tripId, { onProgress }: any = {}) {
           needFetch.forEach((m, i) => {
             const el = els[i];
             if (el != null && isFinite(el)) {
-              m.p.alt = el; m.p.altSrc = 'svc'; filled++;
+              fills.set(m.i, { lat: m.p.lat, lon: m.p.lon, t: m.p.t, alt: el, src: 'svc' });
               elevCachePut(m.p.lat, m.p.lon, el);
             }
           });
         } catch { /* keep null — never fabricate */ }
       }
+      if (fills.size) filled += await applyAltitudeFills(tripId, chunk.id, fills);
       onProgress?.(filled);
     }
-    if (filled) await db.trackChunks.put(chunk);
   }
   if (filled) emit('elev:backfilled', { tripId, filled });
   return filled;

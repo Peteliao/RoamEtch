@@ -4,31 +4,75 @@ import { emit } from './events';
 const CAP = 50;
 let undoStack = [];
 let redoStack = [];
+let pendingTasks = 0;
+let taskTail = Promise.resolve();
 
-/** action: { label, undo: async fn, redo: async fn } */
-export function pushAction(action) {
+function applyPush(action) {
   undoStack.push(action);
   if (undoStack.length > CAP) undoStack.shift();
   redoStack = [];
   emit('history:changed', state());
 }
 
-export async function undo() {
-  const a = undoStack.pop();
-  if (!a) return false;
-  await a.undo();
-  redoStack.push(a);
+function applyClear() {
+  undoStack = [];
+  redoStack = [];
   emit('history:changed', state());
-  return true;
+}
+
+function enqueueTask<T>(task: () => T | Promise<T>): Promise<T> {
+  pendingTasks++;
+  const result = taskTail.then(task);
+  const settled = result.then(
+    () => { pendingTasks--; },
+    () => { pendingTasks--; }
+  );
+  taskTail = settled.catch(() => undefined);
+  return result;
+}
+
+function enqueueOperation<T>(operation: () => T | Promise<T>) {
+  return enqueueTask(operation);
+}
+
+/** action: { label, undo: async fn, redo: async fn } */
+export function pushAction(action) {
+  if (pendingTasks) enqueueTask(() => applyPush(action));
+  else applyPush(action);
+}
+
+export async function undo() {
+  return enqueueOperation(async () => {
+    const a = undoStack.pop();
+    if (!a) return false;
+    try {
+      await a.undo();
+    } catch (error) {
+      undoStack.push(a);
+      emit('history:changed', state());
+      throw error;
+    }
+    redoStack.push(a);
+    emit('history:changed', state());
+    return true;
+  });
 }
 
 export async function redo() {
-  const a = redoStack.pop();
-  if (!a) return false;
-  await a.redo();
-  undoStack.push(a);
-  emit('history:changed', state());
-  return true;
+  return enqueueOperation(async () => {
+    const a = redoStack.pop();
+    if (!a) return false;
+    try {
+      await a.redo();
+    } catch (error) {
+      redoStack.push(a);
+      emit('history:changed', state());
+      throw error;
+    }
+    undoStack.push(a);
+    emit('history:changed', state());
+    return true;
+  });
 }
 
 export function state() {
@@ -36,7 +80,6 @@ export function state() {
 }
 
 export function clearHistory() {
-  undoStack = [];
-  redoStack = [];
-  emit('history:changed', state());
+  if (pendingTasks) enqueueTask(applyClear);
+  else applyClear();
 }

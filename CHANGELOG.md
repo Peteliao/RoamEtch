@@ -4,6 +4,46 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.2.1] - 2026-11-26
+
+### Added
+
+- Added reversible GPS cleanup with anomaly type/count/offset previews, a durable
+  chunked pre-clean snapshot, stale-preview protection, and original-track restore.
+- Added fixed-distance splits at 500 m, 1 km, 2 km, and 5 km, computed off the main
+  thread with exact boundary interpolation and linked map/chart highlighting.
+- Added read-only storage health checks for orphaned or malformed records, duplicate
+  fixes, missing photo blobs, snapshot integrity, point counts, and photo bytes.
+- Added persistent-storage status and an explicit browser persistence request in
+  Settings, with clear guidance that persistence does not replace backups.
+
+### Changed
+
+- Upgraded full backups to format v3 with trip schema versions and pre-clean snapshots,
+  while retaining legacy v1/v2 restore compatibility and transactional validation.
+- Statistics cache writes no longer change a trip's edit timestamp, so derived results
+  do not invalidate an unchanged track-editing preview.
+- Trip edits now receive transactionally monotonic revision timestamps, while cache-only
+  writes remain revision-neutral.
+- Backup exports read all database tables from one consistent read transaction.
+- Altitude backfill merges into the latest chunk rows instead of overwriting concurrent edits.
+- Statistics, charts, fixed-distance splits, and shared-link distances now exclude invalid,
+  backwards, and duplicate timestamps consistently.
+- Failed undo/redo actions remain available for retry, concurrent history operations are
+  serialized, and failed statistics workers are replaced with a main-thread fallback for
+  pending work.
+- Live altitude results now merge into the latest chunk without dropping concurrent appends.
+
+### Fixed
+
+- GPS restoration now leaves segments created after the snapshot untouched and rejects
+  tracks or snapshots that changed after confirmation, even if their timestamp did not.
+- Snapshot and backup validation now reject duplicate, missing, or noncontiguous chunk
+  sequences, snapshot-index mismatches, and malformed point records before restoration writes.
+- Track appends now select the highest chunk sequence, and overwrite restores atomically
+  remove shared-link mappings for replaced trips.
+- GPS anomaly map navigation now uses the correct latitude/longitude order.
+
 ## [3.1.7] - 2026-11-25
 
 ### Added

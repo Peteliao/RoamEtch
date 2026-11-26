@@ -3,28 +3,42 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { sha256Hex, stableStringify } from '../src/core/integrity';
 
 const mock = vi.hoisted(() => {
-  const names = ['trips', 'segments', 'trackChunks', 'waypoints', 'media', 'elevCache'];
+  const names = ['trips', 'segments', 'trackChunks', 'trackSnapshots', 'waypoints', 'media', 'elevCache', 'shareImports'];
+  const exportNames = names.slice(0, -1);
   const initial = {
     trips: [{ id: 't1', name: 'Test trip' }],
     segments: [{ id: 's1', tripId: 't1', index: 0, points: [] }],
     trackChunks: [],
+    trackSnapshots: [],
     waypoints: [],
     media: [{ id: 'm1', tripId: 't1', blob: new Blob([new Uint8Array([1, 2, 3])]) }],
-    elevCache: []
+    elevCache: [],
+    shareImports: []
   };
   let state;
   let failPut = null;
   let txCalls = 0;
+  let activeTransactions = 0;
+  let readsInTransaction = [];
+  let transactionModes = [];
+  let transactionScopes = [];
   const db: any = {};
   const reset = () => {
     state = Object.fromEntries(names.map((n) => [n, new Map(initial[n].map((r) => [r.id, r]))]));
     failPut = null;
     txCalls = 0;
+    activeTransactions = 0;
+    readsInTransaction = [];
+    transactionModes = [];
+    transactionScopes = [];
   };
   reset();
   for (const name of names) {
     db[name] = {
-      toArray: async () => [...state[name].values()],
+      toArray: async () => {
+        if (activeTransactions) readsInTransaction.push(name);
+        return [...state[name].values()];
+      },
       bulkGet: async (ids) => ids.map((id) => state[name].get(id)),
       put: async (row) => {
         if (failPut && failPut.table === name && failPut.match(row)) {
@@ -49,21 +63,31 @@ const mock = vi.hoisted(() => {
     const fn = args[args.length - 1];
     const snapshot = new Map(names.map((n) => [n, new Map(state[n])]));
     txCalls++;
+    transactionModes.push(args[0]);
+    transactionScopes.push(args[1]);
+    activeTransactions++;
     try {
       return await fn();
     } catch (e) {
       for (const n of names) state[n] = snapshot.get(n);
       throw e;
+    } finally {
+      activeTransactions--;
     }
   };
   db.__reset = reset;
   db.__state = () => state;
   db.__txCalls = () => txCalls;
+  db.__readsInTransaction = () => readsInTransaction;
+  db.__transactionModes = () => transactionModes;
+  db.__transactionScopes = () => transactionScopes;
+  db.__names = () => names;
+  db.__exportNames = () => exportNames;
   db.__failNextPut = (table, match = () => true) => { failPut = { table, match }; };
   return { db };
 });
 
-vi.mock('../src/core/store', () => ({ db: mock.db }));
+vi.mock('../src/core/store', () => ({ db: mock.db, TRIP_SCHEMA_VERSION: 1 }));
 vi.mock('../src/core/events', () => ({ emit: vi.fn() }));
 
 const { exportBackup, inspectBackup, restoreBackup } = await import('../src/core/backup');
@@ -97,10 +121,31 @@ describe('backup integrity', () => {
     const backup = await exportBackup();
     expect(backup.tripCount).toBe(1);
     const inspected = await inspectBackup(asFile(backup.blob));
-    expect(inspected.manifest.version).toBe(2);
+    expect(inspected.manifest.version).toBe(3);
     expect(inspected.integrity.ok).toBe(true);
     expect(inspected.integrity.checked).toBe(1);
     expect(inspected.manifest.counts.media).toBe(1);
+  });
+
+  it('reads every exported table inside one read transaction', async () => {
+    await exportBackup();
+
+    expect(mock.db.__transactionModes()).toEqual(['r']);
+    const tableNames = mock.db.__exportNames();
+    expect(new Set(mock.db.__readsInTransaction())).toEqual(new Set(tableNames));
+    expect(mock.db.__readsInTransaction()).toHaveLength(tableNames.length);
+  });
+
+  it('round-trips original track snapshots in version 3 backups', async () => {
+    mock.db.__state().trackSnapshots.set('snapshot-1', {
+      id: 'snapshot-1', tripId: 't1', segmentId: 's1', segmentIndex: 0,
+      seq: 0, createdAt: 123, points: [{ lat: 30, lon: 120, t: 1 }]
+    });
+    const backup = await exportBackup();
+    const inspected = await inspectBackup(asFile(backup.blob));
+    expect(inspected.manifest.trackSnapshots).toHaveLength(1);
+    await restoreBackup(asFile(backup.blob), 'overwrite', inspected);
+    expect(mock.db.__state().trackSnapshots.get('snapshot-1')?.points).toHaveLength(1);
   });
 
   it('wraps an encrypted backup and requires the password to inspect it', async () => {
@@ -157,6 +202,15 @@ describe('backup integrity', () => {
     const inspected = await inspectBackup(legacy);
     expect(inspected.integrity.ok).toBe(null);
     expect(inspected.conflicts).toEqual([]);
+  });
+
+  it('adds the current trip schema version when restoring legacy records', async () => {
+    const legacy = zipFile({
+      'manifest.json': strToU8(JSON.stringify(validManifest({ version: 2, trips: [{ id: 'legacy-1', name: 'Legacy' }] })))
+    });
+    const inspected = await inspectBackup(legacy);
+    await restoreBackup(legacy, 'skip', inspected);
+    expect(mock.db.__state().trips.get('legacy-1')?.schemaVersion).toBe(1);
   });
 });
 
@@ -217,28 +271,145 @@ describe('backup archive hardening', () => {
     });
     await expect(inspectBackup(badCoords)).rejects.toThrow('invalid manifest');
   });
+
+  it('rejects snapshots with missing or mismatched segment ownership', async () => {
+    const snapshot = {
+      id: 'snap-1', tripId: 't1', segmentId: 'missing', segmentIndex: 0,
+      seq: 0, createdAt: 1, points: []
+    };
+    const orphan = zipFile({
+      'manifest.json': strToU8(JSON.stringify(validManifest({
+        version: 3, trips: [{ id: 't1' }], trackSnapshots: [snapshot]
+      })))
+    });
+    await expect(inspectBackup(orphan)).rejects.toThrow('invalid manifest');
+
+    const mismatched = zipFile({
+      'manifest.json': strToU8(JSON.stringify(validManifest({
+        version: 3, trips: [{ id: 't1' }, { id: 't2' }],
+        segments: [{ id: 's1', tripId: 't1', index: 0 }],
+        trackSnapshots: [{ ...snapshot, segmentId: 's1', tripId: 't2' }]
+      })))
+    });
+    await expect(inspectBackup(mismatched)).rejects.toThrow('invalid manifest');
+  });
+
+  it('rejects duplicate snapshot chunk sequences', async () => {
+    const archive = zipFile({
+      'manifest.json': strToU8(JSON.stringify(validManifest({
+        version: 3, trips: [{ id: 't1' }], segments: [{ id: 's1', tripId: 't1', index: 0 }],
+        trackSnapshots: [
+          { id: 'snap-1', tripId: 't1', segmentId: 's1', segmentIndex: 0, seq: 0, createdAt: 1, points: [] },
+          { id: 'snap-2', tripId: 't1', segmentId: 's1', segmentIndex: 0, seq: 0, createdAt: 1, points: [] }
+        ]
+      })))
+    });
+    await expect(inspectBackup(archive)).rejects.toThrow('invalid manifest');
+  });
+
+  it('requires an explicit snapshot collection in version 3 backups', async () => {
+    for (const trackSnapshots of [undefined, null]) {
+      const archive = zipFile({
+        'manifest.json': strToU8(JSON.stringify(validManifest({
+          version: 3, trips: [{ id: 't1' }], trackSnapshots
+        })))
+      });
+      await expect(inspectBackup(archive)).rejects.toThrow('invalid manifest');
+    }
+  });
+
+  it('rejects missing snapshot sequence numbers', async () => {
+    for (const seqs of [[1], [0, 2]]) {
+      const archive = zipFile({
+        'manifest.json': strToU8(JSON.stringify(validManifest({
+          version: 3, trips: [{ id: 't1' }], segments: [{ id: 's1', tripId: 't1', index: 0 }],
+          trackSnapshots: seqs.map((seq) => ({
+            id: `snap-${seq}`, tripId: 't1', segmentId: 's1', segmentIndex: 0,
+            seq, createdAt: 1, points: []
+          }))
+        })))
+      });
+      await expect(inspectBackup(archive)).rejects.toThrow('invalid manifest');
+    }
+  });
+
+  it('rejects inconsistent segment indexes within one snapshot', async () => {
+    const archive = zipFile({
+      'manifest.json': strToU8(JSON.stringify(validManifest({
+        version: 3, trips: [{ id: 't1' }], segments: [{ id: 's1', tripId: 't1', index: 0 }],
+        trackSnapshots: [
+          { id: 'snap-1', tripId: 't1', segmentId: 's1', segmentIndex: 0, seq: 0, createdAt: 1, points: [] },
+          { id: 'snap-2', tripId: 't1', segmentId: 's1', segmentIndex: 1, seq: 1, createdAt: 1, points: [] }
+        ]
+      })))
+    });
+    await expect(inspectBackup(archive)).rejects.toThrow('invalid manifest');
+  });
+
+  it('rejects active chunks with invalid, duplicate, or missing sequences', async () => {
+    const cases = [
+      [{ id: 'chunk-1', seq: -1 }],
+      [{ id: 'chunk-1', seq: 0.5 }],
+      [{ id: 'chunk-1', seq: Number.MAX_SAFE_INTEGER + 1 }],
+      [{ id: 'chunk-1', seq: 0 }, { id: 'chunk-2', seq: 0 }],
+      [{ id: 'chunk-1', seq: 1 }],
+      [{ id: 'chunk-1', seq: 0 }, { id: 'chunk-2', seq: 2 }]
+    ];
+    for (const chunks of cases) {
+      const archive = zipFile({
+        'manifest.json': strToU8(JSON.stringify(validManifest({
+          trips: [{ id: 't1' }], segments: [{ id: 's1', tripId: 't1', index: 0 }],
+          trackChunks: chunks.map((chunk) => ({ ...chunk, tripId: 't1', segmentId: 's1', points: [] }))
+        })))
+      });
+      await expect(inspectBackup(archive)).rejects.toThrow('invalid manifest');
+    }
+  });
+
+  it('rejects snapshot indexes that do not match the owning segment', async () => {
+    const archive = zipFile({
+      'manifest.json': strToU8(JSON.stringify(validManifest({
+        version: 3, trips: [{ id: 't1' }], segments: [{ id: 's1', tripId: 't1', index: 2 }],
+        trackSnapshots: [{
+          id: 'snap-1', tripId: 't1', segmentId: 's1', segmentIndex: 1,
+          seq: 0, createdAt: 1, points: []
+        }]
+      })))
+    });
+    await expect(inspectBackup(archive)).rejects.toThrow('invalid manifest');
+  });
 });
 
 describe('backup restore', () => {
-  it('overwrites conflicts in one transaction', async () => {
+  it('overwrites conflicts and removes their shared-link mappings in one transaction', async () => {
     const backup = await exportBackup();
     const inspected = await inspectBackup(asFile(backup.blob));
     expect(inspected.conflicts).toEqual(['t1']);
+    mock.db.__state().shareImports.set('fingerprint-1', {
+      fingerprint: 'fingerprint-1', tripId: 't1', createdAt: 1
+    });
+    const transactionsBeforeRestore = mock.db.__txCalls();
     const restored = await restoreBackup(asFile(backup.blob), 'overwrite', inspected);
     expect(restored).toBe(1);
-    expect(mock.db.__txCalls()).toBe(1);
+    expect(mock.db.__txCalls() - transactionsBeforeRestore).toBe(1);
+    expect(mock.db.__transactionScopes().at(-1)).toContain(mock.db.shareImports);
     expect(mock.db.__state().trips.has('t1')).toBe(true);
     expect(mock.db.__state().media.has('m1')).toBe(true);
+    expect(mock.db.__state().shareImports.has('fingerprint-1')).toBe(false);
   });
 
   it('rolls back deletions when a later write fails', async () => {
     const backup = await exportBackup();
     const inspected = await inspectBackup(asFile(backup.blob));
+    mock.db.__state().shareImports.set('fingerprint-1', {
+      fingerprint: 'fingerprint-1', tripId: 't1', createdAt: 1
+    });
     mock.db.__failNextPut('media');
     await expect(restoreBackup(asFile(backup.blob), 'overwrite', inspected)).rejects.toThrow('write failed');
     const trips = mock.db.__state().trips;
     expect(trips.get('t1')?.name).toBe('Test trip');
     expect(mock.db.__state().media.get('m1')?.tripId).toBe('t1');
+    expect(mock.db.__state().shareImports.has('fingerprint-1')).toBe(true);
   });
 
   it('skips conflicts without deleting existing data', async () => {

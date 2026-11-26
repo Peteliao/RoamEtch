@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeStats } from '../src/core/stats';
+import { computeDistanceSplits } from '../src/core/distanceSplits';
 
 function track(points) {
   return [{ id: 'seg-1', points }];
@@ -174,5 +175,27 @@ describe('trip statistics', () => {
     expect(stats.movingMs).toBe(60_000);
     expect(stats.stillMs).toBe(0);
     expect(stats.breakMs).toBe(0);
+    expect(stats.pointCount).toBe(2);
+    expect(stats.distance).toBeCloseTo(111.195, 3);
+    expect(stats.series.d).toHaveLength(2);
+  });
+
+  it('keeps chart distance and split distance aligned for malformed or backwards fixes', () => {
+    const lon = (distance: number) => (distance / 6371008.8) * 180 / Math.PI;
+    const points = [
+      { lat: 0, lon: 0, t: 0 },
+      { lat: NaN, lon: 0, t: 30_000 },
+      { lat: 0, lon: lon(100), t: 60_000 },
+      { lat: 0, lon: lon(50), t: 30_000 },
+      { lat: 0, lon: lon(200), t: 120_000 }
+    ];
+    const stats = computeStats(track(points), { activity: 'hike' });
+    const splits = computeDistanceSplits(track(points), 1000, { activity: 'hike' });
+
+    expect(stats.pointCount).toBe(3);
+    expect(stats.series.d).toHaveLength(3);
+    expect(stats.series.d[0]).toBe(0);
+    expect(stats.series.d.at(-1)).toBeCloseTo(200, 3);
+    expect(splits.reduce((sum, split) => sum + split.distance, 0)).toBeCloseTo(stats.distance, 6);
   });
 });

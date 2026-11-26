@@ -19,6 +19,22 @@ export function physicsFor(activity) {
   return ACTIVITY_PHYSICS[activity] || ACTIVITY_PHYSICS.hike;
 }
 
+export function usableTrackPoints<T extends { lat: number; lon: number; t?: number | null; [key: string]: any }>(points: readonly T[] = []): T[] {
+  const usable: T[] = [];
+  let lastT: number | null = null;
+  for (const point of Array.isArray(points) ? points : []) {
+    if (!point || !Number.isFinite(point.lat) || point.lat < -90 || point.lat > 90
+      || !Number.isFinite(point.lon) || point.lon < -180 || point.lon > 180) continue;
+    const t = Number.isFinite(point.t) ? point.t as number : null;
+    if (t != null) {
+      if (lastT != null && t <= lastT) continue;
+      lastT = t;
+    }
+    usable.push(point);
+  }
+  return usable;
+}
+
 export function measureTrackStep(prev, point, activity = 'hike') {
   const dist = haversine(prev.lat, prev.lon, point.lat, point.lon);
   const dt = Number(point.t) - Number(prev.t);
@@ -35,7 +51,7 @@ export function measureTrackStep(prev, point, activity = 'hike') {
 export function trackDistance(segments, activity = 'hike') {
   let total = 0;
   for (const seg of segments || []) {
-    const points = seg.points || [];
+    const points = usableTrackPoints(seg.points || []);
     for (let i = 1; i < points.length; i++) total += measureTrackStep(points[i - 1], points[i], activity).dist;
   }
   return total;

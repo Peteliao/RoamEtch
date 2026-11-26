@@ -6,7 +6,7 @@ import { t } from './i18n';
 import { haversine, physicsFor, uuid } from './geo';
 import { createJumpGate, speedLimitFor } from './trackFilter';
 import * as store from './store';
-import { resolveAltitude } from './elevation';
+import { patchFlushedAltitude, resolveAltitude } from './elevation';
 import { acquireRecorderLock, releaseRecorderLock, broadcast, isHolding } from './locks';
 import { requestWakeLock, releaseWakeLock } from './wakelock';
 import { armKeepAlive, disarmKeepAlive } from './keepalive';
@@ -549,14 +549,8 @@ async function processFix(fix) {
 }
 
 
-async function patchFlushedAlt(point) {
-  try {
-    const chunks = await store.db.trackChunks.where('segmentId').equals(point._segmentId).toArray();
-    for (const c of chunks) {
-      const p = c.points.find((x) => x.t === point.t);
-      if (p) { p.alt = point.alt; p.altSrc = point.altSrc; await store.db.trackChunks.put(c); break; }
-    }
-  } catch { /* non-critical */ }
+function patchFlushedAlt(point) {
+  patchFlushedAltitude(point._segmentId, point).catch(() => { /* non-critical */ });
 }
 
 export function flushBuffer() {

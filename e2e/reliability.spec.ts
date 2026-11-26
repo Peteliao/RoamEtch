@@ -74,6 +74,156 @@ test('trip thumbnails retry their basemap when connectivity returns', async ({ p
   await expect.poll(() => thumbnail.getAttribute('src')).not.toBe(offlineSrc);
 });
 
+test('GPS cleaning previews anomalies and restores the persistent original snapshot', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await blockExternal(page);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+  const id = await page.evaluate(async () => {
+    const { store } = (window as any).__lt;
+    const trip = await store.createTrip({ name: '可逆清洗验收', activity: 'drive', status: 'finished' });
+    const segment = await store.addSegment(trip.id);
+    const point = (lon: number, t: number) => ({ lat: 30, lon: 120 + lon / 95_600, t, acc: 5, alt: 100 });
+    const forward = [0, -100, -200, -300, -400].map((lon, i) => point(lon, i * 5_000));
+    const falseCluster = [-100, -200, -300].map((lon, i) => point(lon, (i + 5) * 5_000));
+    await store.appendPoints(segment.id, trip.id, [...forward, ...falseCluster, point(-450, 40_000)]);
+    return trip.id;
+  });
+  await page.evaluate((tripId) => {
+    (window as any).__lt.shell.navigate('trips', { detail: true, tripId, section: 'data' });
+  }, id);
+
+  const quality = page.locator('#view-analysis .quality-card');
+  await expect(quality).toContainText('发现 3 个可清理的异常点');
+  await expect(quality.locator('.gps-issue')).toHaveCount(1);
+  await expect(page.locator('#trip-detail')).toHaveAttribute('data-section', 'data');
+  await quality.locator('.gps-issue').click();
+  await expect(page.locator('#trip-detail')).toHaveAttribute('data-section', 'overview');
+  await expect(page.locator('.analysis-map canvas').first()).toBeVisible();
+  await expect(page.locator('.analysis-map .chart-hover-dot')).toBeVisible();
+  await page.locator('#trip-detail button[data-section="data"]').click();
+  await expect(page.locator('#trip-detail')).toHaveAttribute('data-section', 'data');
+  await quality.getByRole('button', { name: '清洗异常定位', exact: true }).click();
+  const cleanDialog = page.getByRole('dialog', { name: '清洗异常定位' });
+  await expect(cleanDialog).toContainText('独立快照');
+  await cleanDialog.getByRole('button', { name: '清洗异常定位', exact: true }).click();
+  await expect(quality).toContainText('已保留清洗前快照');
+  await expect.poll(() => page.evaluate(async (tripId) => {
+    const full = await (window as any).__lt.store.loadTripFull(tripId);
+    const snapshot = await (window as any).__lt.store.getTrackSnapshotSummary(tripId);
+    return { points: full.segments[0].points.length, snapshotPoints: snapshot?.points };
+  }, id)).toEqual({ points: 6, snapshotPoints: 9 });
+
+  await quality.getByRole('button', { name: '恢复原始轨迹', exact: true }).click();
+  const restoreDialog = page.getByRole('dialog', { name: '恢复清洗前轨迹' });
+  await expect(restoreDialog).toContainText('也会被覆盖');
+  await restoreDialog.getByRole('button', { name: '恢复原始轨迹', exact: true }).click();
+  await expect.poll(() => page.evaluate(async (tripId) => {
+    const full = await (window as any).__lt.store.loadTripFull(tripId);
+    return full.segments[0].points.length;
+  }, id)).toBe(9);
+  await expect(quality).toContainText('已保留清洗前快照');
+  expect(pageErrors).toEqual([]);
+});
+
+test('fixed-distance splits link the selected row to the map and chart', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.addInitScript(() => {
+    localStorage.setItem('localtrace.settings.v1', JSON.stringify({
+      language: 'zh', regionMode: 'cn', theme: 'dark',
+      sim: { enabled: true, network: 'offline', playbackSpeed: 20 }
+    }));
+  });
+  await blockExternal(page);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+  const id = await page.evaluate(async () => {
+    const { store } = (window as any).__lt;
+    const trip = await store.createTrip({ name: '固定距离分段验收', activity: 'hike', status: 'finished' });
+    const start = Date.now() - 3_600_000;
+    const lonStep = 75 / (111_320 * Math.cos(30 * Math.PI / 180));
+    for (const [segmentIndex, lat, lon] of [[0, 30, 120], [1, 30.01, 120.01]] as const) {
+      const segment = await store.addSegment(trip.id, start + segmentIndex * 600_000);
+      const points = Array.from({ length: 11 }, (_, index) => ({
+        lat, lon: lon + index * lonStep, t: start + segmentIndex * 600_000 + index * 30_000,
+        alt: 100 + index, acc: 5, speed: 2.5, heading: 90
+      }));
+      await store.appendPoints(segment.id, trip.id, points);
+    }
+    return trip.id;
+  });
+  await page.evaluate((tripId) => {
+    (window as any).__lt.shell.navigate('trips', { detail: true, tripId, section: 'overview' });
+  }, id);
+
+  const card = page.locator('#view-analysis .split-card');
+  const rows = card.locator('.split-row');
+  await expect(card).toBeVisible();
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(1)).toContainText('不足一段');
+  await card.getByLabel('分段距离').selectOption('500');
+  await expect(rows).toHaveCount(3);
+  await expect(rows.nth(2)).toContainText('不足一段');
+  await card.getByLabel('分段距离').selectOption('2000');
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText('不足一段');
+  await card.getByLabel('分段距离').selectOption('5000');
+  await expect(rows).toHaveCount(1);
+  await card.getByLabel('分段距离').selectOption('1000');
+  await expect(rows).toHaveCount(2);
+
+  const mapCanvas = page.locator('.analysis-map canvas').first();
+  const chartCanvas = page.locator('.chart-wrap canvas').first();
+  await expect(mapCanvas).toBeVisible();
+  await expect(chartCanvas).toBeVisible();
+  const mapBefore = await mapCanvas.screenshot();
+  const chartBefore = await chartCanvas.evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL());
+  await rows.nth(1).click();
+  await expect(rows.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(rows.nth(1)).toHaveClass(/selected/);
+  await expect.poll(async () => !(await mapCanvas.screenshot()).equals(mapBefore)).toBe(true);
+  await expect.poll(() => chartCanvas.evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL())).not.toBe(chartBefore);
+  await rows.nth(1).click();
+  await expect(rows.nth(1)).toHaveAttribute('aria-pressed', 'false');
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+  expect(pageErrors).toEqual([]);
+});
+
+test('storage health reports issues without modifying records', async ({ page }) => {
+  await blockExternal(page);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+  await page.evaluate(async () => {
+    const { store } = (window as any).__lt;
+    const trip = await store.createTrip({ name: '存储健康验收', activity: 'hike', status: 'finished' });
+    const segment = await store.addSegment(trip.id);
+    await store.appendPoints(segment.id, trip.id, [{ lat: 30, lon: 120, t: Date.now() }]);
+    await store.addMedia({ tripId: trip.id, blob: new Blob(['unused']), width: 1, height: 1 });
+    await store.db.trackChunks.add({
+      id: 'orphan-health-check', tripId: 'missing-trip', segmentId: 'missing-segment', seq: 0, points: []
+    });
+  });
+  await page.evaluate(() => (window as any).__lt.shell.navigate('settings'));
+  await expect(page.locator('#view-settings')).toContainText('持久存储');
+  await page.getByRole('button', { name: '检查存储完整性', exact: true }).click();
+  const health = page.locator('.storage-health');
+  await expect(health).toBeVisible();
+  await expect(health).toContainText('孤立轨迹块');
+  await expect(health).toContainText('未被节点引用的媒体');
+  await expect(health).toContainText('此检查只读');
+  expect(await page.evaluate(async () => {
+    const { db } = (window as any).__lt.store;
+    return {
+      orphan: await db.trackChunks.get('orphan-health-check'),
+      media: await db.media.count(),
+      chunks: await db.trackChunks.count()
+    };
+  })).toMatchObject({ orphan: { id: 'orphan-health-check' }, media: 1, chunks: 2 });
+});
+
 test('temporary location loss stays recording and recovers automatically', async ({ page }) => {
   await page.addInitScript(() => {
     const mock: any = { watchCalls: 0, currentCalls: 0, error: false, succeed: null, fail: null };

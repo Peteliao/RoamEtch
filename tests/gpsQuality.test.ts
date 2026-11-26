@@ -87,4 +87,24 @@ describe('GPS quality', () => {
     expect(q.score).toBe(null);
     expect(q.hasTime).toBe(false);
   });
+
+  it('reports duplicate fixes and invalid timestamp order', () => {
+    const point = { lat: 30, lon: 120, t: 10_000, acc: 5, alt: 100 };
+    const q = assessGpsQuality([point, { ...point }, { ...point, t: 5_000 }]);
+    expect(q.duplicateFixes).toBe(1);
+    expect(q.invalidTimes).toBe(2);
+    expect(q.score).toBeLessThan(95);
+  });
+
+  it('returns reasons and displacement for each rejected anomaly cluster', () => {
+    const point = (lon, t) => ({ lat: 30, lon: 120 + lon / 95_600, t, acc: 5, alt: 100 });
+    const forward = [0, -100, -200, -300, -400].map((lon, i) => point(lon, i * 5_000));
+    const falseCluster = [-100, -200, -300].map((lon, i) => point(lon, (i + 5) * 5_000));
+    const result = cleanTrackSegments([{ id: 's1', points: [...forward, ...falseCluster, point(-450, 40_000)] }], 'drive');
+    expect(result.removedPoints).toHaveLength(3);
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]).toMatchObject({ segmentId: 's1', count: 3, reason: 'speed' });
+    expect(result.issues[0].distance).toBeGreaterThan(300);
+    expect(result.impactDistance).toBeCloseTo(result.issues[0].distance);
+  });
 });

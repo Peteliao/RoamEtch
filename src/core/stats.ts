@@ -1,5 +1,5 @@
 // Pure trip statistics. Shared by the Web Worker and main-thread fallback.
-import { emaSeries, ascentDescent, slopeAt, measureTrackStep, physicsFor, SPEED_TOLERANCE } from './geo';
+import { emaSeries, ascentDescent, slopeAt, measureTrackStep, physicsFor, SPEED_TOLERANCE, usableTrackPoints } from './geo';
 import { estimateCalories } from './calories';
 
 const MOVING_SPEED = 0.5;   // m/s
@@ -23,7 +23,7 @@ export function computeStats(segments, opts: any = {}) {
   let cumD = 0;
 
   segments.forEach((seg, si) => {
-    const pts = seg.points || [];
+    const pts = usableTrackPoints(seg.points || []);
     let segDist = 0, segActiveMs = 0, segMinT = null, segMaxT = null;
     const segAlts = [];
     let prev = null;

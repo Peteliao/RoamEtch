@@ -69,11 +69,20 @@ describe('activity physics jump gate', () => {
   });
 
   it('drops a false cluster when the real fix returns to the old anchor', () => {
-    const result = runGate('drive', [
-      fix(0, 0), fix(10_000, 1_000), fix(20_000, 1_100), fix(30_000, 0)
-    ]);
-    expect(result.actions).toEqual(['accept', 'pending', 'pending', 'accept']);
-    expect(result.accepted.at(-1).lon).toBeCloseTo(120, 8);
+    const gate = createJumpGate();
+    let anchor = null;
+    let history = [];
+    let discarded = [];
+    for (const point of [fix(0, 0), fix(10_000, 1_000), fix(20_000, 1_100), fix(30_000, 0)]) {
+      const decision = gate.evaluate({ fix: point, anchor, history, activity: 'drive' });
+      if (decision.discarded) discarded = decision.discarded;
+      if (decision.action === 'accept' || decision.action === 'confirm') {
+        anchor = decision.points.at(-1);
+        history = [...history, ...decision.points].slice(-400);
+      }
+    }
+    expect(discarded).toHaveLength(2);
+    expect(anchor.lon).toBeCloseTo(120, 8);
   });
 
   it('still confirms a distant relocation that continues the old heading', () => {

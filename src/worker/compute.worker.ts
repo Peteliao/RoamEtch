@@ -1,5 +1,6 @@
-// Background compute: stats, simplification, batch coordinate transform.
+// Background compute: stats, distance splits, simplification, batch coordinate transform.
 import { computeStats } from '../core/stats';
+import { computeDistanceSplits } from '../core/distanceSplits';
 import { simplify } from '../core/geo';
 import { wgs84ToGcj02, gcj02ToWgs84 } from '../core/coords';
 
@@ -10,6 +11,9 @@ self.onmessage = (e) => {
     switch (type) {
       case 'stats':
         result = computeStats(payload.segments, payload.opts);
+        break;
+      case 'splits':
+        result = computeDistanceSplits(payload.segments, payload.intervalM, payload.opts);
         break;
       case 'simplify':
         result = simplify(payload.points, payload.tolerance);

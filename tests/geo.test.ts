@@ -7,7 +7,9 @@ import {
   fmtDuration,
   fmtSpeed,
   haversine,
-  simplify
+  simplify,
+  trackDistance,
+  usableTrackPoints
 } from '../src/core/geo';
 
 describe('geodesy', () => {
@@ -21,6 +23,20 @@ describe('geodesy', () => {
     expect(bearing(0, 0, 0, 1)).toBeCloseTo(90, 3);
     expect(bearing(0, 0, 1, 0)).toBeCloseTo(0, 3);
     expect(bearing(0, 0, 0, -1)).toBeCloseTo(270, 3);
+  });
+
+  it('drops invalid, backwards, and duplicate-time fixes before measuring distance', () => {
+    const points = [
+      { lat: 0, lon: 0, t: 0 },
+      { lat: NaN, lon: 0, t: 1000 },
+      { lat: 0, lon: 0.001, t: 60_000 },
+      { lat: 0, lon: 0.002, t: 60_000 },
+      { lat: 0, lon: 0.001, t: 30_000 },
+      { lat: 0, lon: 0.003, t: 120_000 }
+    ];
+
+    expect(usableTrackPoints(points).map((point) => point.t)).toEqual([0, 60_000, 120_000]);
+    expect(trackDistance([{ points }])).toBeCloseTo(333.585, 3);
   });
 });
 

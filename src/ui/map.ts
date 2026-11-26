@@ -28,6 +28,7 @@ export class TrackMap {
   declare coordSystem: string;
   declare basemapId: string | null;
   declare segments: any[];
+  declare splitParts: any[];
   declare waypoints: any[];
   declare editMode: boolean;
   declare follow: boolean;
@@ -76,6 +77,7 @@ export class TrackMap {
     this.coordSystem = 'WGS84';
     this.basemapId = null;
     this.segments = [];          // [{id, points}] WGS-84
+    this.splitParts = [];
     this.waypoints = [];
     this.editMode = false;
     this.follow = false;
@@ -241,6 +243,7 @@ export class TrackMap {
       set('live-casing', 'line-color', cssVar('--track-casing', '#06251d'));
       set('meet-route-case', 'line-color', cssVar('--track-casing', '#06251d'));
       set('track-line', 'line-color', accent);
+      set('split-highlight', 'line-color', cssVar('--warn', '#f2b14a'));
       set('live-line', 'line-color', accent);
       set('nav-line', 'line-color', cssVar('--warn', '#f2b14a'));
       set('meet-route-line', 'line-color', cssVar('--info', '#5aa7f0'));
@@ -321,6 +324,9 @@ export class TrackMap {
     if (!m.getSource('gaps')) {
       m.addSource('gaps', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     }
+    if (!m.getSource('split-highlight')) {
+      m.addSource('split-highlight', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    }
     if (!m.getSource('live')) {
       m.addSource('live', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     }
@@ -342,6 +348,7 @@ export class TrackMap {
     if (!m.getLayer('gap-line')) m.addLayer({ id: 'gap-line', type: 'line', source: 'gaps', paint: { 'line-color': cssVar('--track-gap', '#93a1ac'), 'line-width': 1.6, 'line-dasharray': [2, 2.4], 'line-opacity': 0.65 } });
     if (!m.getLayer('track-casing')) m.addLayer({ id: 'track-casing', type: 'line', source: 'track', paint: { 'line-color': casing, 'line-width': 7, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('track-line')) m.addLayer({ id: 'track-line', type: 'line', source: 'track', paint: { 'line-color': accent, 'line-width': 4 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    if (!m.getLayer('split-highlight')) m.addLayer({ id: 'split-highlight', type: 'line', source: 'split-highlight', paint: { 'line-color': cssVar('--warn', '#f2b14a'), 'line-width': 7, 'line-opacity': 0.9 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('nav-line')) m.addLayer({ id: 'nav-line', type: 'line', source: 'nav', paint: { 'line-color': cssVar('--warn', '#f2b14a'), 'line-width': 3, 'line-opacity': 0.9, 'line-dasharray': [1.2, 1.6] }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('live-casing')) m.addLayer({ id: 'live-casing', type: 'line', source: 'live', paint: { 'line-color': casing, 'line-width': 7, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('live-line')) m.addLayer({ id: 'live-line', type: 'line', source: 'live', paint: { 'line-color': accent, 'line-width': 4 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
@@ -365,6 +372,7 @@ export class TrackMap {
   /** segments: [{id, points:[{lat,lon,...}]}] in WGS-84 */
   setTrackData(segments, waypoints = []) {
     this.segments = segments;
+    this.splitParts = [];
     this.waypoints = waypoints;
     this._indexMaps.clear();
     for (const s of segments) {
@@ -377,6 +385,31 @@ export class TrackMap {
 
   _displayCoords(points) {
     return points.map((p) => toDisplay(p.lon, p.lat, this.coordSystem));
+  }
+
+  setSplitHighlight(parts, focus = false) {
+    this.splitParts = Array.isArray(parts) ? parts : [];
+    this._renderSplitHighlight();
+    const coords: [number, number][] = this.splitParts
+      .flatMap((part) => part.points || [])
+      .map((p) => toDisplay(p.lon, p.lat, this.coordSystem) as [number, number]);
+    if (focus && coords.length && this.map) {
+      if (coords.length === 1) this.map.flyTo({ center: coords[0], zoom: 16, duration: 500 });
+      else {
+        const bounds = coords.reduce((all, coord) => all.extend(coord), new maplibregl.LngLatBounds());
+        this.map.fitBounds(bounds, { padding: 42, maxZoom: 16, duration: 500 });
+      }
+    }
+  }
+
+  _renderSplitHighlight() {
+    const features = this.splitParts
+      .filter((part) => part.points?.length > 1)
+      .map((part) => ({
+        type: 'Feature', properties: {},
+        geometry: { type: 'LineString', coordinates: this._displayCoords(part.points) }
+      }));
+    this.map?.getSource('split-highlight')?.setData({ type: 'FeatureCollection', features });
   }
 
   redraw() {
@@ -398,6 +431,7 @@ export class TrackMap {
       }
       this.map.getSource('track')?.setData({ type: 'FeatureCollection', features: feats });
       this.map.getSource('gaps')?.setData({ type: 'FeatureCollection', features: gapFeats });
+      this._renderSplitHighlight();
       this._renderWaypoints();
       if (this.editMode) this._scheduleVertices();
     };

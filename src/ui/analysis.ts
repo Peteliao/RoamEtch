@@ -5,16 +5,17 @@ import 'uplot/dist/uPlot.min.css';
 import { t } from '../core/i18n';
 import { get } from '../core/settings';
 import { on } from '../core/events';
-import { listTrips } from '../core/store';
-import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude } from '../core/geo';
+import { getTrackSnapshotSummary, listTrips } from '../core/store';
+import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, usableTrackPoints } from '../core/geo';
 import { findTrackGaps, repairTrackGaps } from '../core/gapRepair';
 import { assessGpsQuality, cleanTrackSegments } from '../core/gpsQuality';
-import { cleanGpsTrack } from '../core/trackCleanup';
+import { cleanGpsTrack, restoreGpsTrack } from '../core/trackCleanup';
 import { TrackMap } from './map';
 import { WP_ICONS } from '../core/waypointMeta';
 import { canvasPalette } from '../core/palette';
 import { effectiveTheme } from '../core/theme';
-import { buildProfile, altitudeUnit, distanceUnit, speedUnit } from '../core/profileChart';
+import { buildProfile, altitudeUnit, distanceInUnit, distanceUnit, speedUnit } from '../core/profileChart';
+import { computeDistanceSplitsAsync } from '../core/workerBridge';
 import { appState, setActiveTrip, refreshActiveTrip, isTripSectionActive } from './state';
 import { el, icon, confirmModal, toast } from './helpers';
 import { renderTripEmptyState } from './tripEmptyState';
@@ -48,18 +49,35 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     el('div', { class: 'chart-head' }, el('h3', {}, t('analysis.chartTitle')), chartLegend),
     el('div', { class: 'small faint', style: { marginBottom: '2px' } }, t('analysis.hoverHint')),
     chartWrap);
+  const splitBody = el('div', { class: 'split-body' });
+  const splitSelect = el('select', { 'aria-label': t('analysis.splitsInterval') });
+  for (const interval of [500, 1000, 2000, 5000]) {
+    splitSelect.append(el('option', { value: String(interval) }, interval < 1000 ? `${interval} m` : `${interval / 1000} km`));
+  }
+  splitSelect.value = '1000';
+  const splitCard = el('div', { class: 'card split-card analysis-overview' },
+    el('div', { class: 'split-head' },
+      el('h3', {}, icon('analysis', 18), t('analysis.splitsTitle')),
+      splitSelect),
+    el('div', { class: 'small faint split-hint' }, t('analysis.splitsHint')),
+    splitBody);
   const slopeCard = el('div', { class: 'card analysis-data' }, el('h3', {}, t('analysis.slopeDist')), el('canvas', { id: 'slope-canvas', style: { width: '100%', height: '120px' } }));
   const segCard = el('div', { class: 'card analysis-data' }, el('h3', {}, t('analysis.segTable')), el('div', { id: 'seg-table' }));
   const tlCard = el('div', { class: 'card analysis-data' }, el('h3', {}, t('analysis.timeline')), el('div', { id: 'timeline' }));
   const disclaimer = el('div', { class: 'small faint', style: { padding: '4px 2px 20px' } }, '⚠ ' + t('analysis.disclaimer'));
 
-  scroll.append(head, emptyBox, advisory, statsBox, miniMapBox, chartCard, gapCard, qualityBox, slopeCard, segCard, tlCard, disclaimer);
+  scroll.append(head, emptyBox, advisory, statsBox, miniMapBox, chartCard, splitCard, gapCard, qualityBox, slopeCard, segCard, tlCard, disclaimer);
 
   let miniMap = null;
   let chart = null;
   let flatPoints = [];
   let mapTrackKey = '';
   let renderSequence = 0;
+  let qualitySequence = 0;
+  let splitSequence = 0;
+  let splitResult = [];
+  let splitTrackKey = '';
+  let selectedSplitIndex: number | null = null;
   let chartSeries = { altitude: true, speed: true };
   let chartProfile = null;
   let chartStats = null;
@@ -102,21 +120,76 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     return el('div', { class: 'stat-mini' }, el('div', { class: 'v' }, value), el('div', { class: 'k' }, label));
   }
 
-  function renderQuality() {
+  async function renderQuality() {
+    const sequence = ++qualitySequence;
     qualityBox.innerHTML = '';
     const full = appState.activeTripFull;
-    const points = full?.segments.flatMap((s) => s.points) || [];
-    const activity = full?.trip?.activity || 'hike';
+    if (!full) return;
+    const tripId = full.trip.id;
+    const updatedAt = full.trip.updatedAt;
+    const points = full.segments.flatMap((s) => s.points) || [];
+    const activity = full.trip.activity || 'hike';
     const q = assessGpsQuality(points, { activity });
-    if (q.score == null) return;
+    const snapshot = await getTrackSnapshotSummary(tripId);
+    if (sequence !== qualitySequence || appState.activeTripId !== tripId || appState.activeTripFull?.trip.updatedAt !== updatedAt) return;
+    if (q.score == null && !snapshot) return;
+    const recording = full.trip.status === 'recording';
     const tone = q.rating === 'excellent' || q.rating === 'good'
       ? 'var(--accent)' : q.rating === 'fair' ? 'var(--warn)' : 'var(--danger)';
-    const rating = t(`analysis.quality${q.rating[0].toUpperCase()}${q.rating.slice(1)}`);
     const metric = (label, value) => el('div', { class: 'quality-metric' },
       el('div', { class: 'v' }, value), el('div', { class: 'k' }, label));
-    const preview = full && full.trip.status !== 'recording' ? cleanTrackSegments(full.segments, activity) : { removed: 0 };
-    const clean = el('div', { class: 'quality-clean', style: { display: 'none', marginTop: '10px' } });
+    const preview = recording ? { removed: 0, issues: [], impactDistance: 0 } : cleanTrackSegments(full.segments, activity);
+    const children = [
+      el('div', { class: 'quality-head' },
+        el('h3', {}, icon('shield', 18), t('analysis.qualityTitle')),
+        q.score == null ? null : el('span', { class: `quality-rating ${q.rating}` },
+          t(`analysis.quality${q.rating[0].toUpperCase()}${q.rating.slice(1)}`)))
+    ];
+    if (q.score != null) {
+      children.push(
+        el('div', { class: 'quality-top' },
+          el('div', { class: 'quality-score' }, el('b', { style: { color: tone } }, String(q.score)), el('small', {}, '/100')),
+          el('div', { class: 'quality-meter' },
+            el('div', { class: 'quality-fill', style: { width: `${q.score}%`, background: tone } }))),
+        el('div', { class: 'quality-metrics' },
+          metric(t('analysis.qualityAvgAcc'), q.avgAcc == null ? '—' : `±${q.avgAcc.toFixed(1)} m`),
+          metric(t('analysis.qualityPoorFixes'), q.poorRatio == null ? '—' : `${q.poorFixes} (${Math.round(q.poorRatio * 100)}%)`),
+          metric(t('analysis.qualityGaps'), q.gaps ? `${q.gaps} · ${fmtDuration(q.gapMs, { compact: true })}` : '0'),
+          metric(t('analysis.qualityAltJumps'), String(q.altJumps)),
+          metric(t('analysis.qualityReversals'), String(q.reversals))));
+    }
+    if (q.avgAcc == null && q.score != null) children.push(el('div', { class: 'small faint', style: { marginTop: '8px' } }, t('analysis.qualityNoAcc')));
+    if (q.duplicateFixes || q.invalidTimes) {
+      children.push(el('div', { class: 'small faint quality-diagnostics', style: { marginTop: '8px' } },
+        t('analysis.qualityDiagnostics', { duplicates: q.duplicateFixes, times: q.invalidTimes })));
+    }
+    children.push(el('div', { class: 'small faint quality-note' },
+      `${q.fixes} ${t('analysis.qualityFixes')} · ${t('analysis.qualityNote')}`));
+
     if (preview.removed) {
+      const impact = fmtDistance(preview.impactDistance || 0, get('units'));
+      const issues = el('div', { class: 'gps-issues' });
+      for (const issue of preview.issues) {
+        const distance = fmtDistance(issue.distance, get('units'));
+        const first = issue.firstPoint;
+        const view = el('button', {
+          type: 'button', class: 'gps-issue', 'aria-label': t('analysis.qualityIssueView', { segment: issue.segmentIndex + 1 }),
+          onclick: () => {
+            ensureMiniMap();
+            if (embedded && appState.tripDetail.open && appState.tripDetail.section !== 'overview') navigate('analysis');
+            requestAnimationFrame(() => {
+              miniMap?.resize();
+              miniMap?.flyTo(first.lat, first.lon, 16);
+              miniMap?.showHover(first.lat, first.lon, t(`analysis.qualityReason.${issue.reason}`));
+              miniMapBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+          }
+        },
+        el('span', { class: 'gps-issue-reason' }, t(`analysis.qualityReason.${issue.reason}`)),
+        el('span', { class: 'gps-issue-meta' },
+          `${t('analysis.qualitySegment', { n: issue.segmentIndex + 1 })} · ${t('analysis.qualityIssuePoints', { n: issue.count })} · ${distance.v}${distance.u}`));
+        issues.append(view);
+      }
       const btn = el('button', { class: 'btn primary sm' }, icon('shield', 15), t('analysis.qualityClean'));
       btn.onclick = async () => {
         const ok = await confirmModal({
@@ -127,35 +200,55 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
         if (!ok) return;
         btn.disabled = true;
         try {
-          const result = await cleanGpsTrack(full.trip.id, { activity });
-          await refreshActiveTrip();
+          const result = await cleanGpsTrack(tripId, { activity, preview, expectedUpdatedAt: updatedAt });
+          await refreshActiveTrip(tripId);
           if (result.removed) toast(t('analysis.qualityCleanDone', { n: result.removed }), 'ok', 4500);
         } catch (e) {
           console.error(e);
-          toast(t('analysis.qualityCleanFail'), 'err');
+          toast(t(e?.message === 'track-changed' ? 'analysis.qualityChanged' : 'analysis.qualityCleanFail'), 'warn');
+          btn.disabled = false;
         }
       };
-      clean.style.display = '';
-      clean.append(btn, el('div', { class: 'small faint', style: { marginTop: '6px' } }, t('analysis.qualityCleanHint')));
+      children.push(
+        el('div', { class: 'gps-preview' },
+          el('div', { class: 'gps-preview-head' },
+            el('strong', {}, t('analysis.qualityPreviewTitle', { n: preview.removed })),
+            el('span', { class: 'tag' }, t('analysis.qualityImpact', { d: `${impact.v}${impact.u}` }))),
+          issues, btn,
+          el('div', { class: 'small faint' }, t('analysis.qualityCleanHint'))));
     }
-    qualityBox.append(el('div', { class: 'card quality-card' },
-      el('div', { class: 'quality-head' },
-        el('h3', {}, icon('shield', 18), t('analysis.qualityTitle')),
-        el('span', { class: `quality-rating ${q.rating}` }, rating)),
-      el('div', { class: 'quality-top' },
-        el('div', { class: 'quality-score' }, el('b', { style: { color: tone } }, String(q.score)), el('small', {}, '/100')),
-        el('div', { class: 'quality-meter' },
-          el('div', { class: 'quality-fill', style: { width: `${q.score}%`, background: tone } }))),
-      el('div', { class: 'quality-metrics' },
-        metric(t('analysis.qualityAvgAcc'), q.avgAcc == null ? '—' : `±${q.avgAcc.toFixed(1)} m`),
-        metric(t('analysis.qualityPoorFixes'), q.poorRatio == null ? '—' : `${q.poorFixes} (${Math.round(q.poorRatio * 100)}%)`),
-        metric(t('analysis.qualityGaps'), q.gaps ? `${q.gaps} · ${fmtDuration(q.gapMs, { compact: true })}` : '0'),
-        metric(t('analysis.qualityAltJumps'), String(q.altJumps)),
-        metric(t('analysis.qualityReversals'), String(q.reversals))),
-      q.avgAcc == null ? el('div', { class: 'small faint', style: { marginTop: '8px' } }, t('analysis.qualityNoAcc')) : null,
-      el('div', { class: 'small faint quality-note' },
-        `${q.fixes} ${t('analysis.qualityFixes')} · ${t('analysis.qualityNote')}`),
-      clean));
+
+    if (snapshot) {
+      const restore = el('button', { class: 'btn sm', disabled: recording }, icon('undo', 14), t('analysis.qualityRestore'));
+      restore.onclick = async () => {
+        const ok = await confirmModal({
+          title: t('analysis.qualityRestoreTitle'),
+          message: t('analysis.qualityRestoreConfirm', { n: snapshot.points }),
+          confirmText: t('analysis.qualityRestore'), danger: true
+        });
+        if (!ok) return;
+        restore.disabled = true;
+        try {
+          const result = await restoreGpsTrack(tripId, { expectedUpdatedAt: updatedAt });
+          await refreshActiveTrip(tripId);
+          if (result.restored) toast(t('analysis.qualityRestoreDone', { n: result.restored }), 'ok', 4500);
+        } catch (e) {
+          console.error(e);
+          toast(t(e?.message === 'track-changed' ? 'analysis.qualityChanged' : 'analysis.qualityRestoreFail'), 'warn');
+          restore.disabled = false;
+        }
+      };
+      children.push(el('div', { class: 'gps-snapshot' },
+        el('div', {},
+          el('strong', {}, t('analysis.qualityOriginalSnapshot')),
+          el('div', { class: 'small faint' }, t('analysis.qualitySnapshotInfo', {
+            n: snapshot.points, segments: snapshot.segments,
+            date: new Date(snapshot.createdAt).toLocaleString()
+          }))),
+        restore,
+        recording ? el('div', { class: 'small faint' }, t('analysis.qualityRestoreRecording')) : null));
+    }
+    qualityBox.append(el('div', { class: 'card quality-card' }, children));
   }
 
   function renderStats(stats) {
@@ -382,7 +475,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
 
   function renderCharts(stats) {
     const full = appState.activeTripFull;
-    flatPoints = full?.segments.flatMap((s) => s.points) || [];
+    flatPoints = full?.segments.flatMap((s) => usableTrackPoints(s.points || [])) || [];
     const trackKey = full ? `${full.trip.id}:${full.trip.updatedAt || 0}` : '';
     const units = get('units');
     if (!stats || !flatPoints.length) {
@@ -419,7 +512,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     const data: any[] = [profile.x];
     if (visible.altitude) data.push(profile.alt);
     if (visible.speed) data.push(profile.speed);
-    opts.hooks = { setCursor: [hoverHook(stats, profile, units, visible)] };
+    opts.hooks = { setCursor: [hoverHook(stats, profile, units, visible)], draw: [drawSelectedSplit] };
     chart = new uPlot(opts, data, chartWrap);
     chartStats = stats;
     chartRenderKey = renderKey;
@@ -524,6 +617,115 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     });
   }
 
+  function drawSelectedSplit(u) {
+    const selected = selectedSplitIndex == null ? null : splitResult[selectedSplitIndex];
+    if (!selected || !chartProfile) return;
+    const P = canvasPalette();
+    const start = u.valToPos(distanceInUnit(selected.startDistance, chartProfile.units), 'x');
+    const end = u.valToPos(distanceInUnit(selected.endDistance, chartProfile.units), 'x');
+    const left = Math.min(start, end), width = Math.max(1, Math.abs(end - start));
+    const ctx = u.ctx;
+    ctx.save();
+    ctx.fillStyle = P.accentSoft;
+    ctx.fillRect(left, u.bbox.top, width, u.bbox.height);
+    ctx.strokeStyle = P.amber;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(left, u.bbox.top); ctx.lineTo(left, u.bbox.top + u.bbox.height);
+    ctx.moveTo(left + width, u.bbox.top); ctx.lineTo(left + width, u.bbox.top + u.bbox.height);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function renderSplitRows() {
+    splitBody.innerHTML = '';
+    if (!splitResult.length) {
+      splitBody.append(el('div', { class: 'small faint' }, t('analysis.splitsEmpty')));
+      return;
+    }
+    const units = get('units');
+    const list = el('div', { class: 'split-list', role: 'group', 'aria-label': t('analysis.splitsTitle') });
+    splitResult.forEach((split, index) => {
+      const distance = fmtDistance(split.distance, units);
+      const speed = fmtSpeed(split.avgSpeed, units);
+      const pace = fmtPace(split.avgSpeed, units);
+      const ascent = fmtAltitude(split.ascent, units);
+      const row = el('button', {
+        type: 'button', class: 'split-row' + (selectedSplitIndex === index ? ' selected' : ''),
+        'aria-pressed': String(selectedSplitIndex === index),
+        'aria-label': t('analysis.splitsRowLabel', { n: index + 1, d: `${distance.v}${distance.u}`, time: fmtDuration(split.duration) })
+      },
+      el('span', { class: 'split-index mono' }, String(index + 1).padStart(2, '0')),
+      el('span', { class: 'split-main' },
+        el('span', { class: 'split-primary' },
+          el('strong', { class: 'mono' }, `${distance.v}${distance.u}`),
+          el('span', { class: 'mono' }, fmtDuration(split.duration)),
+          split.partial ? el('span', { class: 'tag' }, t('analysis.splitsPartial')) : null),
+        el('span', { class: 'split-secondary' },
+          `${t('analysis.splitsMoving')} ${fmtDuration(split.movingMs, { compact: true })}`,
+          ` · ${t('analysis.splitsAvgSpeed')} ${speed.v} ${speed.u}`,
+          ` · ${t('analysis.splitsAvgPace')} ${pace.v}${pace.u}`,
+          ` · ↑${ascent.v}${ascent.u}`)));
+      row.onclick = () => {
+        selectedSplitIndex = selectedSplitIndex === index ? null : index;
+        renderSplitRows();
+        const selected = selectedSplitIndex == null ? null : splitResult[selectedSplitIndex];
+        miniMap?.setSplitHighlight(selected?.parts || [], !!selected);
+        chart?.redraw();
+      };
+      list.append(row);
+    });
+    splitBody.append(list);
+  }
+
+  async function renderSplits() {
+    const sequence = ++splitSequence;
+    const full = appState.activeTripFull;
+    const trackKey = full ? `${full.trip.id}:${full.trip.updatedAt || 0}` : '';
+    if (!full?.segments.some((segment) => segment.points?.length)) {
+      splitResult = [];
+      selectedSplitIndex = null;
+      splitTrackKey = trackKey;
+      splitCard.style.display = 'none';
+      miniMap?.setSplitHighlight([]);
+      return;
+    }
+    splitCard.style.display = '';
+    if (trackKey !== splitTrackKey) {
+      splitResult = [];
+      selectedSplitIndex = null;
+      splitTrackKey = trackKey;
+      renderSplitRows();
+    }
+    try {
+      const result = await computeDistanceSplitsAsync(
+        full.segments.map((segment) => ({ id: segment.id, points: segment.points })),
+        Number(splitSelect.value),
+        { activity: full.trip.activity || 'hike' }
+      );
+      if (sequence !== splitSequence || trackKey !== splitTrackKey) return;
+      splitResult = result;
+      if (selectedSplitIndex != null && !splitResult[selectedSplitIndex]) selectedSplitIndex = null;
+      renderSplitRows();
+      if (selectedSplitIndex != null) miniMap?.setSplitHighlight(splitResult[selectedSplitIndex].parts);
+    } catch (e) {
+      if (sequence !== splitSequence) return;
+      console.error(e);
+      selectedSplitIndex = null;
+      miniMap?.setSplitHighlight([]);
+      chart?.redraw();
+      splitBody.innerHTML = '';
+      splitBody.append(el('div', { class: 'small', style: { color: 'var(--danger)' } }, t('analysis.splitsComputeFail')));
+    }
+  }
+
+  splitSelect.onchange = () => {
+    selectedSplitIndex = null;
+    miniMap?.setSplitHighlight([]);
+    chart?.redraw();
+    void renderSplits();
+  };
+
   function renderGaps() {
     gapBody.innerHTML = '';
     const full = appState.activeTripFull;
@@ -597,6 +799,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     renderStats(stats);
     renderQuality();
     renderCharts(stats);
+    void renderSplits();
     renderSegments(stats);
     renderTimeline();
   }
@@ -607,6 +810,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     renderStats(stats);
     renderQuality();
     renderCharts(stats);
+    void renderSplits();
     renderSegments(stats);
   });
   on('theme:applied', () => {
@@ -623,6 +827,8 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
       if (appState.stats) renderSlope(appState.stats);
     },
     destroy: () => {
+      qualitySequence++;
+      splitSequence++;
       miniMap?.destroy();
       miniMap = null;
       chart?.destroy();

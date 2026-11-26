@@ -5,6 +5,7 @@ async function openRecording(page: Page, minPoints = 2) {
   await blockExternal(page);
   await page.goto('/?sim=1');
   await expect(page.locator('#view-record.active')).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => page.evaluate(() => Boolean(window.__lt?.recorder))).toBe(true);
   await expect.poll(() => page.evaluate(() => window.__lt.recorder.rec.live?.pointCount || 0)).toBeGreaterThanOrEqual(minPoints);
 }
 
@@ -113,7 +114,7 @@ test('inline rename failures keep the sheet and edited name, while duplicate clo
     table.update = async (...args: any[]) => {
       if (args[1] && Object.prototype.hasOwnProperty.call(args[1], 'name')) {
         w.__renameProbe.nameWrites++;
-        await new Promise((resolve) => setTimeout(resolve, 120));
+        await table.get(args[0]);
         if (w.__renameProbe.failNext) {
           w.__renameProbe.failNext = false;
           throw new Error('forced rename failure');

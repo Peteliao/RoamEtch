@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   loadTripFull: vi.fn(),
   updateTrip: vi.fn(),
+  cacheTripStats: vi.fn(),
   computeStatsAsync: vi.fn(),
   emit: vi.fn(),
   set: vi.fn(),
@@ -11,7 +12,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../src/core/store', () => ({
   loadTripFull: mocks.loadTripFull,
-  updateTrip: mocks.updateTrip
+  updateTrip: mocks.updateTrip,
+  cacheTripStats: mocks.cacheTripStats
 }));
 vi.mock('../src/core/workerBridge', () => ({ computeStatsAsync: mocks.computeStatsAsync }));
 vi.mock('../src/core/settings', () => ({
@@ -31,7 +33,7 @@ function deferred<T>() {
 
 function full(id: string, name: string, activity = 'hike', reportedDistance: number | null = null) {
   return {
-    trip: { id, name, activity, reportedDistance, statsCache: null },
+    trip: { id, name, activity, reportedDistance, statsCache: null, updatedAt: 1 },
     segments: [{ id: `${id}-segment`, points: [] }],
     waypoints: [],
     media: []
@@ -47,6 +49,7 @@ beforeEach(() => {
   appState.stats = null;
   appState.tripDetail = { open: false, tripId: null, section: 'overview' };
   mocks.updateTrip.mockResolvedValue(undefined);
+  mocks.cacheTripStats.mockResolvedValue(true);
   mocks.computeStatsAsync.mockResolvedValue({ distance: 1, segments: [] });
 });
 
@@ -185,5 +188,22 @@ describe('active trip snapshots', () => {
     await expect(pending).resolves.toBeNull();
     expect(appState.stats).toBeNull();
     expect(mocks.updateTrip).not.toHaveBeenCalled();
+  });
+
+  it('does not cache or publish statistics when the track changed during calculation', async () => {
+    const stats = deferred<{ distance: number; segments: never[] }>();
+    appState.activeTripId = 'a';
+    appState.activeTripFull = full('a', 'Before edit');
+    mocks.computeStatsAsync.mockReturnValueOnce(stats.promise);
+    mocks.cacheTripStats.mockResolvedValueOnce(false);
+
+    const pending = recalcNow();
+    appState.activeTripFull = full('a', 'After edit');
+    stats.resolve({ distance: 10, segments: [] });
+
+    await expect(pending).resolves.toBeNull();
+    expect(mocks.cacheTripStats).toHaveBeenCalledWith('a', 1, expect.objectContaining({ distance: 10 }));
+    expect(appState.stats).toBeNull();
+    expect(mocks.emit).not.toHaveBeenCalledWith('trip:stats', expect.anything());
   });
 });

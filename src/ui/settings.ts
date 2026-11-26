@@ -5,7 +5,8 @@ import { get, set, patch, resetSettings, MEET_P2P_NOTICE_VERSION } from '../core
 import { meet } from '../core/meet';
 import { on } from '../core/events';
 import { regionState, setRegionMode, runProbe } from '../core/region';
-import { storageEstimate, eraseAll, isolateDamaged, listTrips } from '../core/store';
+import { storageEstimate, requestStoragePersistence, eraseAll, listTrips } from '../core/store';
+import { inspectStorageHealth } from '../core/storageHealth';
 import { appState, setActiveTrip } from './state';
 import { triggerDownload } from '../core/gpx';
 import { exportDiagLog } from '../core/diag';
@@ -317,6 +318,56 @@ export function createSettingsView(navigate) {
 
   // ---- data & storage ----
   const storageLine = el('div', { class: 'small muted' });
+  const persistenceLine = el('div', { class: 'small muted', style: { marginTop: '3px' } });
+  const persistBtn = el('button', { class: 'btn sm' }, icon('shield', 14), t('settings.storagePersist'));
+  persistBtn.onclick = async () => {
+    persistBtn.disabled = true;
+    const granted = await requestStoragePersistence();
+    await refreshStorage();
+    toast(t(granted ? 'settings.storagePersistOk' : 'settings.storagePersistFail'), granted ? 'ok' : 'warn', 3500);
+  };
+  const healthLine = el('div', { class: 'small muted', style: { marginTop: '3px' } }, t('settings.healthIdle'));
+  const healthDetails = el('div', { class: 'storage-health', hidden: true });
+  const healthBtn = el('button', { class: 'btn sm' }, icon('shield', 14), t('settings.healthCheck'));
+  function formatBytes(bytes) {
+    if (!bytes) return '0 B';
+    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1048576).toFixed(1)} MB`;
+  }
+  healthBtn.onclick = async () => {
+    healthBtn.disabled = true;
+    healthBtn.textContent = t('settings.healthChecking');
+    healthDetails.hidden = true;
+    try {
+      const result = await inspectStorageHealth();
+      healthLine.textContent = t(result.healthy ? 'settings.healthClean' : result.ok ? 'settings.healthAdvisory' : 'settings.healthIssues', { n: result.totals.issues });
+      healthLine.style.color = result.ok ? result.healthy ? 'var(--accent)' : 'var(--warn)' : 'var(--danger)';
+      healthDetails.innerHTML = '';
+      healthDetails.append(
+        el('div', { class: 'small' }, t('settings.healthSummary', {
+          trips: result.counts.trips, points: result.counts.points,
+          snapshots: result.counts.snapshotPoints, media: result.counts.media,
+          bytes: formatBytes(result.counts.photoBytes)
+        })),
+        el('div', { class: 'small faint', style: { marginTop: '4px' } }, t('settings.healthReadOnly')));
+      for (const issue of result.issues) {
+        healthDetails.append(el('div', { class: `health-issue ${issue.severity}` },
+          el('div', {},
+            el('strong', {}, t(`settings.healthIssue.${issue.type}`)),
+            el('span', { class: 'mono' }, ` × ${issue.count}`)),
+          issue.sampleIds.length ? el('div', { class: 'small faint mono' }, t('settings.healthSample', { ids: issue.sampleIds.slice(0, 3).join(', ') })) : null));
+      }
+      healthDetails.hidden = false;
+    } catch (e) {
+      console.error(e);
+      healthLine.textContent = t('settings.healthFail');
+      healthLine.style.color = 'var(--danger)';
+    } finally {
+      healthBtn.disabled = false;
+      healthBtn.innerHTML = '';
+      healthBtn.append(icon('shield', 14), t('settings.healthCheck'));
+    }
+  };
   const backupHealthLine = el('div', { class: 'small muted', style: { marginTop: '3px' } });
   const backupBtn = el('button', { class: 'btn sm' }, icon('download', 14), t('trips.backup'));
   backupBtn.onclick = async () => {
@@ -365,6 +416,10 @@ export function createSettingsView(navigate) {
     storageLine.textContent = est.quota
       ? `${t('settings.storageUsage')}: ${(est.usage / 1048576).toFixed(1)} MB / ${(est.quota / 1048576).toFixed(0)} MB`
       : t('settings.storageUsage') + ': --';
+    const persistent = est.persisted == null ? t('settings.storagePersistUnsupported') : t(est.persisted ? 'settings.storagePersisted' : 'settings.storageNotPersisted');
+    persistenceLine.textContent = `${t('settings.storagePersistence')}: ${persistent}`;
+    persistBtn.disabled = est.persisted === true || !navigator.storage?.persist;
+    persistBtn.title = t('settings.storagePersistHint');
     backupHealthLine.textContent = t('backup.lastBackup', { when: lastBackupLabel() }) + (backupDue() ? ' · ' + t('backup.dueShort') : '');
     backupHealthLine.style.color = backupDue() ? 'var(--warn)' : '';
   }
@@ -374,7 +429,14 @@ export function createSettingsView(navigate) {
     el('div', { class: 'dz-title' }, icon('warn', 14), t('settings.dangerTitle')),
     el('div', { class: 'small faint', style: { marginBottom: '10px' } }, t('settings.dangerHint')),
     eraseBtn);
-  const dataCard = card('database', t('settings.dataBackup'), storageLine, backupHealthLine,
+  const dataCard = card('database', t('settings.dataBackup'), storageLine, persistenceLine,
+    el('div', { class: 'row wrap', style: { marginTop: '8px' } }, persistBtn),
+    el('div', { class: 'small faint', style: { margin: '5px 0 9px' } }, t('settings.storagePersistHint')),
+    el('div', { class: 'sep' }),
+    el('div', { class: 'row wrap', style: { marginBottom: '6px' } }, healthBtn),
+    healthLine, healthDetails,
+    el('div', { class: 'sep' }),
+    backupHealthLine,
     el('div', { class: 'row wrap', style: { marginTop: '8px' } }, backupBtn, restoreBtn),
     el('div', { class: 'settings-subhead' }, icon('refresh', 15), t('settings.resetTitle')),
     el('div', { class: 'small muted', style: { margin: '-2px 0 10px' } }, t('settings.resetDesc')),

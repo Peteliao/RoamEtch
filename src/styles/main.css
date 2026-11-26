@@ -1036,6 +1036,14 @@ html.oled-lock { color-scheme: dark; }
   background: var(--accent-soft); color: var(--accent);
 }
 :root[data-theme="contrast"] .backup-nudge { border: 1px solid var(--border); }
+.storage-health { display: grid; gap: 7px; margin-top: 8px; padding: 10px; background: var(--bg-input); border-radius: var(--radius-sm); }
+.storage-health[hidden] { display: none; }
+.health-issue { display: grid; gap: 2px; padding-top: 7px; border-top: 1px solid var(--border); }
+.health-issue > div:first-child { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+.health-issue.error > div:first-child { color: var(--danger); }
+.health-issue.warning > div:first-child { color: var(--warn); }
+.health-issue.info > div:first-child { color: var(--info); }
+.health-issue .mono { overflow-wrap: anywhere; }
 .backup-nudge .nudge-txt { flex: 1; min-width: 0; }
 .backup-nudge .nudge-t { font-size: 12.5px; font-weight: 650; color: var(--text); }
 .backup-nudge .nudge-d { font-size: 12px; color: var(--text-faint); margin-top: 1px; }
@@ -1182,9 +1190,36 @@ html.oled-lock { color-scheme: dark; }
 .quality-metric .v { font-family: var(--font-num); font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .quality-metric .k { font-size: 12px; color: var(--text-faint); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .quality-note { margin-top: 9px; }
+.gps-preview, .gps-snapshot { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.gps-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.gps-preview-head strong { font-size: 13px; }
+.gps-issues { display: grid; gap: 6px; margin-bottom: 10px; }
+.gps-issue { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 8px 10px; text-align: left; color: var(--text); background: var(--bg-input); border: 1px solid transparent; border-radius: var(--radius-sm); cursor: pointer; }
+.gps-issue:hover, .gps-issue:focus-visible { border-color: var(--accent); }
+.gps-issue-reason { font-size: 12.5px; font-weight: 650; }
+.gps-issue-meta { color: var(--text-faint); font-family: var(--font-num); font-size: 11.5px; text-align: right; }
+.gps-preview > .small { margin-top: 7px; }
+.gps-snapshot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.gps-snapshot > .small { flex-basis: 100%; }
+@media (max-width: 420px) { .gps-preview-head, .gps-issue { align-items: flex-start; flex-direction: column; gap: 4px; } .gps-issue-meta { text-align: left; } }
 @media (max-width: 600px) { .quality-metrics { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 420px) { .quality-metrics { grid-template-columns: repeat(2, 1fr); } }
 
+.split-card { padding: 14px 15px; }
+.split-head { display: flex; align-items: center; gap: 10px; }
+.split-head h3 { flex: 1; margin: 0; }
+.split-head select { max-width: 120px; }
+.split-hint { margin: 5px 0 10px; line-height: 1.45; }
+.split-list { display: grid; gap: 6px; }
+.split-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; text-align: left; color: var(--text); background: var(--bg-input); border: 1px solid transparent; border-radius: var(--radius-sm); cursor: pointer; }
+.split-row:hover, .split-row:focus-visible { border-color: var(--accent); }
+.split-row.selected { border-color: var(--warn); background: var(--accent-soft); }
+.split-index { color: var(--text-faint); font-size: 12px; }
+.split-main { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.split-primary, .split-secondary { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 9px; }
+.split-primary { font-size: 13px; }
+.split-primary strong { font-size: 15px; }
+.split-secondary { color: var(--text-faint); font-size: 11.5px; line-height: 1.45; }
 .chart-card { padding: 14px 8px 8px; }
 .chart-head { display: flex; align-items: center; gap: 10px; margin-bottom: 2px; }
 .chart-head h3 { margin: 0; flex: 1; }
