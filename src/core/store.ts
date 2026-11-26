@@ -87,11 +87,20 @@ export async function addSegment(tripId, startTime = Date.now()) {
 }
 export const listSegments = (tripId) => db.segments.where('tripId').equals(tripId).sortBy('index');
 
+function segmentChunkRange(segmentId) {
+  return db.trackChunks.where('[segmentId+seq]')
+    .between([segmentId, 0], [segmentId, Number.MAX_SAFE_INTEGER]);
+}
+
+function isValidTrackPoint(point) {
+  return !!point && Number.isFinite(point.lat) && Number.isFinite(point.lon)
+    && Math.abs(point.lat) <= 90 && Math.abs(point.lon) <= 180;
+}
+
 export async function appendPoints(segmentId, tripId, points) {
   if (!points.length) return;
   await db.transaction('rw', [db.trackChunks, db.segments, db.trips], async () => {
-    const last = await db.trackChunks.where('[segmentId+seq]')
-      .between([segmentId, 0], [segmentId, Number.MAX_SAFE_INTEGER]).last();
+    const last = await segmentChunkRange(segmentId).last();
     if (last && last.points.length + points.length <= CHUNK_SIZE) {
       last.points.push(...points);
       await db.trackChunks.put(last);
@@ -136,6 +145,90 @@ export async function loadTripFull(tripId) {
     db.media.where('tripId').equals(tripId).toArray()
   ]);
   return track ? { ...track, waypoints, media } : null;
+}
+
+export async function loadFirstTrackPoint(tripId) {
+  const segments = await listSegments(tripId);
+  for (const segment of segments) {
+    let first = null;
+    await segmentChunkRange(segment.id).each((chunk) => {
+      const point = chunk.points?.find(isValidTrackPoint);
+      if (!point) return;
+      first = { lat: point.lat, lon: point.lon };
+      return false;
+    });
+    if (first) return first;
+  }
+  return null;
+}
+
+export async function loadLastTrackTimestamp(segmentId) {
+  let latest = null;
+  await segmentChunkRange(segmentId).reverse().each((chunk) => {
+    let chunkLatest = null;
+    for (const point of chunk.points || []) {
+      if (Number.isFinite(point?.t) && (chunkLatest == null || point.t > chunkLatest)) chunkLatest = point.t;
+    }
+    if (chunkLatest == null) return;
+    latest = chunkLatest;
+    return false;
+  });
+  return latest;
+}
+
+export async function loadTripPreview(tripId) {
+  const [trip, segments, waypoints] = await Promise.all([
+    db.trips.get(tripId),
+    listSegments(tripId),
+    db.waypoints.where('tripId').equals(tripId).toArray()
+  ]);
+  if (!trip) return null;
+
+  const counts = await Promise.all(segments.map((segment) => segmentChunkRange(segment.id).count()));
+  const totalChunks = counts.reduce((sum, count) => sum + count, 0);
+  const selectedOrdinals = new Set<number>();
+  const selectedChunkCount = Math.min(16, totalChunks);
+  for (let i = 0; i < selectedChunkCount; i++) {
+    selectedOrdinals.add(selectedChunkCount === 1
+      ? 0
+      : Math.round(i * (totalChunks - 1) / (selectedChunkCount - 1)));
+  }
+
+  const selectedChunks = [];
+  const ordinals = [...selectedOrdinals].sort((a, b) => a - b);
+  let ordinal = 0;
+  let selectedIndex = 0;
+  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
+    const segment = segments[segmentIndex];
+    for (let localOffset = 0; localOffset < counts[segmentIndex]; localOffset++) {
+      if (ordinals[selectedIndex] === ordinal) {
+        const [chunk] = await segmentChunkRange(segment.id).offset(localOffset).limit(1).toArray();
+        if (chunk) selectedChunks.push({
+          segmentId: segment.id,
+          points: (chunk.points || []).filter(isValidTrackPoint)
+        });
+        selectedIndex++;
+      }
+      ordinal++;
+    }
+  }
+
+  const flattened = selectedChunks.flatMap((chunk) => chunk.points.map((point) => ({ segmentId: chunk.segmentId, point })));
+  let sampled = flattened;
+  if (flattened.length > 500) {
+    sampled = [flattened[0]];
+    for (let i = 1; i < 499; i++) sampled.push(flattened[Math.round(i * (flattened.length - 1) / 499)]);
+    sampled.push(flattened[flattened.length - 1]);
+  }
+  const pointsBySegment = new Map<string, any[]>(segments.map((segment) => [segment.id, []]));
+  for (const { segmentId, point } of sampled) pointsBySegment.get(segmentId).push(point);
+
+  return {
+    trip,
+    segments: segments.map((segment) => ({ ...segment, points: pointsBySegment.get(segment.id) })),
+    waypoints,
+    readOnly: true
+  };
 }
 
 /** Replace all points of a segment (used by editor). */

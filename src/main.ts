@@ -196,7 +196,7 @@ async function boot() {
   await storeCore.db.open();
   const migration = await migrationCore.verifyDatabaseMigration(storeCore.db, preflight);
 
-  // Theme initialization reads the latest trip, so it must follow migration checks.
+  // Theme initialization reads the latest trip reference, so it must follow migration checks.
   await themeCore.initTheme();
 
   diag('store', migration.skipped ? 'database preflight skipped' : migration.needsUpgrade ? 'database migrated' : 'database current', {

@@ -651,13 +651,7 @@ export async function recoverPendingSpill() {
       localStorage.removeItem(SPILL_KEY);
       return 0;
     }
-    const chunks = await store.db.trackChunks.where('segmentId').equals(data.segmentId).toArray();
-    let lastT = -Infinity;
-    for (const c of chunks) {
-      for (const p of c.points || []) {
-        if (Number.isFinite(p.t) && p.t > lastT) lastT = p.t;
-      }
-    }
+    const lastT = (await store.loadLastTrackTimestamp(data.segmentId)) ?? -Infinity;
     const seen = new Set();
     const fresh = [];
     for (const p of data.points) {

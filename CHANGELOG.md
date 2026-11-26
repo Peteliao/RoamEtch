@@ -4,6 +4,17 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.2.5] - 2026-11-26
+
+### Changed
+
+- Theme startup, pending-spill recovery, and interrupted-trip map previews now use
+  bounded IndexedDB queries instead of materializing full tracks and media.
+- Added read-only trip previews capped at 16 chunks and 500 points, while explicit
+  analysis, editing, and export continue to load complete trip data.
+- Added unit and real-IndexedDB regressions for large-track startup, first-point
+  lookup, timestamp recovery, and preview/full-load separation.
+
 ## [3.2.4] - 2026-11-26
 
 ### Added

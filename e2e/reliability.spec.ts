@@ -410,3 +410,100 @@ test('an accelerated eight-hour hike persists every fix without real-time waitin
   expect(result.stored.chunks).toBeGreaterThan(1);
   expect(pageErrors).toEqual([]);
 });
+
+test('large interrupted trips boot with a bounded read-only map preview', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await blockExternal(page);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+  const tripId = await page.evaluate(async () => {
+    const { store } = (window as any).__lt;
+    const trip = await store.createTrip({ name: '大轨迹中断恢复', activity: 'hike', status: 'paused' });
+    const segment = await store.addSegment(trip.id);
+    const start = Date.now() - 10_000_000;
+    const points = Array.from({ length: 10_000 }, (_, index) => ({
+      lat: 30 + index / 1_000_000,
+      lon: 120 + index / 1_000_000,
+      t: start + index * 1000,
+      acc: 5,
+      alt: 100 + index / 100
+    }));
+    await store.appendPoints(segment.id, trip.id, points);
+    await store.addWaypoint({ tripId: trip.id, lat: 30, lon: 120, time: start, name: '恢复节点' });
+    await store.addMedia({ tripId: trip.id, blob: new Blob(['unused']), width: 1, height: 1 });
+    return trip.id;
+  });
+
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+  await expect(page.locator('#view-record')).toContainText('大轨迹中断恢复');
+  await expect(page.locator('.map-tools button[aria-pressed]')).toBeDisabled();
+
+  const loaded = await page.evaluate(async (id) => {
+    const { store } = (window as any).__lt;
+    const preview = await store.loadTripPreview(id);
+    const full = await store.loadTripFull(id);
+    return {
+      previewPoints: preview.segments.reduce((sum, segment) => sum + segment.points.length, 0),
+      readOnly: preview.readOnly,
+      previewWaypoints: preview.waypoints.length,
+      previewHasMedia: Object.hasOwn(preview, 'media'),
+      fullPoints: full.segments.reduce((sum, segment) => sum + segment.points.length, 0),
+      fullMedia: full.media.length
+    };
+  }, tripId);
+  expect(loaded).toEqual({
+    previewPoints: 500,
+    readOnly: true,
+    previewWaypoints: 1,
+    previewHasMedia: false,
+    fullPoints: 10_000,
+    fullMedia: 1
+  });
+  await page.evaluate((id) => (window as any).__lt.store.deleteTrip(id), tripId);
+  expect(pageErrors).toEqual([]);
+});
+
+test('spill recovery uses chunk sequence order and appends only fresh points', async ({ page }) => {
+  await blockExternal(page);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+  const seeded = await page.evaluate(async () => {
+    const { store } = (window as any).__lt;
+    const trip = await store.createTrip({ name: '溢出恢复回归', activity: 'hike', status: 'paused' });
+    const segment = await store.addSegment(trip.id);
+    await store.db.trackChunks.add({
+      id: 'z-older-chunk', tripId: trip.id, segmentId: segment.id, seq: 0,
+      points: [{ lat: 30, lon: 120, t: 1000 }, { lat: 30.001, lon: 120, t: 2000 }]
+    });
+    await store.db.segments.update(segment.id, { endTime: 2000 });
+    localStorage.setItem('roametch.pendingPoints.v1', JSON.stringify({
+      tripId: trip.id,
+      segmentId: segment.id,
+      points: [
+        { lat: 30.0005, lon: 120, t: 1500 },
+        { lat: 30.003, lon: 120, t: 3000 },
+        { lat: 30.002, lon: 120, t: 2500 },
+        { lat: 30.004, lon: 120, t: 3000 },
+        { lat: 91, lon: 120, t: 4000 }
+      ]
+    }));
+    return { tripId: trip.id, segmentId: segment.id };
+  });
+
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+  const recovered = await page.evaluate(async ({ tripId, segmentId }) => {
+    const { store } = (window as any).__lt;
+    const chunks = await store.db.trackChunks.where('segmentId').equals(segmentId).toArray();
+    return {
+      times: chunks.sort((a, b) => a.seq - b.seq).flatMap((chunk) => chunk.points.map((point) => point.t)),
+      spill: localStorage.getItem('roametch.pendingPoints.v1'),
+      tripId
+    };
+  }, seeded);
+  expect(recovered.times).toEqual([1000, 2000, 2500, 3000]);
+  expect(recovered.spill).toBeNull();
+  await page.evaluate((id) => (window as any).__lt.store.deleteTrip(id), recovered.tripId);
+});

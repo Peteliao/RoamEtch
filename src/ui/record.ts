@@ -11,7 +11,7 @@ import { availableBasemaps } from '../core/providers';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine, bearing } from '../core/geo';
 import { estimateCalories } from '../core/calories';
 import { altSourceShortKey, altSourceTagClass } from '../core/elevation';
-import { loadTripFull, updateTrip, getTrip, addPhotoWaypoint, deletePhotoWaypoint } from '../core/store';
+import { loadTripFull, loadTripPreview, updateTrip, getTrip, addPhotoWaypoint, deletePhotoWaypoint } from '../core/store';
 import { onBroadcast } from '../core/locks';
 import { clearHistory } from '../core/history';
 import { TrackMap } from './map';
@@ -196,7 +196,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
 
   function canEditMap() {
     const trip = viewingTrip?.trip;
-    return viewingTripEditable && trip?.status === 'finished'
+    return viewingTripEditable && !viewingTrip?.readOnly && trip?.status === 'finished'
       && appState.activeTripId === trip.id && appState.view === 'record'
       && rec.status !== 'recording' && rec.status !== 'paused'
       && !rewalk.active && !psActive && !readOnly;
@@ -1719,8 +1719,8 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       renderViewBar();
       setTimeout(() => map.fitTrack(), 600);
     } else if (recoverable) {
-      const full = await loadTripFull(recoverable.id);
-      if (full) setTimeout(() => { viewingTripEditable = false; viewingTrip = full; map.setTrackData(full.segments, full.waypoints); map.fitTrack(); renderViewBar(); }, 600);
+      const preview = await loadTripPreview(recoverable.id);
+      if (preview) setTimeout(() => { viewingTripEditable = false; viewingTrip = preview; map.setTrackData(preview.segments, preview.waypoints); map.fitTrack(); renderViewBar(); }, 600);
     } else if (rec.status === 'idle' || rec.status === 'finished') {
       locateOnce();
     }

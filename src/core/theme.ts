@@ -3,7 +3,7 @@ import { get } from './settings';
 import { appCssVars, isConcreteTheme, themeDefinition } from './themeRegistry';
 import { on, emit } from './events';
 import { regionState } from './region';
-import { listTrips, loadTripFull } from './store';
+import { listTrips, loadFirstTrackPoint } from './store';
 import { sunTimes } from './solar';
 
 let timer = null;
@@ -80,9 +80,8 @@ export async function initTheme() {
   });
   try {
     const trips = await listTrips();
-    const full = trips[0] ? await loadTripFull(trips[0].id) : null;
-    const p = full?.segments?.[0]?.points?.[0];
-    if (p) ref = { lat: p.lat, lon: p.lon };
+    const point = trips[0] ? await loadFirstTrackPoint(trips[0].id) : null;
+    if (point) ref = { lat: point.lat, lon: point.lon };
   } catch { /* reference stays regional default */ }
   if (!ref) ref = regionState.effective === 'cn' ? { lat: 39.9042, lon: 116.4074 } : { lat: 48.8566, lon: 2.3522 };
   dayKey = '';

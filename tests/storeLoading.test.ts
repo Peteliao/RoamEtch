@@ -33,7 +33,10 @@ vi.mock('dexie', () => ({
   }
 }));
 
-import { loadTripFull, loadTripTrack, pruneEmptySegments } from '../src/core/store';
+import {
+  loadFirstTrackPoint, loadLastTrackTimestamp, loadTripFull, loadTripPreview, loadTripTrack,
+  pruneEmptySegments
+} from '../src/core/store';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -51,17 +54,44 @@ beforeEach(() => {
         .sort((a, b) => a.index - b.index)
     })
   }));
-  mocks.db.trackChunks.where.mockImplementation((index: string) => ({
-    equals: (value: string) => ({
-      toArray: async () => mocks.chunks.filter((chunk) => chunk[index] === value),
-      count: async () => mocks.chunks.filter((chunk) => chunk[index] === value).length,
-      delete: async () => {
-        for (let i = mocks.chunks.length - 1; i >= 0; i--) {
-          if (mocks.chunks[i][index] === value) mocks.chunks.splice(i, 1);
+  mocks.db.trackChunks.where.mockImplementation((index: string) => {
+    if (index === '[segmentId+seq]') {
+      return {
+        between: ([segmentId, min]: [string, number], [, max]: [string, number]) => {
+          const rows = () => mocks.chunks
+            .filter((chunk) => chunk.segmentId === segmentId && chunk.seq >= min && chunk.seq <= max)
+            .sort((a, b) => a.seq - b.seq);
+          return {
+            toArray: async () => rows(),
+            count: async () => rows().length,
+            last: async () => rows().at(-1),
+            offset: (offset: number) => ({
+              limit: (limit: number) => ({ toArray: async () => rows().slice(offset, offset + limit) })
+            }),
+            reverse: () => ({
+              each: async (visit) => {
+                for (const row of [...rows()].reverse()) if (visit(row) === false) break;
+              }
+            }),
+            each: async (visit) => {
+              for (const row of rows()) if (visit(row) === false) break;
+            }
+          };
         }
-      }
-    })
-  }));
+      };
+    }
+    return {
+      equals: (value: string) => ({
+        toArray: async () => mocks.chunks.filter((chunk) => chunk[index] === value),
+        count: async () => mocks.chunks.filter((chunk) => chunk[index] === value).length,
+        delete: async () => {
+          for (let i = mocks.chunks.length - 1; i >= 0; i--) {
+            if (mocks.chunks[i][index] === value) mocks.chunks.splice(i, 1);
+          }
+        }
+      })
+    };
+  });
   mocks.db.waypoints.where.mockImplementation((index: string) => ({
     equals: (value: string) => ({ toArray: async () => [{ id: 'wp-1', [index]: value }] })
   }));
@@ -97,6 +127,66 @@ describe('trip loading', () => {
 
     expect(full?.waypoints).toEqual([{ id: 'wp-1', tripId: 'trip-1' }]);
     expect(full?.media).toEqual([{ id: 'media-1', tripId: 'trip-1' }]);
+  });
+
+  it('finds the first valid point without materializing the track', async () => {
+    mocks.segments.push(
+      { id: 'empty', tripId: 'trip-1', index: 0 },
+      { id: 'seg-1', tripId: 'trip-1', index: 1 }
+    );
+    mocks.chunks.push(
+      { id: 'later', segmentId: 'seg-1', seq: 1, points: [{ lat: 31, lon: 121, t: 2 }] },
+      { id: 'empty-chunk', segmentId: 'seg-1', seq: 0, points: [] },
+      { id: 'first', segmentId: 'seg-1', seq: 0, points: [{ lat: 30, lon: 120, t: 1 }] }
+    );
+
+    await expect(loadFirstTrackPoint('trip-1')).resolves.toEqual({ lat: 30, lon: 120 });
+    expect(mocks.db.trackChunks.where).not.toHaveBeenCalledWith('tripId');
+  });
+
+  it('reads the latest timestamp from the last non-empty chunk', async () => {
+    mocks.chunks.push(
+      { id: 'first', segmentId: 'seg-1', seq: 0, points: [{ t: 500 }] },
+      { id: 'last-empty', segmentId: 'seg-1', seq: 3, points: [] },
+      { id: 'last', segmentId: 'seg-1', seq: 2, points: [{ t: 700 }, { t: 900 }] }
+    );
+
+    await expect(loadLastTrackTimestamp('seg-1')).resolves.toBe(900);
+    expect(mocks.db.trackChunks.where).not.toHaveBeenCalledWith('segmentId');
+  });
+
+  it('builds a bounded read-only preview without loading media or every chunk', async () => {
+    mocks.trips.set('trip-1', { id: 'trip-1', name: 'Large trip' });
+    mocks.segments.push(
+      { id: 'seg-1', tripId: 'trip-1', index: 0 },
+      { id: 'seg-2', tripId: 'trip-1', index: 1 },
+      { id: 'empty', tripId: 'trip-1', index: 2 }
+    );
+    for (let seq = 0; seq < 20; seq++) {
+      mocks.chunks.push({
+        id: `chunk-${seq}`, segmentId: 'seg-1', seq,
+        points: Array.from({ length: 400 }, (_, index) => ({
+          lat: 30, lon: 120 + (seq * 400 + index) / 1_000_000, t: seq * 400 + index
+        }))
+      });
+    }
+    mocks.chunks.push({
+      id: 'final', segmentId: 'seg-2', seq: 0,
+      points: [{ lat: 31, lon: 121, t: 9000 }, { lat: 31.001, lon: 121.001, t: 9001 }]
+    });
+
+    const preview = await loadTripPreview('trip-1');
+
+    expect(preview?.readOnly).toBe(true);
+    expect(preview?.segments.flatMap((segment) => segment.points)).toHaveLength(500);
+    expect(preview?.segments[0].points[0].t).toBe(0);
+    expect(preview?.segments[1].points.length).toBeGreaterThan(0);
+    expect(preview?.segments[1].points.at(-1).t).toBe(9001);
+    expect(preview?.segments[2].points).toEqual([]);
+    expect(preview?.waypoints).toEqual([{ id: 'wp-1', tripId: 'trip-1' }]);
+    expect(preview).not.toHaveProperty('media');
+    expect(mocks.db.trackChunks.where).not.toHaveBeenCalledWith('tripId');
+    expect(mocks.db.media.where).not.toHaveBeenCalled();
   });
 });
 
