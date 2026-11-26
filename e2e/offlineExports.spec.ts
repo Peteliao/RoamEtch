@@ -10,7 +10,7 @@ async function waitForApp(page: import('@playwright/test').Page) {
 test('iPhone WebKit boots offline and exports trip data from the production shell', async ({ page, context }) => {
   const pageErrors: string[] = [];
   const recordPageError = (error: Error) => {
-    if (!/no-response|autonavi|webrd/i.test(error.message)) pageErrors.push(error.message);
+    if (!/no-response|autonavi|webrd|tile\.openstreetmap\.org/i.test(error.message)) pageErrors.push(error.message);
   };
   page.on('pageerror', recordPageError);
   await context.addInitScript(() => {
