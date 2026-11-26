@@ -36,13 +36,17 @@ All notable changes to RoamEtch are documented here. The format follows
 
 - Temporary restore-drill databases are closed and deleted on success, abort,
   failure, blocked deletion, and timeout; incomplete cleanup never reports success.
+  The drill now injects a failure after overwrite deletions and verifies the prior
+  target state is restored before certifying transactional rollback.
 - Backup history records committed restores before user callbacks, imports legacy
   history before the first new row, and excludes passwords, paths, blobs,
   coordinates, and track data.
 - Version 2/3 backups without valid integrity metadata are rejected; prepared
   inspections reverify payload and media digests before restore, and cancelled
   routing, progress callbacks, transactions, or unavailable-Worker fallbacks no
-  longer continue sensitive or expensive work after cancellation.
+  longer continue sensitive or expensive work after cancellation. Cancelling a
+  blocked compute task terminates its Worker so synchronous work and cloned track
+  data are released immediately.
 - Storage-health scans retry when concurrent inserts change table counts or a
   final consistent read transaction detects equal-count updates, and fail
   explicitly if writes continue instead of reporting transient state as corruption.

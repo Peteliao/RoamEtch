@@ -91,7 +91,9 @@ export function runTask(type, payload, { signal, timeoutMs = 15000 }: { signal?:
       if (!pending.delete(id)) return;
       settle(task);
       reject(new DOMException('Aborted', 'AbortError'));
-      try { instance.postMessage({ id, type: 'cancel' }); } catch {}
+      // A synchronous worker cannot receive a cancel message until its current
+      // computation finishes, so termination is the only reliable interruption.
+      discardWorker(instance);
     };
     task.cancel = cancel;
     pending.set(id, task);

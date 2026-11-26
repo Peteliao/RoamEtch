@@ -232,7 +232,7 @@ describe('isolated restore drill', () => {
     expect(await sha256Hex(thumb)).toBe(THUMB_SHA256);
   });
 
-  it('exercises skip and overwrite conflicts through inspect and restore', async () => {
+  it('exercises skip, overwrite, and injected rollback through inspect and restore', async () => {
     const result = await runRestoreDrill();
     const target = mocks.byRole('target')!;
     const tripWrites = target.operations
@@ -241,12 +241,15 @@ describe('isolated restore drill', () => {
 
     expect(result.checks.skip).toBe(true);
     expect(result.checks.overwrite).toBe(true);
-    expect(tripWrites).toEqual(['Restore drill fixture', 'Restore drill conflict sentinel', 'Restore drill fixture']);
-    expect(target.state.trips.get('restore-drill-trip').name).toBe('Restore drill fixture');
-    expect(target.state.shareImports.size).toBe(0);
+    expect(result.checks.atomicRollback).toBe(true);
+    expect(tripWrites).toEqual([
+      'Restore drill fixture', 'Restore drill conflict sentinel', 'Restore drill fixture', 'Restore drill rollback sentinel'
+    ]);
+    expect(target.state.trips.get('restore-drill-trip').name).toBe('Restore drill rollback sentinel');
+    expect(target.state.shareImports.size).toBe(1);
   });
 
-  it('rejects corrupt media before a write transaction and leaves the verified target unchanged', async () => {
+  it('rejects corrupt media before writing and rolls back an injected overwrite deletion', async () => {
     const result = await runRestoreDrill();
     const target = mocks.byRole('target')!;
     const writeTransactions = target.transaction.mock.calls.filter((call: any[]) => call[0] === 'rw');
@@ -254,11 +257,13 @@ describe('isolated restore drill', () => {
     expect(result.ok).toBe(true);
     expect(result.checks.corruptionRejected).toBe(true);
     expect(result.checks.atomicRollback).toBe(true);
-    expect(writeTransactions).toHaveLength(4);
-    expect(target.state.trips.get('restore-drill-trip').name).toBe('Restore drill fixture');
+    expect(writeTransactions).toHaveLength(6);
+    expect(target.operations.some((operation: any) => operation.kind === 'delete-where' && operation.table === 'trackChunks')).toBe(true);
+    expect(target.state.trips.get('restore-drill-trip').name).toBe('Restore drill rollback sentinel');
     expect(target.state.trackChunks.get('restore-drill-chunk').points).toHaveLength(2);
     expect(target.state.trackSnapshots.get('restore-drill-snapshot').points).toHaveLength(2);
     expect(target.state.waypoints.get('restore-drill-waypoint').time).toBe(1_700_000_015_000);
+    expect(target.state.shareImports.get('restore-drill-rollback-fingerprint').tripId).toBe('restore-drill-trip');
   });
 
   it('aborts during restore, rolls back partial writes and still deletes both temporary databases', async () => {

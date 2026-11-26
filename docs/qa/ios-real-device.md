@@ -17,18 +17,18 @@ Playwright 的 `devices['iPhone 13']` 只改变 WebKit 的视口、UA 和触摸�
 每个场景把 CDP 基线、峰值、增量、阈值、计数和 pageerror/crash 结果写入
 `test-results/memory/reports/`，同时作为 JSON reporter 附件保存；该目录被 Git 忽略。
 
-### 1.1 Chromium 回归基线（2026-11-26）
+### 1.1 Chromium 回归基线（2026-11-27）
 
 环境：Windows x64、Chromium 159.0.8154.6、430×932 视口、production preview。
-构建指纹：`sha256:487b4e60f05ce646670892c463ad9058fcd91b931b6e05979643e022ce81c1cd`。
+构建指纹：`sha256:90012daca2734ac58e8e6f2911e19e445e03e92ec37275f6a6b243fa8537bb90`。
 每个场景在开始前和最终采样前执行 GC；瞬时峰值按 75 ms 间隔采样并等待所有在途请求。
 
 | 场景 | 输入 | 峰值 JS heap | Task 增量 | GC 后保留节点增量 | 结果 |
 | --- | --- | ---: | ---: | ---: | --- |
-| `cold-start` | 3 × 20,000 点 | 15.76 MiB | 0.989 s | +5 | 通过 |
-| `health-check` | 20,000 点 | 12.92 MiB | 0.411 s | +46 | 通过 |
-| `gps-preview-clean-restore` | 20,000 点，清洗 3 点后恢复 | 90.00 MiB | 5.822 s | +70 | 通过 |
-| `recording-recovery` | 20,000 点 + 400 spill | 16.38 MiB | 1.008 s | -9 | 通过 |
+| `cold-start` | 3 × 20,000 点 | 17.03 MiB | 0.958 s | +5 | 通过 |
+| `health-check` | 20,000 点 | 13.37 MiB | 0.408 s | +46 | 通过 |
+| `gps-preview-clean-restore` | 20,000 点，清洗 3 点后恢复 | 94.44 MiB | 5.955 s | +70 | 通过 |
+| `recording-recovery` | 20,000 点 + 400 spill | 17.46 MiB | 0.966 s | -9 | 通过 |
 
 对应预算分别为 220 / 300 / 350 / 220 MiB heap，12 / 15 / 30 / 15 s Task；
 非分析场景保留节点上限为 6,000，GPS 分析视图为 240,000。逐场景 JSON 由测试生成，

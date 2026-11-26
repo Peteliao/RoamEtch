@@ -136,7 +136,7 @@ describe('compute worker resilience', () => {
     expect(MockWorker.instances).toHaveLength(0);
   });
 
-  it('cancels a pending cleanup and ignores its late worker response', async () => {
+  it('terminates a blocked worker on cancellation and ignores its late response', async () => {
     const { previewTrackCleanupAsync } = await import('../src/core/workerBridge');
     const controller = new AbortController();
     const pending = previewTrackCleanupAsync(segments, 'hike', {}, { signal: controller.signal });
@@ -145,10 +145,30 @@ describe('compute worker resilience', () => {
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
-    expect(instance.postMessage).toHaveBeenLastCalledWith({ id: 1, type: 'cancel' });
+    expect(instance.terminate).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
     instance.onmessage?.({ data: { id: 1, ok: true, result: { removed: 99 } } });
     await Promise.resolve();
+    expect(vi.getTimerCount()).toBe(0);
+
+    const next = previewTrackCleanupAsync(segments, 'hike');
+    expect(MockWorker.instances).toHaveLength(2);
+    MockWorker.instances[1].onmessage?.({ data: { id: 2, ok: true, result: { removed: 0 } } });
+    await expect(next).resolves.toEqual({ removed: 0 });
+  });
+
+  it('recovers other pending tasks when one cancellation terminates their worker', async () => {
+    const { computeDistanceSplitsAsync, previewTrackCleanupAsync } = await import('../src/core/workerBridge');
+    const controller = new AbortController();
+    const cancelled = previewTrackCleanupAsync(segments, 'hike', {}, { signal: controller.signal });
+    const other = computeDistanceSplitsAsync(segments, 500, { activity: 'hike' });
+    const instance = MockWorker.instances[0];
+
+    controller.abort();
+
+    await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+    await expect(other).resolves.toEqual(computeDistanceSplits(segments, 500, { activity: 'hike' }));
+    expect(instance.terminate).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 

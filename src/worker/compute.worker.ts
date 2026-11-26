@@ -7,7 +7,6 @@ import { previewTrackCleanup } from '../core/gpsQuality';
 
 self.onmessage = (e) => {
   const { id, type, payload } = e.data;
-  if (type === 'cancel') return;
   try {
     let result;
     switch (type) {

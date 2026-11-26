@@ -93,6 +93,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   'restore-drill-verification-failed': 'The restored drill fixture did not match the source.',
   'restore-drill-conflict-failed': 'The restore drill conflict checks failed.',
   'restore-drill-corruption-failed': 'Corrupt media was not rejected atomically.',
+  'restore-drill-rollback-failed': 'The restore drill did not roll back an injected write failure.',
   'restore-drill-cleanup-failed': 'Temporary restore drill databases could not be fully removed.',
   'restore-drill-failed': 'Restore drill failed.'
 };
@@ -447,6 +448,42 @@ export async function runRestoreDrill(options: RestoreDrillOptions = {}): Promis
     if (!rejected) throw new RestoreDrillError('restore-drill-corruption-failed');
     await verifyTarget(databases[1], signal);
     result.checks.corruptionRejected = true;
+
+    const rollbackName = 'Restore drill rollback sentinel';
+    const rollbackShareImport = {
+      fingerprint: 'restore-drill-rollback-fingerprint', tripId: TRIP_ID, createdAt: BASE_TIME + 50_000
+    };
+    await stage('restore-drill-rollback-failed', signal, () => databases[1].transaction('rw', [databases[1].trips, databases[1].shareImports], async () => {
+      const current = await databases[1].trips.get(TRIP_ID);
+      if (!current) throw new RestoreDrillError('restore-drill-rollback-failed');
+      await databases[1].trips.put({ ...current, name: rollbackName });
+      await databases[1].shareImports.put(rollbackShareImport);
+    }));
+    const rollbackInspection = await stage('restore-drill-rollback-failed', signal, () => inspectBackup(backup.blob, '', {
+      target: databases[1], signal
+    }));
+    if (!sameJson(rollbackInspection.conflicts, [TRIP_ID])) throw new RestoreDrillError('restore-drill-rollback-failed');
+    await verifyTarget(databases[1], signal, { tripName: rollbackName, shareImports: [rollbackShareImport] });
+
+    const targetTrips = databases[1].trips;
+    const originalDelete = targetTrips.delete;
+    let failureInjected = false;
+    let rollbackRejected = false;
+    targetTrips.delete = async (...args: any[]) => {
+      await originalDelete.apply(targetTrips, args);
+      failureInjected = true;
+      throw new Error('injected restore rollback failure');
+    };
+    try {
+      await restoreBackup(backup.blob, 'overwrite', rollbackInspection, { target: databases[1], signal });
+    } catch (error) {
+      if (signal?.aborted || error?.name === 'AbortError') throw error;
+      rollbackRejected = error?.message === 'injected restore rollback failure';
+    } finally {
+      targetTrips.delete = originalDelete;
+    }
+    if (!failureInjected || !rollbackRejected) throw new RestoreDrillError('restore-drill-rollback-failed');
+    await verifyTarget(databases[1], signal, { tripName: rollbackName, shareImports: [rollbackShareImport] });
     result.checks.atomicRollback = true;
 
     result.counts = verified.counts;
