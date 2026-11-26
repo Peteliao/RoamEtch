@@ -91,6 +91,7 @@ export function runTask(type, payload) {
 }
 
 export const computeStatsAsync = (segments, opts) => runTask('stats', { segments, opts });
+export const computeStatsSummaryAsync = (segments, opts = {}) => computeStatsAsync(segments, { ...opts, series: false });
 export const computeDistanceSplitsAsync = (segments, intervalM = 1000, opts = {}) =>
   runTask('splits', { segments, intervalM, opts });
 export const simplifyAsync = (points, tolerance) => runTask('simplify', { points, tolerance });

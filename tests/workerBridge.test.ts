@@ -42,6 +42,21 @@ afterEach(() => {
 });
 
 describe('compute worker resilience', () => {
+  it('requests summary-only statistics for recorder recovery', async () => {
+    const { computeStatsSummaryAsync } = await import('../src/core/workerBridge');
+    const pending = computeStatsSummaryAsync(segments, { activity: 'hike' });
+    const instance = MockWorker.instances[0];
+
+    expect(instance.postMessage).toHaveBeenCalledWith({
+      id: 1,
+      type: 'stats',
+      payload: { segments, opts: { activity: 'hike', series: false } }
+    });
+    instance.onmessage?.({ data: { id: 1, ok: true, result: { pointCount: 2 } } });
+
+    await expect(pending).resolves.toEqual({ pointCount: 2 });
+  });
+
   it('clears the timeout after a successful worker response', async () => {
     const { computeDistanceSplitsAsync } = await import('../src/core/workerBridge');
     const pending = computeDistanceSplitsAsync(segments, 1000, { activity: 'hike' });

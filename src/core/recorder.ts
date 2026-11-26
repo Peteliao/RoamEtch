@@ -12,6 +12,7 @@ import { requestWakeLock, releaseWakeLock } from './wakelock';
 import { armKeepAlive, disarmKeepAlive } from './keepalive';
 import { classifyActivity } from './activity';
 import { migrateLegacyKey } from './storageKeys';
+import { computeStatsSummaryAsync } from './workerBridge';
 
 const GAP_TIME = 5 * 60_000;   // > 5 min → new segment
 const MOTION_HISTORY_MS = 120_000;
@@ -831,8 +832,7 @@ async function doStopRecording() {
   }
   try {
     // pause/resume without fixes leaves empty segments — prune them at stop
-    const full = await store.loadTripFull(rec.tripId);
-    for (const s of full.segments) if (!s.points.length) await store.deleteSegment(s.id);
+    await store.pruneEmptySegments(rec.tripId);
     if (rec.tripId) {
       const tr = await store.getTrip(rec.tripId);
       const finalActivity = tr?.activity === 'auto'
@@ -878,9 +878,8 @@ export async function continueTrip(tripId) {
     speedSamples = [];
     rec.live = freshLive();
     // rebuild live counters from stored data
-    const full = await store.loadTripFull(tripId);
-    const { computeStats } = await import('./stats');
-    const st = computeStats(full.segments, {
+    const full = await store.loadTripTrack(tripId);
+    const st = await computeStatsSummaryAsync(full.segments, {
       ascentThreshold: get('ascentThreshold'),
       activity: rec.tripActivity,
       weightKg: get('weightKg')

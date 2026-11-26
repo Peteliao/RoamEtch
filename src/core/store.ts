@@ -123,13 +123,8 @@ export async function appendPoints(segmentId, tripId, points) {
   });
 }
 
-export async function loadTripFull(tripId) {
-  const [trip, segments, waypoints, media] = await Promise.all([
-    db.trips.get(tripId),
-    listSegments(tripId),
-    db.waypoints.where('tripId').equals(tripId).toArray(),
-    db.media.where('tripId').equals(tripId).toArray()
-  ]);
+export async function loadTripTrack(tripId) {
+  const [trip, segments] = await Promise.all([db.trips.get(tripId), listSegments(tripId)]);
   if (!trip) return null;
   const chunks = await db.trackChunks.where('tripId').equals(tripId).toArray();
   const bySeg = new Map();
@@ -141,7 +136,16 @@ export async function loadTripFull(tripId) {
     const cs = (bySeg.get(s.id) || []).sort((a, b) => a.seq - b.seq);
     return { ...s, points: cs.flatMap((c) => c.points) };
   });
-  return { trip, segments: segData, waypoints, media };
+  return { trip, segments: segData };
+}
+
+export async function loadTripFull(tripId) {
+  const [track, waypoints, media] = await Promise.all([
+    loadTripTrack(tripId),
+    db.waypoints.where('tripId').equals(tripId).toArray(),
+    db.media.where('tripId').equals(tripId).toArray()
+  ]);
+  return track ? { ...track, waypoints, media } : null;
 }
 
 /** Replace all points of a segment (used by editor). */
@@ -261,6 +265,22 @@ export async function restoreTrackSnapshot(tripId) {
     }
     if (restored) await db.trips.update(tripId, { gpsRestoredAt: Date.now(), statsCache: null, thumbPoints: null });
     return restored;
+  });
+}
+
+export async function pruneEmptySegments(tripId) {
+  return db.transaction('rw', [db.trackChunks, db.segments], async () => {
+    const segments = await listSegments(tripId);
+    const emptyIds = [];
+    for (const seg of segments) {
+      const chunkCount = await db.trackChunks.where('segmentId').equals(seg.id).count();
+      if (!chunkCount) emptyIds.push(seg.id);
+    }
+    for (const id of emptyIds) {
+      await db.trackChunks.where('segmentId').equals(id).delete();
+      await db.segments.delete(id);
+    }
+    return emptyIds.length;
   });
 }
 

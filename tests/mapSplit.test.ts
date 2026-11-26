@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('maplibre-gl', () => ({ setWorkerUrl: vi.fn() }));
 vi.mock('../src/core/diag', () => ({ diag: vi.fn() }));
@@ -28,5 +28,53 @@ describe('split map highlight', () => {
 
     trackMap.setSplitHighlight([]);
     expect(setData.mock.calls[1][0].features).toEqual([]);
+  });
+});
+
+describe('live map workload', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function setup() {
+    const setData = vi.fn();
+    const map = { getSource: vi.fn(() => ({ setData })) };
+    const trackMap = new TrackMap({} as any);
+    (trackMap as any).coordSystem = 'WGS84';
+    (trackMap as any).map = map;
+    vi.spyOn(trackMap, 'updatePosition').mockImplementation(() => {});
+    trackMap.startLive();
+    setData.mockClear();
+    return { setData, trackMap };
+  }
+
+  it('batches rapid fixes into one source update', () => {
+    const { setData, trackMap } = setup();
+
+    for (let i = 0; i < 5; i++) trackMap.appendLive({ lat: 30, lon: 120 + i / 1000 }, 's1');
+    expect(setData).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(179);
+    expect(setData).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+
+    expect(setData).toHaveBeenCalledTimes(1);
+    expect(setData.mock.calls[0][0].features[0].geometry.coordinates).toHaveLength(5);
+    trackMap.endLive();
+    expect(setData.mock.calls[1][0].features).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('bounds long live geometry while preserving its endpoints', () => {
+    const { trackMap } = setup();
+    const count = 6100;
+
+    for (let i = 0; i < count; i++) trackMap.appendLive({ lat: 30, lon: 120 + i / 1_000_000 }, 's1');
+
+    const coords = (trackMap as any)._liveFeats.get('s1').geometry.coordinates;
+    expect(coords.length).toBeLessThanOrEqual(6000);
+    expect(coords.length).toBeGreaterThan(1200);
+    expect(coords[0]).toEqual([120, 30]);
+    expect(coords.at(-1)).toEqual([120 + (count - 1) / 1_000_000, 30]);
+    trackMap.endLive();
   });
 });

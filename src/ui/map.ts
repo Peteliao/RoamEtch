@@ -14,6 +14,9 @@ import { WP_ICONS } from '../core/waypointMeta';
 import { meetProximityZoom, meetRoleColor } from '../core/meetVisuals';
 
 const LIVE_FILL = 'rgba(90,167,240,0.14)';
+const LIVE_UPDATE_MS = 180;
+const LIVE_MAX_COORDS = 6000;
+const LIVE_RECENT_COORDS = 1200;
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
@@ -60,6 +63,8 @@ export class TrackMap {
   declare _fallbackEl: HTMLElement | null;
   declare _liveZoomed: boolean;
   declare _liveFeats: Map<string, any> | null;
+  declare _liveFlushTimer: ReturnType<typeof setTimeout> | null;
+  declare _liveDirty: boolean;
   declare _headingEl: HTMLElement | null;
   declare _meetAutoZoomReady: boolean;
   declare _meetManualCameraUntil: number;
@@ -98,6 +103,8 @@ export class TrackMap {
     this.vectorFallback = false;
     this._indexMaps = new Map();
     this._moveTimer = null;
+    this._liveFlushTimer = null;
+    this._liveDirty = false;
     this.destroyed = false;
     this._renderingPaused = false;
     this._pausedRepaintDescriptor = undefined;
@@ -507,6 +514,8 @@ export class TrackMap {
   startLive() {
     this.liveMode = true;
     this._liveZoomed = false;
+    this._clearLiveFlush();
+    this._liveDirty = false;
     this.segments = [];
     this.waypoints = [];
     this.map.getSource('live')?.setData({ type: 'FeatureCollection', features: [] });
@@ -526,8 +535,9 @@ export class TrackMap {
       feat = { type: 'Feature', properties: { seg: segmentId }, geometry: { type: 'LineString', coordinates: [] } };
       this._liveFeats.set(segmentId, feat);
     }
-    feat.geometry.coordinates.push(coord);
-    this.map.getSource('live')?.setData({ type: 'FeatureCollection', features: [...this._liveFeats.values()] });
+    this._appendLiveCoordinate(feat, coord);
+    this._liveDirty = true;
+    this._scheduleLiveFlush();
     this.updatePosition(point.lat, point.lon, point.acc, point.heading);
     if (this.follow) {
       const opts: any = { center: coord, duration: 400 };
@@ -536,8 +546,40 @@ export class TrackMap {
     }
   }
 
+  _appendLiveCoordinate(feat, coord) {
+    const coords = feat.geometry.coordinates;
+    coords.push(coord);
+    if (coords.length <= LIVE_MAX_COORDS) return;
+    const olderCount = coords.length - LIVE_RECENT_COORDS;
+    const older = coords.slice(0, olderCount).filter((_, i) => i % 2 === 0 || i === olderCount - 1);
+    feat.geometry.coordinates = [...older, ...coords.slice(olderCount)];
+  }
+
+  _scheduleLiveFlush() {
+    if (this._liveFlushTimer != null || this.destroyed) return;
+    this._liveFlushTimer = setTimeout(() => {
+      this._liveFlushTimer = null;
+      this._flushLive();
+    }, LIVE_UPDATE_MS);
+  }
+
+  _flushLive() {
+    if (!this._liveDirty || !this._liveFeats || this.destroyed) return;
+    const source = this.map?.getSource('live');
+    if (!source) return;
+    this._liveDirty = false;
+    source.setData({ type: 'FeatureCollection', features: [...this._liveFeats.values()] });
+  }
+
+  _clearLiveFlush() {
+    if (this._liveFlushTimer != null) clearTimeout(this._liveFlushTimer);
+    this._liveFlushTimer = null;
+  }
+
   endLive() {
     this.liveMode = false;
+    this._clearLiveFlush();
+    this._liveDirty = false;
     this._liveFeats = null;
     this.map.getSource('live')?.setData({ type: 'FeatureCollection', features: [] });
   }
@@ -971,6 +1013,8 @@ export class TrackMap {
 
   destroy() {
     this.destroyed = true;
+    this._clearLiveFlush();
+    this._liveFeats = null;
     this._viewportObserver?.disconnect();
     this._viewportObserver = null;
     this._viewportOverlay = null;

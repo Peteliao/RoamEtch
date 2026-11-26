@@ -4,6 +4,18 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.2.2] - 2026-11-26
+
+### Changed
+
+- Stopping a recording now prunes empty segments from chunk counts without loading
+  the full track, waypoints, or photo blobs.
+- Interrupted-trip recovery loads track-only data and rebuilds summary statistics in
+  a worker without allocating chart series.
+- Live map updates are batched and long-running geometry is bounded while preserving
+  recent detail and route endpoints.
+- Poster exports skip unused per-point series to reduce peak memory on large trips.
+
 ## [3.2.1] - 2026-11-26
 
 ### Added

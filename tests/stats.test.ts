@@ -198,4 +198,37 @@ describe('trip statistics', () => {
     expect(stats.series.d.at(-1)).toBeCloseTo(200, 3);
     expect(splits.reduce((sum, split) => sum + split.distance, 0)).toBeCloseTo(stats.distance, 6);
   });
+
+  it('computes an identical summary without allocating chart series', () => {
+    const points = [
+      { lat: 30, lon: 120, alt: 100, t: 0 },
+      { lat: 30.001, lon: 120, alt: 110, t: 60_000 },
+      { lat: 30.001, lon: 120, alt: null, t: 120_000 },
+      { lat: 30.002, lon: 120, alt: 108, t: 180_000 }
+    ];
+    const full = computeStats(track(points), { activity: 'hike', weightKg: 65 });
+    const { series, ...expectedSummary } = full;
+
+    const summary = computeStats(track(points), { activity: 'hike', weightKg: 65, series: false });
+
+    expect(series).toBeDefined();
+    expect(summary).toEqual(expectedSummary);
+    expect(summary.series).toBeUndefined();
+  });
+
+  it('summarizes a 100k-point track without building per-point series', () => {
+    const points = Array.from({ length: 100_000 }, (_, index) => ({
+      lat: 30 + index * 0.000001,
+      lon: 120,
+      alt: 100 + Math.sin(index / 100) * 5,
+      t: index * 1000
+    }));
+
+    const summary = computeStats(track(points), { activity: 'hike', series: false });
+
+    expect(summary.pointCount).toBe(100_000);
+    expect(summary.duration).toBe(99_999_000);
+    expect(summary.distance).toBeGreaterThan(10_000);
+    expect(summary.series).toBeUndefined();
+  });
 });

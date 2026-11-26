@@ -191,7 +191,8 @@ export async function generatePoster(full, {
   const stats = computeStats(cropped.segments, {
     ascentThreshold: get('ascentThreshold'),
     activity: full.trip.activity,
-    weightKg: get('weightKg')
+    weightKg: get('weightKg'),
+    series: false
   });
   const score = computeTripScore(stats, full.trip.activity);
   const time = tripTimeInfo(full);
