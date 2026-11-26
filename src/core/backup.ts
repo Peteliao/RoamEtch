@@ -134,9 +134,20 @@ function checkId(value) {
   return value;
 }
 
+function validateBackupSchemaVersion(value) {
+  if (value == null) return;
+  if (!Number.isSafeInteger(value) || value < 1) invalidManifest();
+  if (value > TRIP_SCHEMA_VERSION) {
+    const error = new Error('unsupported trip schema version') as Error & { code: string };
+    error.code = 'backup-trip-schema-unsupported';
+    throw error;
+  }
+}
+
 function validateManifest(manifest, files) {
   if (manifest.format !== FORMAT) throw new Error('wrong format');
   if (!SUPPORTED_VERSIONS.has(manifest.version)) throw new Error('unsupported version');
+  validateBackupSchemaVersion(manifest.tripSchemaVersion);
   for (const key of ['trips', 'segments', 'trackChunks', 'waypoints', 'mediaMeta', 'elevCache']) {
     if (!Array.isArray(manifest[key])) invalidManifest();
   }
@@ -164,6 +175,7 @@ function validateManifest(manifest, files) {
     if (!t || typeof t !== 'object') invalidManifest();
     const id = checkId(t.id);
     if (tripIds.has(id)) invalidManifest();
+    validateBackupSchemaVersion(t.schemaVersion);
     tripIds.add(id);
   }
 
@@ -313,6 +325,8 @@ export async function restoreBackup(file, strategy = 'skip', inspected = null) {
   const data = inspected || await inspectBackup(file);
   const { manifest, files, conflicts, integrity } = data;
   if (integrity.ok === false) throw new Error('backup integrity check failed');
+  validateBackupSchemaVersion(manifest.tripSchemaVersion);
+  for (const trip of manifest.trips) validateBackupSchemaVersion(trip.schemaVersion);
   const skipIds = new Set(strategy === 'skip' ? conflicts : []);
   const trackSnapshots = manifest.trackSnapshots || [];
   let restored = 0;

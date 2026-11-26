@@ -4,6 +4,24 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.2.4] - 2026-11-26
+
+### Added
+
+- Added a named database migration registry with read-only preflight checks,
+  post-migration row/schema verification, and explicit recovery guidance.
+- Added real IndexedDB regressions for v1–v3 upgrades, future-schema blocking,
+  failed-transaction rollback, repair/recovery, and legacy backup restores.
+- Added backup trip-schema validation and transactional isolation of damaged
+  segments, chunks, and original-track snapshots.
+
+### Changed
+
+- Database preflight now runs before theme initialization can implicitly open
+  Dexie, and native IndexedDB versions are mapped to logical schema versions.
+- Unsupported trip schemas are rejected in both upgrading and current databases
+  without clearing existing trip data.
+
 ## [3.2.3] - 2026-11-26
 
 ### Added

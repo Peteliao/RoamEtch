@@ -23,8 +23,9 @@ const mock = vi.hoisted(() => {
   let transactionModes = [];
   let transactionScopes = [];
   const db: any = {};
+  const keyOf = (name, row) => name === 'elevCache' ? row.key : name === 'shareImports' ? row.fingerprint : row.id;
   const reset = () => {
-    state = Object.fromEntries(names.map((n) => [n, new Map(initial[n].map((r) => [r.id, r]))]));
+    state = Object.fromEntries(names.map((n) => [n, new Map(initial[n].map((r) => [keyOf(n, r), r]))]));
     failPut = null;
     txCalls = 0;
     activeTransactions = 0;
@@ -45,7 +46,7 @@ const mock = vi.hoisted(() => {
           failPut = null;
           throw new Error('write failed');
         }
-        state[name].set(row.id, row);
+        state[name].set(keyOf(name, row), row);
       },
       delete: async (id) => { state[name].delete(id); },
       where: (field) => ({
@@ -107,6 +108,37 @@ function validManifest(overrides = {}) {
 
 function zipFile(files) {
   return asFile(new Blob([zipSync(files)]));
+}
+
+async function historicalManifest(version: number) {
+  const manifest: any = validManifest({
+    version,
+    trips: [{ id: 'legacy-trip', name: 'Legacy trip', activity: 'hike', status: 'finished' }],
+    segments: [{ id: 'legacy-segment', tripId: 'legacy-trip', index: 0, startTime: 1000, endTime: 2000 }],
+    trackChunks: [{
+      id: 'legacy-chunk', tripId: 'legacy-trip', segmentId: 'legacy-segment', seq: 0,
+      points: [{ lat: 30, lon: 120, t: 1000 }, { lat: 30.01, lon: 120.01, t: 2000 }]
+    }],
+    waypoints: [{ id: 'legacy-waypoint', tripId: 'legacy-trip', lat: 30, lon: 120, time: 1500, mediaIds: [] }],
+    elevCache: [{ key: '30.000,120.000', elevation: 100, fetchedAt: 1 }],
+    ...(version === 3 ? {
+      tripSchemaVersion: 1,
+      trackSnapshots: [{
+        id: 'legacy-snapshot', tripId: 'legacy-trip', segmentId: 'legacy-segment', segmentIndex: 0,
+        seq: 0, createdAt: 3000,
+        points: [{ lat: 30, lon: 120, t: 1000 }, { lat: 30.01, lon: 120.01, t: 2000 }]
+      }]
+    } : {})
+  });
+  if (version >= 2) {
+    const { integrity, ...payload } = manifest;
+    manifest.integrity = { algo: 'SHA-256', payload: await sha256Hex(stableStringify(payload)), files: {} };
+  }
+  return manifest;
+}
+
+function manifestFile(manifest) {
+  return zipFile({ 'manifest.json': strToU8(JSON.stringify(manifest)) });
 }
 
 beforeEach(() => mock.db.__reset());
@@ -211,6 +243,42 @@ describe('backup integrity', () => {
     const inspected = await inspectBackup(legacy);
     await restoreBackup(legacy, 'skip', inspected);
     expect(mock.db.__state().trips.get('legacy-1')?.schemaVersion).toBe(1);
+  });
+
+  it.each([1, 2, 3])('restores a complete version %i backup into the current schema', async (version) => {
+    const archive = manifestFile(await historicalManifest(version));
+    const inspected = await inspectBackup(archive);
+    expect(inspected.integrity.ok).toBe(version === 1 ? null : true);
+    await expect(restoreBackup(archive, 'skip', inspected)).resolves.toBe(1);
+
+    const state = mock.db.__state();
+    expect(state.trips.get('legacy-trip')).toMatchObject({ name: 'Legacy trip', schemaVersion: 1 });
+    expect(state.segments.get('legacy-segment')).toMatchObject({ tripId: 'legacy-trip', index: 0 });
+    expect(state.trackChunks.get('legacy-chunk')?.points).toHaveLength(2);
+    expect(state.waypoints.get('legacy-waypoint')?.time).toBe(1500);
+    expect(state.elevCache.get('30.000,120.000')?.elevation).toBe(100);
+    expect(state.trackSnapshots.size).toBe(version === 3 ? 1 : 0);
+  });
+
+  it('rejects future database and trip schema declarations before restore', async () => {
+    const futureDatabase = manifestFile(await historicalManifest(2));
+    const databaseManifest = JSON.parse(strFromU8(unzipSync(new Uint8Array(await futureDatabase.arrayBuffer()))['manifest.json']));
+    databaseManifest.tripSchemaVersion = 2;
+    await expect(inspectBackup(manifestFile(databaseManifest))).rejects.toMatchObject({ code: 'backup-trip-schema-unsupported' });
+
+    const futureTrip = manifestFile(await historicalManifest(2));
+    const tripManifest = JSON.parse(strFromU8(unzipSync(new Uint8Array(await futureTrip.arrayBuffer()))['manifest.json']));
+    tripManifest.trips[0].schemaVersion = 2;
+    await expect(inspectBackup(manifestFile(tripManifest))).rejects.toMatchObject({ code: 'backup-trip-schema-unsupported' });
+    expect(mock.db.__state().trips.has('legacy-trip')).toBe(false);
+  });
+
+  it('revalidates trip schema versions when a prepared inspection is reused', async () => {
+    const archive = manifestFile(await historicalManifest(2));
+    const inspected = await inspectBackup(archive);
+    inspected.manifest.trips[0].schemaVersion = 2;
+    await expect(restoreBackup(archive, 'skip', inspected)).rejects.toMatchObject({ code: 'backup-trip-schema-unsupported' });
+    expect(mock.db.__state().trips.has('legacy-trip')).toBe(false);
   });
 });
 

@@ -1,28 +1,18 @@
 // IndexedDB runtime schema (Dexie). All coordinates stored here are WGS-84, SI units.
 import Dexie from 'dexie';
 import { uuid } from './geo';
+import { DATABASE_MIGRATIONS, DATABASE_NAME, TRIP_SCHEMA_VERSION } from './migrations';
 
-export const TRIP_SCHEMA_VERSION = 1;
+export { DATABASE_SCHEMA_VERSION, TRIP_SCHEMA_VERSION } from './migrations';
 
-export const db = new Dexie('localtrace') as Dexie & {
+export const db = new Dexie(DATABASE_NAME) as Dexie & {
   trips: any; segments: any; trackChunks: any; trackSnapshots: any; waypoints: any; media: any; elevCache: any; shareImports: any;
 };
-db.version(1).stores({
-  trips: 'id, updatedAt, status',
-  segments: 'id, tripId, [tripId+index]',
-  trackChunks: 'id, tripId, segmentId, [segmentId+seq]',
-  waypoints: 'id, tripId, time',
-  media: 'id, tripId',
-  elevCache: 'key, fetchedAt'
-});
-db.version(2).stores({
-  shareImports: 'fingerprint, tripId, createdAt'
-});
-db.version(3).stores({
-  trackSnapshots: 'id, tripId, segmentId, [tripId+segmentId], [segmentId+seq]'
-}).upgrade((tx) => tx.table('trips').toCollection().modify((trip) => {
-  if (trip.schemaVersion == null) trip.schemaVersion = TRIP_SCHEMA_VERSION;
-}));
+for (const migration of DATABASE_MIGRATIONS) {
+  const version = db.version(migration.version).stores(migration.stores);
+  if (migration.upgrade) version.upgrade(migration.upgrade);
+}
+db.on?.('versionchange', () => db.close());
 
 export const CHUNK_SIZE = 400;
 
@@ -373,22 +363,24 @@ export async function eraseAll() {
 
 /** Integrity check: isolate chunks referencing missing segments/trips. */
 export async function isolateDamaged() {
-  const trips = new Set((await db.trips.toArray()).map((t) => t.id));
-  const segs = new Map((await db.segments.toArray()).map((s) => [s.id, s.tripId]));
-  let removed = 0;
-  const badChunks = [];
-  await db.trackChunks.each((c) => {
-    if (!trips.has(c.tripId) || segs.get(c.segmentId) !== c.tripId || !Array.isArray(c.points)) badChunks.push(c.id);
+  return db.transaction('rw', [db.trips, db.segments, db.trackChunks, db.trackSnapshots], async () => {
+    const trips = new Set((await db.trips.toArray()).map((t) => t.id));
+    const segs = new Map((await db.segments.toArray()).map((s) => [s.id, s.tripId]));
+    const badSegs = [];
+    await db.segments.each((s) => { if (!trips.has(s.tripId)) badSegs.push(s.id); });
+    const removedSegments = new Set(badSegs);
+    const badChunks = [];
+    await db.trackChunks.each((c) => {
+      if (!trips.has(c.tripId) || segs.get(c.segmentId) !== c.tripId || !Array.isArray(c.points)) badChunks.push(c.id);
+    });
+    const badSnapshots = [];
+    await db.trackSnapshots.each((snapshot) => {
+      if (!trips.has(snapshot.tripId) || !segs.has(snapshot.segmentId) || removedSegments.has(snapshot.segmentId)
+        || segs.get(snapshot.segmentId) !== snapshot.tripId || !Array.isArray(snapshot.points)) badSnapshots.push(snapshot.id);
+    });
+    if (badChunks.length) await db.trackChunks.bulkDelete(badChunks);
+    if (badSegs.length) await db.segments.bulkDelete(badSegs);
+    if (badSnapshots.length) await db.trackSnapshots.bulkDelete(badSnapshots);
+    return badChunks.length + badSegs.length + badSnapshots.length;
   });
-  if (badChunks.length) { await db.trackChunks.bulkDelete(badChunks); removed += badChunks.length; }
-  const badSegs = [];
-  await db.segments.each((s) => { if (!trips.has(s.tripId)) badSegs.push(s.id); });
-  if (badSegs.length) { await db.segments.bulkDelete(badSegs); removed += badSegs.length; }
-  const badSnapshots = [];
-  await db.trackSnapshots.each((snapshot) => {
-    if (!trips.has(snapshot.tripId) || !segs.has(snapshot.segmentId)
-      || segs.get(snapshot.segmentId) !== snapshot.tripId || !Array.isArray(snapshot.points)) badSnapshots.push(snapshot.id);
-  });
-  if (badSnapshots.length) { await db.trackSnapshots.bulkDelete(badSnapshots); removed += badSnapshots.length; }
-  return removed;
 }

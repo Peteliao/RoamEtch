@@ -8,6 +8,7 @@ import * as themeCore from './core/theme';
 import { on as busOn } from './core/events';
 import { isolateDamaged, createTrip, addSegment, appendPoints, addWaypoint } from './core/store';
 import * as storeCore from './core/store';
+import * as migrationCore from './core/migrations';
 import * as recorderCore from './core/recorder';
 import * as simulationCore from './core/simulation';
 import * as rewalkCore from './core/rewalk';
@@ -185,8 +186,25 @@ async function boot() {
   bootSub && (bootSub.textContent = t('boot.region'));
   initRegion();
 
-  // theme (manual or auto by sunrise/sunset)
+  const preflight = await migrationCore.preflightDatabase();
+  if (preflight.blocking) throw migrationCore.migrationErrorFromPreflight(preflight);
+  diag('store', 'database preflight', {
+    fromVersion: preflight.fromVersion, toVersion: preflight.toVersion,
+    needsUpgrade: preflight.needsUpgrade, skipped: preflight.skipped,
+    issues: preflight.issues.reduce((sum, issue) => sum + issue.count, 0)
+  });
+  await storeCore.db.open();
+  const migration = await migrationCore.verifyDatabaseMigration(storeCore.db, preflight);
+
+  // Theme initialization reads the latest trip, so it must follow migration checks.
   await themeCore.initTheme();
+
+  diag('store', migration.skipped ? 'database preflight skipped' : migration.needsUpgrade ? 'database migrated' : 'database current', {
+    fromVersion: migration.fromVersion, toVersion: migration.toVersion, verified: migration.verified
+  });
+  if (preflight.issues.length) {
+    toast(t('boot.migrationAdvisory', { n: preflight.issues.reduce((sum, issue) => sum + issue.count, 0) }), 'warn', 6000);
+  }
 
   // integrity: isolate damaged rows before UI loads
   try {
@@ -206,7 +224,7 @@ async function boot() {
   document.getElementById('boot-splash')?.remove();
   diag('boot', 'app ready', { lang: navigator.language });
   // debug handle for diagnostics & acceptance testing (spec: debuggability)
-  window.__lt = { recorder: recorderCore, simulation: simulationCore, store: storeCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, backup: backupCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore, updates: { show: showUpdateNotice } };
+  window.__lt = { recorder: recorderCore, simulation: simulationCore, store: storeCore, migration: migrationCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, backup: backupCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore, updates: { show: showUpdateNotice } };
 
   // Live fragment imports. A meet invite takes precedence when both coexist.
   const hasMeetFragment = /[#&]meet=/.test(location.hash);
@@ -279,5 +297,15 @@ async function boot() {
 boot().catch((e) => {
   console.error('boot failed', e);
   const sub = document.getElementById('boot-sub');
-  if (sub) sub.textContent = 'Boot failed: ' + (e?.message || e);
+  if (!sub) return;
+  if (e?.name === 'DatabaseMigrationError') {
+    const title = e.code === 'future-database-version' || e.code === 'future-trip-schema-version'
+      ? t('boot.migrationFuture')
+      : e.code === 'invalid-trip-schema-version'
+        ? t('boot.migrationInvalid')
+        : t('boot.migrationFailed');
+    sub.textContent = `${title}\n${t('boot.migrationRecovery')}`;
+  } else {
+    sub.textContent = 'Boot failed: ' + (e?.message || e);
+  }
 });

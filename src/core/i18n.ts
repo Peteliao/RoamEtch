@@ -11,7 +11,14 @@ const zh = {
     scan: '扫码体验 RoamEtch迹刻',
     brandLine: '免费使用 · 无需注册 · 数据只存本机'
   },
-  boot: { init: '正在初始化…', region: '识别服务环境…' },
+  boot: {
+    init: '正在初始化…', region: '识别服务环境…',
+    migrationAdvisory: '升级前发现 {{n}} 项数据提示，原始记录已保留',
+    migrationFailed: '数据库升级或校验失败，未清除任何行程数据。',
+    migrationFuture: '此数据由更新版本创建，请使用对应版本打开。',
+    migrationInvalid: '检测到无效的行程数据版本，升级已中止。',
+    migrationRecovery: '请保留现场并重新加载；若仍失败，请使用原版本导出备份或通过已验证备份恢复。'
+  },
   tabs: { record: '记录', meet: '组队', trips: '行程', analysis: '分析', export: '分享', settings: '设置' },
   common: {
     ok: '确定', cancel: '取消', save: '保存', delete: '删除', edit: '编辑', close: '关闭',
@@ -1051,7 +1058,14 @@ const en = {
     scan: 'Scan to try RoamEtch',
     brandLine: 'Free · No sign-up · Data stays on this device'
   },
-  boot: { init: 'Initializing…', region: 'Detecting service region…' },
+  boot: {
+    init: 'Initializing…', region: 'Detecting service region…',
+    migrationAdvisory: '{{n}} data finding(s) before upgrade; original records were kept',
+    migrationFailed: 'Database upgrade or verification failed; no trip data was cleared.',
+    migrationFuture: 'This data was created by a newer version; open it with that version.',
+    migrationInvalid: 'An invalid trip data version was found; the upgrade was stopped.',
+    migrationRecovery: 'Keep the data and reload. If it still fails, export a backup with the previous version or restore a verified backup.'
+  },
   tabs: { record: 'Record', meet: 'Meet', trips: 'Trips', analysis: 'Analysis', export: 'Share', settings: 'Settings' },
   common: {
     ok: 'OK', cancel: 'Cancel', save: 'Save', delete: 'Delete', edit: 'Edit', close: 'Close',
