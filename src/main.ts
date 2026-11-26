@@ -9,6 +9,7 @@ import { on as busOn } from './core/events';
 import { isolateDamaged, createTrip, addSegment, appendPoints, addWaypoint } from './core/store';
 import * as storeCore from './core/store';
 import * as recorderCore from './core/recorder';
+import * as simulationCore from './core/simulation';
 import * as rewalkCore from './core/rewalk';
 import * as batchCore from './core/batch';
 import * as backupCore from './core/backup';
@@ -205,7 +206,7 @@ async function boot() {
   document.getElementById('boot-splash')?.remove();
   diag('boot', 'app ready', { lang: navigator.language });
   // debug handle for diagnostics & acceptance testing (spec: debuggability)
-  window.__lt = { recorder: recorderCore, store: storeCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, backup: backupCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore, updates: { show: showUpdateNotice } };
+  window.__lt = { recorder: recorderCore, simulation: simulationCore, store: storeCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, backup: backupCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore, updates: { show: showUpdateNotice } };
 
   // Live fragment imports. A meet invite takes precedence when both coexist.
   const hasMeetFragment = /[#&]meet=/.test(location.hash);
@@ -250,9 +251,17 @@ async function boot() {
       } catch (e) { console.warn('demo load failed', e); }
     } else if (entry.get('sim') === '1') {
       try {
-        const { startPlayback } = await import('./core/simulator');
+        const simulator = await import('./core/simulator');
         shell.navigate('record');
-        await startPlayback({});
+        if (entry.get('scenario')) {
+          const durationMs = Number(entry.get('duration'));
+          await simulator.startScenario({
+            scenario: entry.get('scenario') as (typeof simulationCore.SIMULATION_SCENARIOS)[number],
+            ...(Number.isFinite(durationMs) && durationMs > 0 ? { durationMs } : {})
+          });
+        } else {
+          await simulator.startPlayback({});
+        }
       } catch (e) { console.warn('sim playback failed', e); }
     }
   }

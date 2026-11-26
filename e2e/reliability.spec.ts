@@ -285,3 +285,128 @@ test('temporary location loss stays recording and recovers automatically', async
   expect(await page.evaluate(() => window.__lt.recorder.rec.status)).toBe('recording');
   await page.evaluate(() => window.__lt.recorder.stopRecording());
 });
+
+test('mixed GPS scenarios persist through the real recorder and split long gaps', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await blockExternal(page);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+  await page.exposeFunction('__simulationNetwork', async (online: boolean) => {
+    await page.context().setOffline(!online);
+  });
+
+  const result = await page.evaluate(async () => {
+    const { recorder, store, simulation } = (window as any).__lt;
+    const started = await recorder.startRecording({ name: '混合轨迹模拟验收', activity: 'hike', simulated: true });
+    if (!started) throw new Error('simulated recording did not start');
+    const eventTypes: string[] = [];
+    try {
+      const run = await simulation.runSimulation({
+        scenario: 'mixed', durationMs: 60 * 60_000, sampleMs: 10_000, startTime: Date.now(), seed: 7
+      }, {
+        onFix: (fix) => recorder.handleFix(fix),
+        onEvent: async (event) => {
+          eventTypes.push(event.type);
+          if (event.type === 'network-offline' || event.type === 'network-online') {
+            await (window as any).__simulationNetwork(event.type === 'network-online');
+          }
+          if (event.type === 'background-suspend' || event.type === 'background-resume') {
+            Object.defineProperty(document, 'visibilityState', {
+              configurable: true,
+              get: () => event.type === 'background-suspend' ? 'hidden' : 'visible'
+            });
+            document.dispatchEvent(new Event('visibilitychange'));
+          }
+        }
+      });
+      const during = {
+        status: recorder.rec.status,
+        filteredCount: recorder.rec.filteredCount,
+        stillMs: recorder.rec.live?.stillMs || 0,
+        segCount: recorder.rec.live?.segCount || 0
+      };
+      await recorder.flushBuffer();
+      const tripId = recorder.rec.tripId;
+      const track = await store.loadTripTrack(tripId);
+      const points = track.segments.flatMap((segment) => segment.points);
+      const stored = {
+        segments: track.segments.length,
+        points: points.length,
+        maxAlt: Math.max(...points.map((point) => point.alt)),
+        firstT: points[0]?.t,
+        lastT: points.at(-1)?.t
+      };
+      const stopped = await recorder.stopRecording();
+      const trip = stopped ? await store.getTrip(stopped) : null;
+      if (stopped) await store.deleteTrip(stopped);
+      return { run, during, stored, eventTypes, stopped: Boolean(stopped), status: trip?.status };
+    } finally {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+      if (recorder.rec.status === 'recording') await recorder.stopRecording();
+    }
+  });
+
+  expect(result.stopped).toBe(true);
+  expect(result.status).toBe('finished');
+  expect(result.during.status).toBe('recording');
+  expect(result.during.filteredCount).toBeGreaterThan(0);
+  expect(result.during.stillMs).toBeGreaterThan(0);
+  expect(result.during.segCount).toBeGreaterThanOrEqual(3);
+  expect(result.run.fixes).toBeGreaterThan(250);
+  expect(result.stored.segments).toBeGreaterThanOrEqual(3);
+  expect(result.stored.points).toBeGreaterThan(150);
+  expect(result.stored.points).toBeLessThan(result.run.fixes);
+  expect(result.stored.maxAlt).toBeGreaterThan(240);
+  expect(result.run.lastFixT - result.run.firstFixT).toBe(60 * 60_000);
+  expect(result.stored.lastT - result.stored.firstT).toBeGreaterThan(50 * 60_000);
+  expect(result.eventTypes).toEqual(expect.arrayContaining([
+    'gps-drift', 'location-loss', 'location-restored', 'altitude-spike', 'stationary',
+    'resume-motion', 'sudden-stop', 'background-suspend', 'background-resume',
+    'network-offline', 'network-online'
+  ]));
+  expect(pageErrors).toEqual([]);
+});
+
+test('an accelerated eight-hour hike persists every fix without real-time waiting', async ({ page }) => {
+  test.setTimeout(120_000);
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await blockExternal(page);
+  await page.goto('/');
+  await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
+
+  const result = await page.evaluate(async () => {
+    const { recorder, store, simulation } = (window as any).__lt;
+    const started = await recorder.startRecording({ name: '八小时加速录制验收', activity: 'hike', simulated: true });
+    if (!started) throw new Error('simulated recording did not start');
+    try {
+      const run = await simulation.runSimulation({
+        scenario: 'hike', durationMs: 8 * 60 * 60_000, sampleMs: 10_000, startTime: Date.now(), seed: 4
+      }, {
+        onFix: (fix) => recorder.handleFix(fix)
+      });
+      await recorder.flushBuffer();
+      const tripId = recorder.rec.tripId;
+      const track = await store.loadTripTrack(tripId);
+      const points = track.segments.flatMap((segment) => segment.points);
+      const stored = {
+        segments: track.segments.length,
+        points: points.length,
+        duration: points.at(-1).t - points[0].t,
+        chunks: await store.db.trackChunks.where('tripId').equals(tripId).count()
+      };
+      const stopped = await recorder.stopRecording();
+      if (stopped) await store.deleteTrip(stopped);
+      return { run, stored, stopped: Boolean(stopped) };
+    } finally {
+      if (recorder.rec.status === 'recording') await recorder.stopRecording();
+    }
+  });
+
+  expect(result.stopped).toBe(true);
+  expect(result.run.fixes).toBe(2881);
+  expect(result.stored).toMatchObject({ segments: 1, points: 2881, duration: 8 * 60 * 60_000 });
+  expect(result.stored.chunks).toBeGreaterThan(1);
+  expect(pageErrors).toEqual([]);
+});

@@ -4,6 +4,21 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.2.3] - 2026-11-26
+
+### Added
+
+- Added deterministic GPS scenarios for hiking, cycling, driving, drift, location
+  loss, altitude spikes, stationary periods, sudden stops, background suspension,
+  and network switching.
+- Added accelerated scenario playback through the real recorder, with 4/8-hour
+  recording coverage and 100k/500k/1M-point generation and statistics benchmarks.
+
+### Changed
+
+- Exposed simulation tools through the diagnostics harness and the
+  `?sim=1&scenario=...` entry point while preserving built-in GPX demo playback.
+
 ## [3.2.2] - 2026-11-26
 
 ### Changed

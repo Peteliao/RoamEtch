@@ -7,6 +7,7 @@ import { get } from './settings';
 import { emit } from './events';
 import { t } from './i18n';
 import { buildDemoPoints } from './demo';
+import { normalizeSimulationOptions, simulateTrack, type SimulationOptions } from './simulation';
 
 let timer = null;
 let playing = false;
@@ -76,3 +77,59 @@ export async function finishPlayback() {
 }
 
 export function stopPlayback() { return finishPlayback(); }
+
+export interface ScenarioPlaybackOptions extends SimulationOptions {
+  name?: string;
+  activity?: string;
+  playbackSpeed?: number;
+}
+
+export async function startScenario(options: ScenarioPlaybackOptions = {}) {
+  if (playing) return false;
+  const config = normalizeSimulationOptions(options);
+  const iterator = simulateTrack(config)[Symbol.iterator]();
+  const activity = options.activity || (config.scenario === 'cycle' ? 'bike' : config.scenario === 'drive' ? 'drive' : 'hike');
+  const ok = await startRecording({
+    simulated: true,
+    name: options.name || `${t('record.simRecording')} · ${config.scenario}`,
+    activity
+  });
+  if (!ok) return false;
+  playing = true;
+  emit('sim:started', { scenario: config.scenario });
+  const speed = Math.max(1, options.playbackSpeed || get('sim').playbackSpeed || 20);
+  const wall0 = Date.now();
+  let lastT = config.startTime;
+  let count = 0;
+  const feedNext = () => {
+    if (!playing) return;
+    let step;
+    try {
+      step = iterator.next();
+    } catch (error) {
+      console.error('scenario playback failed', error);
+      void finishPlayback();
+      return;
+    }
+    if (step.done) {
+      void finishPlayback();
+      return;
+    }
+    if (step.value.kind === 'event') {
+      emit('sim:event', step.value.event);
+      timer = setTimeout(feedNext, 0);
+      return;
+    }
+    const fix = step.value.fix;
+    const delay = Math.max(16, (fix.t - lastT) / speed);
+    lastT = fix.t;
+    void handleFix({ ...fix, t: wall0 + (fix.t - config.startTime) }).catch((error) => {
+      console.error('scenario fix failed', error);
+    });
+    count++;
+    emit('sim:progress', { i: count, scenario: config.scenario });
+    timer = setTimeout(feedNext, delay);
+  };
+  timer = setTimeout(feedNext, 300);
+  return true;
+}
