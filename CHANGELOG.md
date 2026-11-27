@@ -4,6 +4,15 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.7.1] - 2026-11-27
+
+### Security
+
+- Overrode the build-time `glob` dependency of `workbox-build` to 14.0.6 so its
+  transitive `minimatch` resolves to 11.0.9, resolving the Dependabot
+  GHSA-g3hv-75wg-m249 globparts amplification advisory. `npm audit` reports zero
+  vulnerabilities and PWA precache generation was rebuilt and verified.
+
 ## [3.7.0] - 2026-11-27
 
 ### Added

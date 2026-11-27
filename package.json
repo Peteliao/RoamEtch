@@ -1,7 +1,7 @@
 {
   "name": "roametch",
   "private": true,
-  "version": "3.7.0",
+  "version": "3.7.1",
   "type": "module",
   "license": "GPL-3.0-only",
   "description": "Pure-frontend trip recorder & analyzer with dual-region (CN/Global) adaptive service routing",
@@ -45,5 +45,10 @@
     "vite": "^6.3.5",
     "vite-plugin-pwa": "^1.0.0",
     "vitest": "^5.1.1"
+  },
+  "overrides": {
+    "workbox-build": {
+      "glob": "^14.0.6"
+    }
   }
 }
