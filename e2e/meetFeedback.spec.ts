@@ -125,6 +125,28 @@ test('remote chat feedback and proximity map visuals work in the browser', async
     await expect.poll(() => map.evaluate(() => window.__lt.shell.getViews().meet.getMap().map.isMoving())).toBe(false);
     const nearZoom = await map.evaluate(() => window.__lt.shell.getViews().meet.getMap().map.getZoom());
     expect(nearZoom).toBeGreaterThan(farZoom);
+
+    await map.evaluate(() => {
+      const track = window.__lt.shell.getViews().meet.getMap();
+      track.setMeetData({
+        self: { id: 'host', name: '发起人', isHost: true, color: '#f5b942', hasFix: true, lat: 31, lon: 121, networkStatus: 'online', positionStatus: 'fresh', lastFixAt: Date.now(), stale: false },
+        peers: [{ id: 'member', name: '队员', isHost: false, color: '#2bcda7', hasFix: true, lat: 31.03, lon: 121.03, networkStatus: 'online', positionStatus: 'fresh', lastFixAt: Date.now(), stale: false }]
+      });
+      track.fitMeet(70, true);
+    });
+    await page.waitForTimeout(1000);
+    const fitted = await map.evaluate(() => {
+      const track = window.__lt.shell.getViews().meet.getMap();
+      const padding = track.map.getPadding();
+      const markers = [track.posMarker, ...[...track.meetMarkers.values()].map((entry) => entry.marker)];
+      const points = markers.map((marker) => track.map.project(marker.getLngLat()));
+      return {
+        inside: points.every((point) => point.x >= padding.left - 1 && point.x <= track.container.clientWidth - padding.right + 1
+          && point.y >= padding.top - 1 && point.y <= track.container.clientHeight - padding.bottom + 1),
+        points: points.map((point) => ({ x: Math.round(point.x), y: Math.round(point.y) }))
+      };
+    });
+    expect(fitted.inside).toBe(true);
   } finally {
     await page.evaluate(() => window.__lt.meet.leave()).catch(() => {});
   }

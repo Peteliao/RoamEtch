@@ -152,7 +152,7 @@ export function createShell(root) {
     const validated: Record<string, any> = {};
     if (typeof normalized.detail === 'boolean') validated.detail = normalized.detail;
     if (typeof normalized.tripId === 'string' && normalized.tripId) validated.tripId = normalized.tripId;
-    if (['overview', 'data', 'share'].includes(normalized.section)) validated.section = normalized.section;
+    if (['overview', 'data', 'story', 'share'].includes(normalized.section)) validated.section = normalized.section;
     if (normalized.fit === true) validated.fit = true;
     if (typeof normalized.anchor === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(normalized.anchor)) validated.anchor = normalized.anchor;
     if (name === 'analysis' || name === 'export') {

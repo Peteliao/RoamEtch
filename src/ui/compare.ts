@@ -1,5 +1,5 @@
 import { t } from '../core/i18n';
-import { loadTripTrack } from '../core/store';
+import { routeRepository } from '../core/routeRepository';
 import { fmtAltitude, fmtDistance, fmtDuration, fmtPace, fmtSpeed, wgs84TrackBounds } from '../core/geo';
 import { get } from '../core/settings';
 import { compareTracksAsync } from '../core/workerBridge';
@@ -338,12 +338,18 @@ export function openTrackComparison(trips, initialAId = null) {
 
   function renderMap(trackA, trackB) {
     if (closed) return;
-    if (!map) map = new TrackMap(mapBox, { compact: true, preserveDrawingBuffer: false }).init([116.4, 39.9], 10);
+    const segments = [...(trackA.segments || []), ...(trackB.segments || [])];
+    const bbox = wgs84TrackBounds(segments);
+    if (!map) {
+      const center = bbox
+        ? [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2]
+        : [116.4, 39.9];
+      map = new TrackMap(mapBox, { compact: true, preserveDrawingBuffer: false }).init(center, bbox ? 12 : 10);
+    }
     map.setOverlayTracks([
       { id: trackA.id, name: trackA.name, color: '#5bb8ff', opacity: 0.95, segments: trackA.segments },
       { id: trackB.id, name: trackB.name, color: '#ffb454', opacity: 0.95, segments: trackB.segments }
     ]);
-    const bbox = wgs84TrackBounds([trackA, trackB]);
     if (bbox) {
       if (bbox[0] === bbox[2] && bbox[1] === bbox[3]) map.flyTo(bbox[1], bbox[0], 15);
       else map.fitWgs84Bounds(bbox);
@@ -362,11 +368,15 @@ export function openTrackComparison(trips, initialAId = null) {
       const value = result.gpsQuality[side];
       return `${value.score == null ? '—' : value.score}/100 · ${value.avgAcc == null ? t('analysis.qualityNoAcc') : `${t('analysis.qualityAvgAcc')} ${value.avgAcc.toFixed(1)}m`}`;
     };
-    resultBox.replaceChildren(
+    const mapSection = el('section', { class: 'compare-section compare-map-section' },
+      el('h3', {}, t('compare.overlayTitle')),
+      el('p', { class: 'small faint compare-map-hint' }, t('compare.overlayHint')),
+      mapBox);
+    const content = [
       el('div', { class: 'compare-legend' },
         el('span', {}, el('i', { style: { background: '#5bb8ff' } }), `A · ${trackA.name || t('compare.untitled')}`),
         el('span', {}, el('i', { style: { background: '#ffb454' } }), `B · ${trackB.name || t('compare.untitled')}`)),
-      mapBox,
+      mapSection,
       el('div', { class: 'compare-summaries' },
         summaryCard(t('compare.forward'), result.summaries.forward, units, result.direction === 'forward'),
         summaryCard(t('compare.reverse'), result.summaries.reverse, units, result.direction === 'reverse')),
@@ -401,7 +411,9 @@ export function openTrackComparison(trips, initialAId = null) {
       result.errors.length ? el('p', { class: 'small growth-warning' }, t('compare.invalidPoints', { n: result.errors.reduce((sum, error) => sum + error.count, 0) })) : null,
       el('div', { class: 'compare-track-meta' },
         el('span', {}, `A · ${fmtDistance(result.tracks.a.lengthM, units).v}${fmtDistance(result.tracks.a.lengthM, units).u} · ${result.tracks.a.pointCount} ${t('analysis.points')}`),
-        el('span', {}, `B · ${fmtDistance(result.tracks.b.lengthM, units).v}${fmtDistance(result.tracks.b.lengthM, units).u} · ${result.tracks.b.pointCount} ${t('analysis.points')}`)));
+        el('span', {}, `B · ${fmtDistance(result.tracks.b.lengthM, units).v}${fmtDistance(result.tracks.b.lengthM, units).u} · ${result.tracks.b.pointCount} ${t('analysis.points')}`))
+    ].filter((node): node is HTMLElement => Boolean(node));
+    resultBox.replaceChildren(...content);
     const displayA = result.displayTracks?.a ? { ...trackA, segments: result.displayTracks.a } : trackA;
     const displayB = result.displayTracks?.b ? { ...trackB, segments: result.displayTracks.b } : trackB;
     renderMap(displayA, displayB);
@@ -427,13 +439,13 @@ export function openTrackComparison(trips, initialAId = null) {
     resultBox.replaceChildren();
     status.replaceChildren(icon('refresh', 16), t('compare.loading'));
     try {
-      const loadedA = await loadTripTrack(requestedAId);
+      const loadedA = await routeRepository.load(requestedAId);
       throwIfAborted(current.signal);
       if (!loadedA) throw new Error('Trip A unavailable');
       status.replaceChildren(icon('refresh', 16), t('compare.preparing'));
       const trackA = await prepareTrack(loadedA, current.signal);
       throwIfAborted(current.signal);
-      const loadedB = await loadTripTrack(requestedBId);
+      const loadedB = await routeRepository.load(requestedBId);
       throwIfAborted(current.signal);
       if (!loadedB) throw new Error('Trip B unavailable');
       const trackB = await prepareTrack(loadedB, current.signal);

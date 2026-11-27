@@ -135,15 +135,15 @@ function randomClientId() {
   return 'tm' + [...bytes].map((b) => b.toString(36)).join('').slice(0, 18);
 }
 
-export function publicMqttUrls() {
-  const configured = String(get('meetMqttUrl') || '').trim();
+export function publicMqttUrls(configured = String(get('meetMqttUrl') || '').trim()) {
   if (configured && configured !== LEGACY_PUBLIC_MQTT_URL) return [configured];
   return [...PUBLIC_MQTT_URLS];
 }
 
-function topicFor(roomId: string) {
-  const prefix = String(get('meetMqttPrefix') || 'roametch/v2/meet').trim().replace(/^\/+|\/+$/g, '');
-  return `${prefix || 'roametch/v2/meet'}/${roomId}`;
+function topicFor(roomId: string, prefixValue?: string) {
+  const fallback = 'roametch/v2/meet';
+  const prefix = String(prefixValue ?? get('meetMqttPrefix') ?? fallback).trim().replace(/^\/+|\/+$/g, '');
+  return `${prefix || fallback}/${roomId}`;
 }
 
 class MqttRelay implements MeetRelay {
@@ -432,10 +432,10 @@ class WebSocketRelay implements MeetRelay {
   attempt = 0;
   reconnectTimer: any = null;
 
-  constructor(roomId: string, handlers: RelayHandlers) {
+  constructor(roomId: string, handlers: RelayHandlers, templateValue?: string) {
     this.roomId = roomId;
     this.handlers = handlers;
-    this.template = String(get('meetWsUrl') || '').trim();
+    this.template = String(templateValue ?? get('meetWsUrl') ?? '').trim();
     if (!this.template || !/\{room\}/.test(this.template) || !/^wss?:\/\//i.test(this.template)) {
       this.handlers.onState('error', { reason: 'ws-url' });
       return;
@@ -509,11 +509,20 @@ class WebSocketRelay implements MeetRelay {
   }
 }
 
-export function createMeetRelay(roomId: string, handlers: RelayHandlers): MeetRelay {
-  if (get('meetRelayMode') === 'ws') return new WebSocketRelay(roomId, handlers);
-  const urls = publicMqttUrls();
-  if (urls.length === 1) return new MqttRelay(topicFor(roomId), handlers, urls[0]);
-  return new PublicMqttRelay(topicFor(roomId), handlers, urls);
+export interface RelayOptions {
+  mode?: 'mqtt' | 'ws';
+  mqttUrls?: string[];
+  mqttPrefix?: string;
+  wsUrl?: string;
+}
+
+export function createMeetRelay(roomId: string, handlers: RelayHandlers, options: RelayOptions = {}): MeetRelay {
+  const mode = options.mode ?? get('meetRelayMode');
+  if (mode === 'ws') return new WebSocketRelay(roomId, handlers, options.wsUrl);
+  const urls = options.mqttUrls ?? publicMqttUrls();
+  const topic = topicFor(roomId, options.mqttPrefix);
+  if (urls.length === 1) return new MqttRelay(topic, handlers, urls[0]);
+  return new PublicMqttRelay(topic, handlers, urls);
 }
 
 /** Reserved for the future WebRTC transport; exposes the locally stored ICE config. */

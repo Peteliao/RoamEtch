@@ -1,58 +1,71 @@
-// Background compute: stats, distance splits, simplification, batch coordinate transform.
-import { computeStats } from '../core/stats';
-import { computeDistanceSplits } from '../core/distanceSplits';
-import { simplify } from '../core/geo';
-import { wgs84ToGcj02, gcj02ToWgs84 } from '../core/coords';
-import { previewTrackCleanup } from '../core/gpsQuality';
-import { buildTrackRepairPreview } from '../core/trackRepair';
-import { buildGPX } from '../core/gpx';
-import { buildHeatmap } from '../core/heatmap';
-import { compareTracks } from '../core/trackComparison';
+// Background compute: stats, splits, simplification, formats, annual stats,
+// backup archive building and streaming GPX parsing.
+import { streamGPX } from '../core/gpxStream';
 import { decodeWorkerPayload } from '../core/workerPayload';
+import { runComputeTask } from './computeTasks';
 
-self.onmessage = (e) => {
-  const { id, type } = e.data;
-  const payload = decodeWorkerPayload(e.data.payload);
+const streamAcks = new Map<string, Map<number, () => void>>();
+
+function errorMessage(error: any) {
+  return String(error?.message || error);
+}
+
+function postFailure(id: string | number, session: string, error: any) {
+  self.postMessage({
+    id, session, ok: false,
+    error: errorMessage(error),
+    name: error?.name,
+    code: error?.code,
+    stack: error?.stack
+  });
+}
+
+async function runStream(id: string | number, session: string, file: Blob, singlePass: boolean) {
+  const key = `${id}:${session}`;
+  const acks = new Map<number, () => void>();
+  streamAcks.set(key, acks);
+  let seq = 0;
   try {
-    let result;
-    switch (type) {
-      case 'stats':
-        result = computeStats(payload.segments, payload.opts);
-        break;
-      case 'splits':
-        result = computeDistanceSplits(payload.segments, payload.intervalM, payload.opts);
-        break;
-      case 'simplify':
-        result = simplify(payload.points, payload.tolerance);
-        break;
-      case 'transform': {
-        const fn = payload.dir === 'toGcj' ? wgs84ToGcj02 : gcj02ToWgs84;
-        result = payload.points.map((p) => {
-          const [lon, lat] = fn(p.lon, p.lat);
-          return { ...p, lon, lat };
-        });
-        break;
-      }
-      case 'cleanup-preview':
-        result = previewTrackCleanup(payload.segments, payload.activity, payload.opts);
-        break;
-      case 'repair-preview':
-        result = buildTrackRepairPreview(payload.segments, payload.activity, payload.opts);
-        break;
-      case 'gpx':
-        result = buildGPX(payload.full);
-        break;
-      case 'heatmap':
-        result = buildHeatmap(payload.trips, payload.opts);
-        break;
-      case 'track-comparison':
-        result = compareTracks(payload.a, payload.b, payload.opts);
-        break;
-      default:
-        throw new Error('unknown task ' + type);
+    const result = await streamGPX(file, async (event) => {
+      const eventSeq = ++seq;
+      const ack = new Promise<void>((resolve) => acks.set(eventSeq, resolve));
+      self.postMessage({ id, session, type: 'gpx-event', seq: eventSeq, event });
+      await ack;
+    }, {
+      singlePass,
+      onProgress: (loaded, total) => self.postMessage({ id, session, type: 'gpx-progress', loaded, total })
+    });
+    self.postMessage({ id, session, ok: true, result });
+  } catch (error) {
+    postFailure(id, session, error);
+  } finally {
+    streamAcks.delete(key);
+  }
+}
+
+self.onmessage = async (e) => {
+  const data = e.data || {};
+  const { id, session, type, ack } = data;
+  if (type == null && ack != null) {
+    streamAcks.get(`${id}:${session}`)?.get(ack)?.();
+    return;
+  }
+  if (type === 'stream-gpx') {
+    await runStream(id, session, data.payload?.file, data.payload?.singlePass !== false);
+    return;
+  }
+  try {
+    const payload = decodeWorkerPayload(data.payload);
+    const result = runComputeTask(type, payload);
+    if (result && typeof result.then === 'function') {
+      result.then(
+        (value: any) => self.postMessage({ id, session, ok: true, result: value }),
+        (err: any) => postFailure(id, session, err)
+      );
+    } else {
+      self.postMessage({ id, session, ok: true, result });
     }
-    self.postMessage({ id, ok: true, result });
   } catch (err) {
-    self.postMessage({ id, ok: false, error: String(err?.message || err) });
+    postFailure(id, session, err);
   }
 };

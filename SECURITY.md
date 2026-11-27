@@ -82,12 +82,15 @@ hosted demo is served from GitHub Pages and is rebuilt on every push to `main`.
 
 ### Meetup end-to-end encryption
 
-Live meetups use protocol v2. The invite is a bearer capability that contains a
-public room id and a high-entropy secret; only the room id reaches the relay.
-Version 1 invites and packets are rejected rather than downgraded. Temporary
-markers, rally points, positions, and chat share the same encrypted envelope.
-Link expiry is signed by the host but does not turn the underlying invite into a
-revocable credential.
+Live meetups use protocol v3 over the v2 wire envelope. The invite is a bearer
+capability that contains a public room id and a high-entropy secret; only the
+room id reaches the relay. Version 1 invites and packets are rejected rather
+than downgraded, and v3 peers must advertise a compatible protocol range,
+feature version, and an ECDH public key. Temporary markers, rally points,
+positions, and chat share the same encrypted envelope. Link expiry is signed by
+the host but does not turn the underlying invite into a revocable credential.
+Membership changes rotate the room-key generation, and each teammate can hide
+their live position from selected teammates.
 
 | Item | Design |
 | --- | --- |
@@ -95,11 +98,15 @@ revocable credential.
 | Invite expiry | Optional `&iexp=<ms>&isig=<hmac>` suffix. The host derives an HMAC-SHA-256 key via HKDF (same invite secret and room binding) and signs `roametch-invite-expiry-v1\|<roomId>\|<exp>`. Joiners reject expired, over-30-day, tampered, or wrong-room parameters. This is advisory link metadata, not revocation: a copied raw invite remains a valid bearer capability. |
 | Room id | 16 random bytes from `crypto.getRandomValues` (128 bits, 22 base64url chars); independent of the secret |
 | Invite secret | 32 random bytes from `crypto.getRandomValues` (256 bits, 43 base64url chars) |
-| Encryption key | `HKDF-SHA-256(ikm = 32-byte secret, salt = "trackmint-meet-v2", info = "aes-256-gcm meet payload v2\|room:<roomId>")`, derived as a non-extractable AES-256-GCM key |
+| Base room key | `HKDF-SHA-256(ikm = 32-byte secret, salt = "trackmint-meet-v2", info = "aes-256-gcm meet payload v2\|room:<roomId>")`, derived as a non-extractable AES-256-GCM key; used to bootstrap `hello` before an epoch secret is received |
 | Cipher | AES-256-GCM |
 | Nonce | 96 bits = 64-bit random per-device prefix + 32-bit monotonic counter; a new prefix is generated for every session, and exhaustion aborts sends |
 | AAD | `"trackmint-meet-v2-aad:" + roomId` |
 | Envelope | `0x02` version byte + 12-byte nonce + ciphertext/tag, base64url-encoded |
+| Protocol negotiation | `hi`/`hello` packets advertise `pmin`/`pmax`, feature version `pv`, and an 87-character base64url ECDH public key. Peers outside protocol 3, older than feature 4, or missing a key are rejected with a `reject` packet and an explicit UI notice; there is no silent downgrade. A later compatible `hi`/`hello` from the same id clears a previous incompatibility notice. |
+| Device keys | Ephemeral ECDH P-256 key per session; the 65-byte raw public key travels only inside encrypted room packets. Pairwise AES-256-GCM keys are derived with HKDF-SHA-256 from the ECDH secret, room id, and lexicographically sorted peer ids, with AAD `roametch-meet-direct-v1`. Pairwise channels carry `rekey` secrets and hidden-location direct packets. |
+| Epoch rotation | The host generates a fresh 32-byte epoch secret on join, leave, kick, or host election and delivers it only inside pairwise `rekey` boxes. Epoch keys are `HKDF-SHA-256(secret, salt = "roametch-meet-epoch-v1\|<roomId>", info = "epoch:<n>\|aes-256-gcm")`; every generation gets a fresh nonce prefix. Removed members receive no new secret. Previous epoch keys are retained for 20 seconds for in-flight packets, then dropped. The base room key is still accepted to bootstrap `hello` and remains a bearer-invite limitation. |
+| Per-teammate visibility | Hiding a teammate stops room-broadcast location, marker, and rally-point packets for the sender. Position updates then go only to other visible teammates as pairwise encrypted `dm` packets. The hidden teammate still sees that you are online, can exchange room chat, and can observe that direct ciphertext is being sent to others, but cannot decrypt its contents. |
 | Ordinary-packet replay protection | Positions, chat, and ordinary control packets carry a per-sender, strictly increasing sequence number. Repeated or older sequences are dropped. Timestamps are a secondary ±5-minute sanity check, and locations also enforce newer sequence ordering. |
 | RTC signaling | The encrypted `k: "rtc"` branch carries message, session, sender and target ids plus type, timestamp and payload. It is processed before the ordinary sequence guard because redundant brokers can reorder signaling independently; misaddressed, malformed, older-than-30-second or over-5-second-future signals are rejected. A 500-entry sender/message-id deduplicator and a 40-signals-per-3-seconds per-sender limiter bound replay and flooding. Outgoing signaling uses a separate bounded queue so it cannot block the location/chat send chain. |
 | Chat dedupe | Random message ids plus a bounded seen-set, in addition to the sender sequence |
@@ -117,10 +124,55 @@ compatibility; changing them would break existing rooms. New installs default to
 The room id is random and carries no key material. A party that observes the
 MQTT topic or WS path learns only that public id and cannot derive the AES key
 from it. The 256-bit invite secret never appears in a topic, URL query, HTTP
-path, or relay log. Anyone who obtains the full invite can decrypt the session
-and must be treated as a room member. The signed expiry can stop honest clients
-from accepting new joins after a deadline, but it cannot remove a member who
-already has the secret, rotate the room key, or erase data on another device.
+path, or relay log. Anyone who obtains the full invite can decrypt the base
+session and must be treated as a room member. The signed expiry can stop honest
+clients from accepting new joins after a deadline, but it cannot remove a
+member who already has the secret or erase data on another device. A kick or
+leave rotates the epoch key so the removed device receives no new generation,
+but the invite remains a bearer capability: if that person still has it and
+rejoins under a new identity, honest clients cannot distinguish them.
+
+### Device-to-device sync
+
+Sync pairs two devices explicitly; there is no account, cloud copy, or
+background transfer.
+
+- The `RMS1.` code is a base64url JSON payload containing a 144-bit random room
+  id, a 256-bit random access secret, a 96-bit session id, the host's ECDSA P-256
+  public JWK, display name, and expiry. Default lifetime is 10 minutes and the
+  parser caps it at 24 hours. The code is intended for QR or trusted paste and
+  should not be posted publicly.
+- Both sides derive a non-extractable AES-256-GCM signal key with HKDF-SHA-256
+  from the access secret, room id salt, and a per-pairing session id. Signaling
+  envelopes carry a fresh 96-bit nonce and are length-bounded. The blind relay
+  sees only the random room id, ciphertext, sizes, timing, and network metadata.
+- After ICE, ledger manifests, records, and media chunks travel only over an
+  ordered WebRTC DataChannel protected by DTLS. STUN sees binding metadata; a
+  configured TURN server can forward the still-encrypted DataChannel bytes. As
+  with any WebRTC connection, both devices may learn each other's public IP
+  addresses during negotiation.
+- Each installation owns an ECDSA P-256 identity key pair. The public-key hash
+  determines the `dev-…` id and a 12-hex-digit grouped fingerprint shown in the
+  UI. A peer hello is accepted only if its room/session/role/timestamp are valid,
+  its public key hashes to its claimed id, and its ECDSA signature over the
+  canonical hello transcript verifies. The first successful pair stores the peer
+  fingerprint (trust on first use); a changed identity raises
+  `sync-identity-changed` and requires explicit removal/re-pairing instead of
+  silently replacing the pin.
+- Records are normalized and hashed with SHA-256 before the manifest; versions
+  use device-id/stamp ordering with tombstones for deletion. Missing records are
+  re-hashed immediately before sending and re-hashed on receipt. Media is capped
+  at 64 MiB per payload, transferred in 16 KiB chunks, length-checked, and
+  verified against SHA-256. A final sorted-ledger digest must match on both sides
+  before the run reports success; partial or cancelled transfers are not written.
+- Wire messages are capped at 384 KiB, manifests at 400 entries per page and
+  1,000,000 entries total, and `want` batches at 2,000 keys. Track rows are
+  limited to 2,000 points. These bounds are enforced on both encode and decode.
+- Options are limited to `trips`, `segments`, `media`, `trackChunks`, and
+  `waypoints`. Settings, backup history, elevation caches, repair snapshots,
+  quarantined rows, and in-progress recordings are outside the ledger. The
+  ledger and identity live in the separate `roametch-sync` IndexedDB; removing a
+  peer or erasing sync state cannot delete `localtrace` trips.
 
 ### On-demand WebRTC originals
 
@@ -178,25 +230,30 @@ network observers.
 
 ### Known limitations / 已知局限
 
-- **No per-sender authentication.** The v2 protocol fixes invite entropy,
-  nonce uniqueness, and replay handling, but anyone who holds the invite can
-  still send packets with an arbitrary display name, colour, sender id, or host
-  claim. Host controls (expiry announcements, kick requests) are cooperative UI
-  features, not a cryptographic access-control boundary. Ephemeral device
-  identity keys, authenticated host authority, and key rotation after a member
-  leaves are the next protocol phase.
+- **No per-sender authentication.** Protocol v3 adds ephemeral ECDH keys, key
+  generations, and replay handling, but it does not sign sender identity.
+  Anyone who holds the invite can still send packets with an arbitrary display
+  name, colour, sender id, or host claim, and can replace their advertised
+  public key. Host controls (expiry announcements, kick requests, epoch
+  rotation) are cooperative protocol features, not a cryptographic identity
+  boundary. Signed device identity and authenticated host authority remain
+  future work.
 - **Host-kick authority depends on the transport.** On the public MQTT broker,
   anyone who knows the room id can subscribe and publish, and the broker offers
   no kick API, so the host has no connection-level authority at all. On a
   self-hosted relay, the operator can close sockets or block an IP, but the
   relay cannot verify which device is the actual host, so such blocks are
-  coarse and affect every member behind the same address. In both cases an
-  in-app kick asks collaborating clients to drop the member; a modified client
-  can ignore it and keep receiving ciphertext.
-- **No forward secrecy.** The invite secret derives one session key. If the
-  invite leaks, ciphertext captured during that session can be decrypted. Reset
-  the invite to create a new room and key. Periodic key ratcheting / MLS is not
-  implemented yet.
+  coarse and affect every member behind the same address. In-app kick marks the
+  id revoked and rotates the epoch so that member receives no new key, but a
+  modified client can ignore the kick, retain what it already decrypted, and —
+  if it still holds the invite — rejoin under a new random id.
+- **Limited forward secrecy.** Epoch rotation limits future access after
+  membership changes, but it is not a full ratchet or MLS. The base room key
+  remains derivable from the invite for `hello` bootstrap, so captured epoch-0
+  traffic is decryptable by anyone who learns the invite. Epoch secrets are
+  random and delivered only in pairwise boxes, but device state and pairwise
+  keys are not protected against later compromise of an endpoint. Reset the
+  invite to create a new room and base key.
 - **Public relay availability.** The default public MQTT nodes
   (`broker-cn.emqx.io`, `broker.emqx.io`, and `mqtt-dashboard.com`) are shared
   test brokers. They can be rate-limited, disconnected, or observed. Connecting
@@ -211,16 +268,34 @@ network observers.
   A TURN fallback can relay encrypted bytes. The setting is off by default and
   does not change the encrypted MQTT/WS path used by location, text, thumbnails,
   and signaling.
+- **Sync is not a backup or an account.** Pairing is manual, both devices must be
+  online, and there is no cloud history, automatic retry, or background sync.
+  Settings, backup history, elevation caches, repair snapshots, quarantine, and
+  unfinished recordings are not transferred. Deleting a trip on one side
+  propagates a tombstone for that record, so keep independent backups.
+- **Sync peer trust is TOFU.** The first pairing pins the peer identity, but the
+  user must verify the displayed fingerprint out of band. A compromised device
+  that pairs first, or a user who ignores a changed fingerprint, cannot be
+  distinguished by the protocol. The access secret is a bearer capability for
+  the pairing window; anyone who obtains the full code can attempt to join.
+- **Sync metadata is visible.** The relay and network observers can see room
+  activity, ciphertext sizes/timing, and IP metadata; record counts or media
+  sizes may be inferred from traffic shape. TURN can see encrypted volume but not
+  contents. Sync is not anonymity.
 - **Not an emergency tool.** Meetup is not SOS, rescue, or safety-critical
   communication. GPS pauses when the OS suspends the browser.
 
 ### Third-party network requests
 
-Map tiles, elevation, place names, and routing services receive the coordinates
-or viewport needed for the feature being used, plus ordinary network metadata.
-Photo EXIF location is stripped before storage. Meetup, sharing, and core
-recording/analysis do not send tracks to a RoamEtch server. See the project
-README for the full data-boundary description.
+Map tiles, elevation, place names, routing services, and Open-Meteo weather
+receive the coordinates or viewport needed for the feature being used, plus
+ordinary network metadata. Weather requests disclose the day and approximate
+location needed for the forecast; cached and manual weather do not. Photo EXIF
+location is stripped before storage. Meetup, device sync, sharing, and core
+recording/analysis do not send tracks to a RoamEtch server. Sync uses a blind
+MQTT/WS relay for encrypted signaling and then a direct WebRTC data channel; if
+TURN is configured, encrypted sync bytes can pass through that operator. See the
+project README for the full data-boundary description.
 
 ## Dependency and cache hygiene
 
@@ -243,7 +318,8 @@ README for the full data-boundary description.
 - 组队邀请同时包含随机房间标识（128 位）与随机密钥（256 位），只存在于 URL `#` 片段与本机内存；中继只看到房间标识与 AES-256-GCM 密文。
 - 房间标识与密钥相互独立，主题/路径不包含邀请密钥；每个会话使用独立 nonce 前缀与单调计数器。普通包按发送者严格递增序号防重放；RTC 信令因多中继可能乱序而单独按发送者/消息 ID 去重，校验 30 秒时效并限制每发送者 3 秒 40 条，使用独立有界发送队列。
 - 旧版 12 位组队码与 v1 数据包会被明确拒绝，不会静默降级；升级后需重新生成邀请。
-- 组队端到端加密目前仍没有发送者身份认证，也没有前向保密；邀请泄露等同于房间内容泄露。设备身份签名、发起人认证、成员变动后的密钥轮换与 MLS/前向保密属于下一阶段。
+- 协议 v3 会协商协议范围，并要求 ECDH 公钥；成员加入、离开或被移除时，发起人通过点对点加密通道轮换房间密钥，被移除成员不会获得新一代密钥，旧密钥仅保留 20 秒处理在途包。位置可按队友逐个隐藏，隐藏后只向其他可见队友发送点对点加密位置包。当前仍没有独立的发送者身份认证，也不是完整前向保密：邀请密钥仍用于 `hello` 引导，持有完整邀请的人可以用新身份重新加入。
+- 跨设备同步通过 `RMS1.` 同步码显式配对，没有账号、云端副本或后台自动同步。同步码包含 144 位随机房间标识、256 位访问密钥、96 位会话标识和发起设备 ECDSA P-256 公钥；中继只看到随机房间与 AES-256-GCM 密文，记录和照片只经 DTLS 加密的 WebRTC 数据通道传输。首次配对固定对方设备身份，身份变化会拒绝并要求重新配对。记录按 SHA-256 增量比对，包含删除墓碑、媒体分片校验和最终清单摘要；取消或失败不会写入未完成记录。打洞会暴露双方公网 IP，STUN/TURN 会收到连接元数据，配置的 TURN 可能转发仍加密的同步字节。同步不是备份，设置、备份历史、海拔缓存、修复快照和进行中的记录不在同步范围。
 - 聊天缩略图在网页内存中压缩后加密发送，原始图片上限 56 KB，加密传输包上限 128 KB；发送冷却 5 秒，接收按发送者限流，仅保留最新 20 张，不写入 IndexedDB 或备份。中继可看到密文大小与时间，但看不到图片内容或可选拍摄坐标。
 - 高清原图默认不传输。用户主动开启并加载后，才建立 DTLS 加密的一对一 WebRTC DataChannel：文件持有者固定为 Offerer，16 KiB 分片、SHA-256 与图片头校验，10 秒建连、30 秒空闲关闭；发送方最多 2 路并发、10 张/50 MB 缓存，接收方最多 4 张/64 MB。原图不经过组队中继、不落盘；但双方设备可见彼此网络 IP，STUN/TURN 可观察连接信息，TURN 还可能转发仍加密的字节。
-- 本机数据不加密，依赖设备解锁；整库备份 ZIP 同样未加密，请妥善保管。请定期导出整库备份。恢复时会把压缩包视为不可信输入：限制大小、条目数、压缩比与点数，解压输入固定为 4 KiB 分块，校验 ZIP 结束记录与中央目录，拒绝异常路径，并在单个事务中写入。普通 ZIP 按条目流式解码；旧版加密信封仍须一次性载入解密。备份历史仅存白名单摘要，不存密码、Blob、路径或坐标，且只能显式清空。漏洞请走私密报告入口。
+- 本机数据不加密，依赖设备解锁；整库备份 ZIP 同样未加密，请妥善保管。请定期导出整库备份。恢复时会把压缩包视为不可信输入：限制大小、条目数、压缩比与点数，解压输入固定为 4 KiB 分块，校验 ZIP 结束记录与中央目录，拒绝异常路径，并在单个事务中写入。普通 ZIP 按条目流式解码；旧版加密信封仍须一次性载入解密。备份历史仅存白名单摘要，不存密码、Blob、路径或坐标，且只能显式清空。天气按天与地点向 Open-Meteo 请求，会发送该天所需的坐标并显示来源、采样时间与联网要求；日出日落由本机离线计算，与天气数据分开。漏洞请走私密报告入口。

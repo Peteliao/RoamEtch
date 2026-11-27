@@ -58,7 +58,11 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
   if (!tripId) { toast(t('analysis.noTrip'), 'warn'); return; }
   const context = captureEdit(tripId, opts.scopeCurrent);
   const wp = isNew
-    ? { lat: wpOrPos.lat, lon: wpOrPos.lon, name: '', desc: '', type: 'custom', time: Date.now(), hidden: false, mediaIds: [], alt: null }
+    ? {
+      lat: wpOrPos.lat, lon: wpOrPos.lon, name: '', desc: '', type: 'custom',
+      time: Number.isFinite(wpOrPos.time) ? wpOrPos.time : Date.now(),
+      hidden: false, mediaIds: [], alt: null
+    }
     : { ...wpOrPos };
   let pendingPhotos = [];   // {key, blob, thumb, width, height}
   let removedMedia = [];
@@ -238,13 +242,13 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
       pushEditAction(context, {
         label: 'wp-add',
         undo: async () => { await store.deleteWaypoint(saved.id); await afterEdit(context); },
-        redo: async () => { await store.db.waypoints.put(saved); await afterEdit(context); }
+        redo: async () => { await store.putWaypoint(saved); await afterEdit(context); }
       });
     } else {
       pushEditAction(context, {
         label: 'wp-edit',
-        undo: async () => { await store.db.waypoints.put(prev); await afterEdit(context); },
-        redo: async () => { await store.db.waypoints.put(saved); await afterEdit(context); }
+        undo: async () => { await store.putWaypoint(prev); await afterEdit(context); },
+        redo: async () => { await store.putWaypoint(saved); await afterEdit(context); }
       });
     }
     m.close();
@@ -282,7 +286,7 @@ export async function deleteWaypointAction(wp, opts: any = {}) {
   if (!isCurrentEdit(context)) return null;
   pushEditAction(context, {
     label: 'wp-del',
-    undo: async () => { await store.db.waypoints.put(waypoint); await afterEdit(context); },
+    undo: async () => { await store.putWaypoint(waypoint); await afterEdit(context); },
     redo: async () => { await store.deleteWaypoint(wp.id); await afterEdit(context); }
   });
   toast(t('wp.deleted'), 'ok');
@@ -388,14 +392,13 @@ export async function splitSegmentAt(segId, idx) {
     undo: async () => {
       if (!isCurrentEdit(context)) return;
       await store.replaceSegmentPoints(segId, context.tripId, before, left);
-      await store.db.trackChunks.where('segmentId').equals(newSeg.id).delete();
-      await store.db.segments.delete(newSeg.id);
+      await store.deleteSegment(newSeg.id);
       await afterEdit(context);
     },
     redo: async () => {
       if (!isCurrentEdit(context)) return;
       await store.replaceSegmentPoints(segId, context.tripId, left, before);
-      await store.db.segments.put(newSeg);
+      await store.restoreSegment(newSeg);
       await store.replaceSegmentPoints(newSeg.id, context.tripId, right, []);
       await afterEdit(context);
     }

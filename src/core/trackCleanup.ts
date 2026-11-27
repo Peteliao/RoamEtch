@@ -4,9 +4,7 @@ import { previewTrackCleanupAsync, previewTrackRepairAsync } from './workerBridg
 import { pushAction } from './history';
 import { emit } from './events';
 import {
-  db, loadTripTrack, loadTrackSnapshot, replaceSegmentPointsInTx,
-  saveTrackSnapshotInTx, saveTrackRepairVersionInTx, loadTrackRepairVersion,
-  updateTripInTx, abortTransactionOnSignal
+  commitTrackEdits, loadTripTrack, loadTrackSnapshot, loadTrackRepairVersion
 } from './store';
 
 function throwIfAborted(signal?: AbortSignal) {
@@ -29,28 +27,11 @@ export async function cleanGpsTrack(tripId, { activity, preview = null, expected
 
   const write = async (useAfter, guard, operationSignal?: AbortSignal) => {
     throwIfAborted(operationSignal);
-    let detachAbort: (() => void) | undefined;
-    try {
-      await db.transaction('rw', [db.trackChunks, db.trackSnapshots, db.segments, db.trips], async (transaction) => {
-        detachAbort = abortTransactionOnSignal(transaction, operationSignal);
-        throwIfAborted(operationSignal);
-        const trip = await db.trips.get(tripId);
-        throwIfAborted(operationSignal);
-        if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
-        if (!trackMatches(await loadTripTrack(tripId, null, { cooperative: false }), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
-        throwIfAborted(operationSignal);
-        if (useAfter) await saveTrackSnapshotInTx(tripId, full.segments);
-        for (const edit of edits) {
-          throwIfAborted(operationSignal);
-          await replaceSegmentPointsInTx(edit.segmentId, tripId, useAfter ? edit.after : edit.before);
-        }
-        throwIfAborted(operationSignal);
-        await updateTripInTx(tripId, { statsCache: null, thumbPoints: null, reportedDistance: null });
-        throwIfAborted(operationSignal);
-      });
-    } finally {
-      detachAbort?.();
-    }
+    await commitTrackEdits(tripId, {
+      edits, useAfter, signal: operationSignal, expectedUpdatedAt: guard.expectedUpdatedAt,
+      verify: (track) => trackMatches(track, guard.segments, guard.allowAdditional),
+      saveSnapshot: useAfter, snapshotSegments: full.segments
+    });
   };
 
   await write(true, { segments: full.segments, expectedUpdatedAt, allowAdditional: false }, signal);
@@ -92,40 +73,23 @@ export async function applyTrackRepair(tripId, { activity, preview, expectedUpda
 
   const write = async (useAfter, guard, operationSignal?: AbortSignal, persistVersion = false) => {
     throwIfAborted(operationSignal);
-    let detachAbort: (() => void) | undefined;
-    try {
-      return await db.transaction('rw', [db.trackChunks, db.trackSnapshots, db.segments, db.trips], async (transaction) => {
-        detachAbort = abortTransactionOnSignal(transaction, operationSignal);
-        throwIfAborted(operationSignal);
-        const trip = await db.trips.get(tripId);
-        throwIfAborted(operationSignal);
-        if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
-        if (!trackMatches(await loadTripTrack(tripId, null, { cooperative: false }), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
-        throwIfAborted(operationSignal);
-        if (useAfter && edits.length) await saveTrackSnapshotInTx(tripId, full.segments);
-        for (const edit of edits) {
-          throwIfAborted(operationSignal);
-          await replaceSegmentPointsInTx(edit.segmentId, tripId, useAfter ? edit.after : edit.before);
+    return commitTrackEdits(tripId, {
+      edits, useAfter, signal: operationSignal, expectedUpdatedAt: guard.expectedUpdatedAt,
+      verify: (track) => trackMatches(track, guard.segments, guard.allowAdditional),
+      saveSnapshot: useAfter && !!edits.length, snapshotSegments: full.segments,
+      persistVersion: useAfter && persistVersion ? {
+        segments: repairedSegments,
+        metadata: {
+          sourceUpdatedAt: full.trip.updatedAt,
+          sourceFingerprint: current.sourceFingerprint,
+          previewId: current.previewId,
+          selectedCategories: current.selected,
+          summary: current.summary,
+          metrics: current.metrics.after,
+          semantics: current.metrics.semantics
         }
-        throwIfAborted(operationSignal);
-        await updateTripInTx(tripId, { statsCache: null, thumbPoints: null, reportedDistance: null });
-        throwIfAborted(operationSignal);
-        if (useAfter && persistVersion) {
-          return saveTrackRepairVersionInTx(tripId, repairedSegments, {
-            sourceUpdatedAt: full.trip.updatedAt,
-            sourceFingerprint: current.sourceFingerprint,
-            previewId: current.previewId,
-            selectedCategories: current.selected,
-            summary: current.summary,
-            metrics: current.metrics.after,
-            semantics: current.metrics.semantics
-          });
-        }
-        return null;
-      });
-    } finally {
-      detachAbort?.();
-    }
+      } : null
+    });
   };
 
   const saved = await write(true, { segments: full.segments, expectedUpdatedAt, allowAdditional: false }, signal, true);
@@ -166,29 +130,11 @@ export async function restoreTrackRepairVersion(tripId, versionId, { expectedUpd
 
   const write = async (useVersion, guard, operationSignal?: AbortSignal) => {
     throwIfAborted(operationSignal);
-    let detachAbort: (() => void) | undefined;
-    try {
-      await db.transaction('rw', [db.trackChunks, db.trackSnapshots, db.segments, db.trips], async (transaction) => {
-        detachAbort = abortTransactionOnSignal(transaction, operationSignal);
-        throwIfAborted(operationSignal);
-        const trip = await db.trips.get(tripId);
-        throwIfAborted(operationSignal);
-        if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
-        if (!trackMatches(await loadTripTrack(tripId, null, { cooperative: false }), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
-        for (const edit of edits) {
-          throwIfAborted(operationSignal);
-          await replaceSegmentPointsInTx(edit.segmentId, tripId, useVersion ? edit.after : edit.before);
-        }
-        throwIfAborted(operationSignal);
-        await updateTripInTx(tripId, {
-          statsCache: null, thumbPoints: null, reportedDistance: null,
-          ...(useVersion ? { gpsRestoredAt: Date.now() } : {})
-        });
-        throwIfAborted(operationSignal);
-      });
-    } finally {
-      detachAbort?.();
-    }
+    await commitTrackEdits(tripId, {
+      edits, useAfter: useVersion, signal: operationSignal, expectedUpdatedAt: guard.expectedUpdatedAt,
+      verify: (track) => trackMatches(track, guard.segments, guard.allowAdditional),
+      tripPatch: useVersion ? { gpsRestoredAt: Date.now() } : {}
+    });
   };
 
   if (!edits.length) return { restored: 0, version };
@@ -254,31 +200,12 @@ export async function restoreGpsTrack(tripId, { expectedUpdatedAt = null, signal
 
   const write = async (useOriginal, guard, operationSignal?: AbortSignal) => {
     throwIfAborted(operationSignal);
-    let detachAbort: (() => void) | undefined;
-    try {
-      await db.transaction('rw', [db.trackChunks, db.trackSnapshots, db.segments, db.trips], async (transaction) => {
-        detachAbort = abortTransactionOnSignal(transaction, operationSignal);
-        throwIfAborted(operationSignal);
-        const trip = await db.trips.get(tripId);
-        throwIfAborted(operationSignal);
-        if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
-        if (!trackMatches(await loadTripTrack(tripId, null, { cooperative: false }), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
-        if (!sameSnapshots(snapshot, await loadTrackSnapshot(tripId))) throw new Error('track-changed');
-        throwIfAborted(operationSignal);
-        for (const edit of edits) {
-          throwIfAborted(operationSignal);
-          await replaceSegmentPointsInTx(edit.segmentId, tripId, useOriginal ? edit.after : edit.before);
-        }
-        throwIfAborted(operationSignal);
-        await updateTripInTx(tripId, {
-          statsCache: null, thumbPoints: null, reportedDistance: null,
-          ...(useOriginal ? { gpsRestoredAt: Date.now() } : {})
-        });
-        throwIfAborted(operationSignal);
-      });
-    } finally {
-      detachAbort?.();
-    }
+    await commitTrackEdits(tripId, {
+      edits, useAfter: useOriginal, signal: operationSignal, expectedUpdatedAt: guard.expectedUpdatedAt,
+      verify: (track) => trackMatches(track, guard.segments, guard.allowAdditional),
+      verifySnapshot: (rows) => sameSnapshots(snapshot, rows),
+      tripPatch: useOriginal ? { gpsRestoredAt: Date.now() } : {}
+    });
   };
 
   if (!edits.length) return { restored: 0 };

@@ -1,6 +1,6 @@
 import { TrackMap } from './map';
 import { el, icon, modal } from './helpers';
-import { loadTripTrack } from '../core/store';
+import { routeRepository } from '../core/routeRepository';
 import { simplifyAsync } from '../core/workerBridge';
 import { resolveAltitude } from '../core/elevation';
 import { haversine, mergeWgs84Bounds, wgs84TrackBounds } from '../core/geo';
@@ -469,7 +469,7 @@ export function openMapTools(trips: readonly any[]): MapToolsHandle {
         const layer = desired[cursor++];
         if (cache.has(layer.id)) continue;
         try {
-          const track = await loadTripTrack(layer.id);
+          const track = await routeRepository.load(layer.id);
           if (destroyed || controller.signal.aborted || sequence !== overlaySequence) return;
           if (!track) throw new Error('Trip unavailable');
           const prepared = await prepareMapTrack(track, { signal: controller.signal });

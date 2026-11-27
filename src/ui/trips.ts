@@ -1,7 +1,8 @@
 // Trips list: open/edit/analyze, GPX import, full backup/restore, storage monitor.
 import { t } from '../core/i18n';
 import { on } from '../core/events';
-import { listTrips, deleteTrip, updateTrip, loadTripTrack, loadTripPreview, storageEstimate } from '../core/store';
+import { listTrips, deleteTrip, updateTrip, loadTripPreview, storageEstimate } from '../core/store';
+import { routeRepository } from '../core/routeRepository';
 import { exportTripsZip, importTripFiles } from '../core/batch';
 import { startRewalk } from '../core/rewalk';
 import { importDemoTrip } from '../core/demo';
@@ -21,6 +22,7 @@ import { appState, setActiveTrip, refreshActiveTrip, recalcNow } from './state';
 import { TrackMap } from './map';
 import { el, icon, toast, confirmModal, filePickerMulti, modal } from './helpers';
 import { createAnalysisView } from './analysis';
+import { createStoryView } from './story';
 import { openGrowthReport } from './growth';
 import { openMapTools } from './mapTools';
 import { createExportView } from './export';
@@ -199,8 +201,9 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   const view = el('div', { class: 'view', id: 'view-trips' });
   const scroll = el('div', { class: 'view-scroll' });
   const analysisView = createAnalysisView(navigate, { embedded: true });
+  const storyView = createStoryView(navigate, { embedded: true });
   const exportView = createExportView(getRecordMap, navigate);
-  for (const panel of [analysisView, exportView]) {
+  for (const panel of [analysisView, storyView, exportView]) {
     panel.view.classList.remove('view');
     panel.view.classList.add('trip-detail-panel');
   }
@@ -218,10 +221,11 @@ export function createTripsView(navigate, getRecordMap = () => null) {
         el('button', { class: 'btn sm primary', onclick: () => navigate('trips', { detail: true, tripId: appState.tripDetail.tripId, section: 'share' }) }, icon('share', 14), t('trips.detailShare'))),
       detailTabs,
       detailActions),
-    el('div', { class: 'trip-detail-panels' }, analysisView.view, exportView.view));
-  for (const section of ['overview', 'data', 'share']) {
+    el('div', { class: 'trip-detail-panels' }, analysisView.view, storyView.view, exportView.view));
+  for (const section of ['overview', 'data', 'story', 'share']) {
     detailTabs.append(el('button', {
-      role: 'tab', 'data-section': section, 'aria-controls': section === 'share' ? 'view-export' : 'view-analysis',
+      role: 'tab', 'data-section': section,
+      'aria-controls': section === 'share' ? 'view-export' : section === 'story' ? 'view-story' : 'view-analysis',
       onclick: () => navigate('trips', { detail: true, tripId: appState.tripDetail.tripId, section })
     }, t(`trips.detail${section[0].toUpperCase()}${section.slice(1)}`)));
   }
@@ -271,27 +275,15 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   let footprintExpanded = false;
   const thumbNodes = new Map();
   let thumbRun = 0;
-  const chipBar = el('div', { class: 'chip-bar' });
-  const chipButtons = new Map();
-  for (const a of ACTIVITIES) {
-    const label = a === 'all' ? t('trips.filterAll') : t(`record.activities.${a}`);
-    const b = el('button', { class: 'chip' + (a === 'all' ? ' active' : ''), onclick: () => {
-      filters.activity = a;
-      for (const [key, btn] of chipButtons) btn.classList.toggle('active', key === a);
-      renderList();
-    } }, label);
-    chipButtons.set(a, b);
-    chipBar.append(b);
-  }
-  const favoriteChip = el('button', {
-    class: 'chip chip-fav', title: t('trips.favoriteHint'),
-    onclick: () => {
-      filters.favoriteOnly = !filters.favoriteOnly;
-      favoriteChip.classList.toggle('active', filters.favoriteOnly);
-      renderList();
-    }
-  }, icon('star', 13), t('trips.favorite'));
-  chipBar.append(favoriteChip);
+  const activityFilter = el('select', { class: 'trip-sort trip-filter-select', 'aria-label': t('trips.filterLabel') },
+    ...ACTIVITIES.map((a) => el('option', { value: a }, a === 'all' ? t('trips.filterAll') : t(`record.activities.${a}`))),
+    el('option', { value: 'favorite' }, t('trips.favorite')));
+  activityFilter.value = 'all';
+  activityFilter.onchange = () => {
+    filters.favoriteOnly = activityFilter.value === 'favorite';
+    filters.activity = filters.favoriteOnly ? 'all' : activityFilter.value;
+    renderList();
+  };
   const sortSel = el('select', { class: 'trip-sort', 'aria-label': t('trips.sort') },
     el('option', { value: 'recent' }, t('trips.sortRecent')),
     el('option', { value: 'created' }, t('trips.sortCreated')),
@@ -300,7 +292,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   sortSel.value = sortMode;
   sortSel.onchange = () => { sortMode = sortSel.value; renderList(); };
   const filterBtn = el('button', { class: 'btn sm trip-filter-btn', onclick: openFilterPanel }, icon('filter', 14), t('trips.advancedFilters'));
-  const toolbar = el('div', { class: 'trips-toolbar' }, chipBar, filterBtn, sortSel);
+  const toolbar = el('div', { class: 'trips-toolbar' }, activityFilter, filterBtn, sortSel);
 
   const CITY_CONSENT_KEY = 'roametch.cityFootprintConsent.v1';
   const footprintStates = new Map();
@@ -415,8 +407,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   }
 
   function syncBasicFilterControls() {
-    for (const [key, btn] of chipButtons) btn.classList.toggle('active', key === filters.activity);
-    favoriteChip.classList.toggle('active', filters.favoriteOnly);
+    activityFilter.value = filters.favoriteOnly ? 'favorite' : filters.activity;
     searchInput.value = filters.query;
     updateFilterButton();
   }
@@ -736,7 +727,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     const job = (async () => {
       try {
         const batch = await buildHeatmapBatchAsync(selectedTrips, async (trip) => {
-          const track = await loadTripTrack(trip.id);
+          const track = await routeRepository.load(trip.id);
           if (!track) return null;
           return buildHeatmapAsync([track], { maxPoints: 1200, gridSize: 0.001, privacyRadius }, { signal: controller.signal });
         }, {
@@ -822,7 +813,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
         for (let i = 0; i < trips.length; i++) {
           if (controller.signal.aborted || viewDestroyed || !isCurrent()) return;
           const trip = trips[i];
-          const track = await loadTripTrack(trip.id);
+          const track = await routeRepository.load(trip.id);
           if (!track || controller.signal.aborted || viewDestroyed || !isCurrent()) continue;
           const cities = await resolveTripCities(track, { radius: privacyRadius }, {
             signal: controller.signal,
@@ -1168,7 +1159,9 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   }
 
   function activeDetailPanel() {
-    return appState.tripDetail.section === 'share' ? exportView : analysisView;
+    if (appState.tripDetail.section === 'share') return exportView;
+    if (appState.tripDetail.section === 'story') return storyView;
+    return analysisView;
   }
 
   function refreshDetailPanel() {
@@ -1183,7 +1176,8 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     if (!appState.tripDetail.open) return;
     appState.tripDetail.section = section;
     detail.dataset.section = section;
-    analysisView.view.classList.toggle('active', section !== 'share');
+    analysisView.view.classList.toggle('active', section !== 'share' && section !== 'story');
+    storyView.view.classList.toggle('active', section === 'story');
     exportView.view.classList.toggle('active', section === 'share');
     detailTabs.querySelectorAll('button').forEach((button) => {
       const selected = button.dataset.section === section;
@@ -1467,6 +1461,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   });
   on('theme:applied', renderList);
   on('backup:restored', render);
+  on('sync:completed', render);
   on('backup:exported', renderNudge);
   on('recorder:stopped', render);
 
@@ -1514,6 +1509,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     destroy: () => {
       viewDestroyed = true;
       analysisView.destroy();
+      storyView.destroy();
       exportView.destroy();
       window.removeEventListener('online', onTripsOnline);
       cancelFootprintJobs();

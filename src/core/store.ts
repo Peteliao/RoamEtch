@@ -93,6 +93,9 @@ export async function rememberShareImport(fingerprint: string, tripId: string) {
 export async function forgetShareImport(fingerprint: string) {
   await db.shareImports.delete(fingerprint);
 }
+export function runShareImportTransaction<T>(fn: () => Promise<T>): Promise<T> {
+  return db.transaction('rw', [db.trips, db.segments, db.trackChunks, db.waypoints, db.media, db.shareImports], fn);
+}
 
 // ---------- segments & chunks ----------
 export async function addSegment(tripId, startTime = Date.now()) {
@@ -102,6 +105,9 @@ export async function addSegment(tripId, startTime = Date.now()) {
   return seg;
 }
 export const listSegments = (tripId) => db.segments.where('tripId').equals(tripId).sortBy('index');
+export const getSegment = (id) => db.segments.get(id);
+export const countTripSegments = (tripId) => db.segments.where('tripId').equals(tripId).count();
+export const restoreSegment = (segment) => db.segments.put(segment);
 
 function segmentChunkRange(segmentId) {
   return db.trackChunks.where('[segmentId+seq]')
@@ -304,6 +310,124 @@ async function loadSegmentPoints(segmentId) {
 }
 
 /** Replace all points of a segment only if its current contents still match the edit base. */
+export async function publishTrip(trip) {
+  await db.trips.add(trip);
+}
+
+export async function collectWaypointCounts(tripIds: string[], signal?: AbortSignal) {
+  const known = new Set(tripIds || []);
+  const counts = new Map<string, { hasPhotos: boolean; waypointCount: number }>();
+  const throwIfAborted = () => {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+  };
+  throwIfAborted();
+  await db.waypoints.orderBy('tripId').each((waypoint: any) => {
+    throwIfAborted();
+    if (!known.has(waypoint.tripId)) return;
+    const current = counts.get(waypoint.tripId) || { hasPhotos: false, waypointCount: 0 };
+    current.waypointCount++;
+    if (waypoint.type === 'photo' || waypoint.mediaIds?.length) current.hasPhotos = true;
+    counts.set(waypoint.tripId, current);
+  });
+  throwIfAborted();
+  return counts;
+}
+
+/**
+ * Atomically apply point-level track edits and reset derived trip state.
+ * Callers supply the verification predicates so the transaction guard checks
+ * the current stored track without depending on Dexie directly.
+ */
+export async function commitTrackEdits(tripId, {
+  edits, useAfter, signal, expectedUpdatedAt = null, verify, verifySnapshot,
+  saveSnapshot = false, snapshotSegments = null, tripPatch = {}, persistVersion = null
+}: any = {}) {
+  let detachAbort: (() => void) | undefined;
+  try {
+    return await db.transaction('rw', [db.trackChunks, db.trackSnapshots, db.segments, db.trips], async (transaction) => {
+      detachAbort = abortTransactionOnSignal(transaction, signal);
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+      const trip = await db.trips.get(tripId);
+      if (!trip || (expectedUpdatedAt != null && trip.updatedAt !== expectedUpdatedAt)) throw new Error('track-changed');
+      const current = await loadTripTrack(tripId, null, { cooperative: false });
+      if (verify && !await verify(current)) throw new Error('track-changed');
+      if (verifySnapshot && !verifySnapshot(await loadTrackSnapshot(tripId))) throw new Error('track-changed');
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+      if (saveSnapshot) await saveTrackSnapshotInTx(tripId, snapshotSegments || current?.segments || []);
+      for (const edit of edits || []) {
+        if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+        await replaceSegmentPointsInTx(edit.segmentId, tripId, useAfter ? edit.after : edit.before);
+      }
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+      await updateTripInTx(tripId, {
+        statsCache: null, thumbPoints: null, reportedDistance: null, ...tripPatch
+      });
+      if (persistVersion && useAfter) {
+        return saveTrackRepairVersionInTx(tripId, persistVersion.segments, persistVersion.metadata);
+      }
+      return null;
+    });
+  } finally {
+    detachAbort?.();
+  }
+}
+
+export async function fillTrackChunkAltitudes(tripId: string, chunkId: string, fills: Map<number, any>, signal?: AbortSignal) {
+  let detachAbort: (() => void) | undefined;
+  try {
+    return await db.transaction('rw', [db.trackChunks, db.trips], async (transaction) => {
+      detachAbort = abortTransactionOnSignal(transaction, signal);
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+      const chunk = await db.trackChunks.get(chunkId);
+      if (!chunk || chunk.tripId !== tripId || !Array.isArray(chunk.points)) return 0;
+      let filled = 0;
+      const points = chunk.points.map((point, index) => {
+        const fill = fills.get(index);
+        if (!fill || !point || point.alt != null
+          || !Object.is(point.lat, fill.lat) || !Object.is(point.lon, fill.lon)
+          || !Object.is(point.t, fill.t)) return point;
+        filled++;
+        return { ...point, alt: fill.alt, altSrc: fill.src };
+      });
+      if (!filled) return 0;
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+      await db.trackChunks.put({ ...chunk, points });
+      await updateTripInTx(tripId, { statsCache: null });
+      return filled;
+    });
+  } finally {
+    detachAbort?.();
+  }
+}
+
+export async function patchSegmentAltitude(segmentId: string, point: any, maxChunks = 32) {
+  return db.transaction('rw', [db.trackChunks, db.segments, db.trips], async () => {
+    const segment = await db.segments.get(segmentId);
+    if (!segment) return false;
+    const chunks = await db.trackChunks.where('[segmentId+seq]')
+      .between([segmentId, 0], [segmentId, Number.MAX_SAFE_INTEGER]).reverse()
+      .limit(maxChunks).toArray();
+    for (const chunk of chunks) {
+      if (!Array.isArray(chunk.points)) continue;
+      const index = chunk.points.findIndex((candidate) => candidate && candidate.alt == null
+        && Object.is(candidate.lat, point.lat) && Object.is(candidate.lon, point.lon)
+        && Object.is(candidate.t, point.t));
+      if (index < 0) continue;
+      const points = chunk.points.slice();
+      points[index] = { ...points[index], alt: point.alt, altSrc: point.altSrc };
+      await db.trackChunks.put({ ...chunk, points });
+      await updateTripInTx(segment.tripId, { statsCache: null });
+      return true;
+    }
+    return false;
+  });
+}
+
+export function firstSegmentChunkFrom(segmentId: string, seq: number) {
+  return db.trackChunks.where('[segmentId+seq]')
+    .between([segmentId, seq], [segmentId, Number.MAX_SAFE_INTEGER]).first();
+}
+
 export async function replaceSegmentPoints(segmentId, tripId, points, expectedPoints) {
   await db.transaction('rw', [db.trackChunks, db.segments, db.trips], async () => {
     const segment = await db.segments.get(segmentId);
@@ -580,6 +704,7 @@ export async function addWaypoint(wp) {
   return full;
 }
 export const updateWaypoint = (id, patch) => db.waypoints.update(id, patch);
+export const putWaypoint = (waypoint) => db.waypoints.put(waypoint);
 export const deleteWaypoint = (id) => db.waypoints.delete(id);
 export const getWaypoint = (id) => db.waypoints.get(id);
 export const listWaypoints = (tripId) => db.waypoints.where('tripId').equals(tripId).toArray();
@@ -613,6 +738,44 @@ export async function deletePhotoWaypoint(waypointId, tripId, mediaId) {
       : [];
     if (mediaId && !references.length) await db.media.delete(mediaId);
     await updateTrip(tripId, {});
+  });
+}
+
+/** Apply a confirmed batch of EXIF-matched photos in one transaction. */
+export async function importMatchedPhotos({ tripId, items, nameFor = (n) => `Photo ${n}` }) {
+  return db.transaction('rw', [db.media, db.waypoints, db.trips], async () => {
+    let linked = 0, created = 0;
+    const photoNodes = await db.waypoints.where('tripId').equals(tripId).filter((w) => w.type === 'photo').toArray();
+    let number = photoNodes.length;
+    for (const item of items) {
+      const candidate = item?.candidate;
+      const processed = item?.photo;
+      if (!candidate || !processed?.blob || !processed?.thumb) continue;
+      const media = {
+        id: uuid(), tripId, blob: processed.blob, thumb: processed.thumb,
+        width: processed.width, height: processed.height, createdAt: Date.now()
+      };
+      await db.media.add(media);
+      let target = null;
+      if (candidate.waypointId) {
+        target = await db.waypoints.get(candidate.waypointId);
+        if (target?.tripId !== tripId) target = null;
+      }
+      if (target) {
+        await db.waypoints.update(target.id, { mediaIds: [...(target.mediaIds || []), media.id] });
+        linked++;
+      } else {
+        number++;
+        await db.waypoints.add({
+          id: uuid(), tripId, lat: candidate.lat, lon: candidate.lon,
+          alt: null, acc: null, type: 'photo', name: nameFor(number),
+          time: candidate.time, mediaIds: [media.id], hidden: false
+        });
+        created++;
+      }
+    }
+    if (linked || created) await updateTrip(tripId, {});
+    return { linked, created };
   });
 }
 

@@ -2,7 +2,7 @@
 // routes each segment break over OSM roads, then stitches interpolated points
 // into the segment before the break. Network failures leave the gap untouched.
 import { haversine, simplify } from './geo';
-import { db, loadTripTrack, replaceSegmentPointsInTx, updateTripInTx, abortTransactionOnSignal } from './store';
+import { commitTrackEdits, loadTripTrack } from './store';
 import { pushAction } from './history';
 import { emit } from './events';
 import { applyPrivacy } from './privacy';
@@ -229,28 +229,10 @@ export async function repairTrackGaps(tripId: string, {
     operationSignal?: AbortSignal
   ) => {
     throwIfAborted(operationSignal);
-    let detachAbort: (() => void) | undefined;
-    try {
-      await db.transaction('rw', [db.trackChunks, db.segments, db.trips], async (transaction) => {
-        detachAbort = abortTransactionOnSignal(transaction, operationSignal);
-        throwIfAborted(operationSignal);
-        const trip = await db.trips.get(tripId);
-        throwIfAborted(operationSignal);
-        if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
-        const current = await loadTripTrack(tripId, null, { cooperative: false });
-        throwIfAborted(operationSignal);
-        if (!trackMatches(current, guard.segments, guard.allowAdditional)) throw new Error('track-changed');
-        for (const edit of edits) {
-          throwIfAborted(operationSignal);
-          await replaceSegmentPointsInTx(edit.segmentId, tripId, useAfter ? edit.after : edit.before);
-        }
-        throwIfAborted(operationSignal);
-        await updateTripInTx(tripId, { statsCache: null, thumbPoints: null, reportedDistance: null });
-        throwIfAborted(operationSignal);
-      });
-    } finally {
-      detachAbort?.();
-    }
+    await commitTrackEdits(tripId, {
+      edits, useAfter, signal: operationSignal, expectedUpdatedAt: guard.expectedUpdatedAt,
+      verify: (track) => trackMatches(track, guard.segments, guard.allowAdditional)
+    });
   };
 
   await write(true, { segments: full.segments, expectedUpdatedAt, allowAdditional: false }, signal);

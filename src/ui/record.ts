@@ -11,7 +11,8 @@ import { availableBasemaps } from '../core/providers';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine, bearing } from '../core/geo';
 import { estimateCalories } from '../core/calories';
 import { altSourceShortKey, altSourceTagClass } from '../core/elevation';
-import { loadTripTrack, loadTripPreview, listWaypoints, updateTrip, getTrip, addPhotoWaypoint, deletePhotoWaypoint } from '../core/store';
+import { loadTripPreview, listWaypoints, updateTrip, getTrip, addPhotoWaypoint, deletePhotoWaypoint } from '../core/store';
+import { routeRepository } from '../core/routeRepository';
 import { onBroadcast } from '../core/locks';
 import { clearHistory } from '../core/history';
 import { TrackMap } from './map';
@@ -101,7 +102,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     return map;
   }
   async function loadTripMapData(tripId) {
-    const [track, waypoints] = await Promise.all([loadTripTrack(tripId), listWaypoints(tripId)]);
+    const [track, waypoints] = await Promise.all([routeRepository.load(tripId), listWaypoints(tripId)]);
     return track ? { ...track, waypoints } : null;
   }
   async function renderFinishedTrip(full, fit = true) {

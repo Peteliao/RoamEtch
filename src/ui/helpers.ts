@@ -78,11 +78,15 @@ export function icon(name, size = 20) {
     chevronRight: '<path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     calendar: '<rect x="3.5" y="5" width="17" height="16" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M8 3v4m8-4v4M3.5 10h17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
     clock: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 7v5l3.2 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    eye: '<path d="M2.5 12S6 6.2 12 6.2 21.5 12 21.5 12 18 17.8 12 17.8 2.5 12 2.5 12Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/>',
+    eyeOff: '<path d="M4 4l16 16M9.8 6.8A9.6 9.6 0 0 1 12 6.2C18 6.2 21.5 12 21.5 12a17 17 0 0 1-3.9 4.3M6.4 8.4A16 16 0 0 0 2.5 12S6 17.8 12 17.8a9.6 9.6 0 0 0 2.6-.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     star: '<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.2 1.1 5.9L12 17l-5.3 2.8 1.1-5.9L3.5 9.7l5.9-.8L12 3.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',
     tag: '<path d="M4 4h7l9 9-7 7-9-9V4Zm4 4v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     music: '<path d="M9 17.5V6l10-2v11.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><circle cx="6.5" cy="17.5" r="2.6" fill="currentColor"/><circle cx="16.5" cy="15.5" r="2.6" fill="currentColor"/>',
     compass: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><path d="m15.5 8.5-2 5-5 2 2-5 5-2Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',
-    sparkles: '<path d="m10 3 1.4 4.1L15.5 8.5l-4.1 1.4L10 14l-1.4-4.1L4.5 8.5l4.1-1.4L10 3Zm7.5 9 .9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9.9-2.6Z" fill="currentColor"/>'
+    sparkles: '<path d="m10 3 1.4 4.1L15.5 8.5l-4.1 1.4L10 14l-1.4-4.1L4.5 8.5l4.1-1.4L10 3Zm7.5 9 .9 2.6 2.6.9-2.6.9-.9 2.6-.9-2.6-2.6-.9 2.6-.9.9-2.6Z" fill="currentColor"/>',
+    sun: '<circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8m10.6 10.6 1.8 1.8m0-14.2-1.8 1.8M6.7 17.3l-1.8 1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    book: '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v17.5H6.5A2.5 2.5 0 0 0 4 23V5.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><path d="M4 18.5A2.5 2.5 0 0 1 6.5 16H20M8 7h8" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>'
   };
   const span = el('span', { html: `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true">${paths[name] || paths.info}</svg>`, style: { display: 'inline-flex' } });
   return span;

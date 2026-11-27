@@ -21,7 +21,53 @@ vi.mock('../src/core/store', () => ({
   elevCacheGet: mocks.elevCacheGet,
   elevCachePut: mocks.elevCachePut,
   updateTrip: mocks.updateTrip,
-  gridKey: (lat: number, lon: number) => `${lat.toFixed(3)},${lon.toFixed(3)}`
+  gridKey: (lat: number, lon: number) => `${lat.toFixed(3)},${lon.toFixed(3)}`,
+  listSegments: (tripId: string) => mocks.db.segments.where('tripId').equals(tripId).sortBy('index'),
+  firstSegmentChunkFrom: (segmentId: string, seq: number) => mocks.db.trackChunks
+    .where('[segmentId+seq]').between([segmentId, seq], [segmentId, Number.MAX_SAFE_INTEGER]).first(),
+  fillTrackChunkAltitudes: async (tripId: string, chunkId: string, fills: Map<number, any>, signal?: AbortSignal) => {
+    if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+    return mocks.db.transaction('rw', [mocks.db.trackChunks, mocks.db.trips], async () => {
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+      const chunk = await mocks.db.trackChunks.get(chunkId);
+      if (!chunk || chunk.tripId !== tripId || !Array.isArray(chunk.points)) return 0;
+      let filled = 0;
+      const points = chunk.points.map((point: any, index: number) => {
+        const fill = fills.get(index);
+        if (!fill || !point || point.alt != null
+          || !Object.is(point.lat, fill.lat) || !Object.is(point.lon, fill.lon)
+          || !Object.is(point.t, fill.t)) return point;
+        filled++;
+        return { ...point, alt: fill.alt, altSrc: fill.src };
+      });
+      if (!filled) return 0;
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+      await mocks.db.trackChunks.put({ ...chunk, points });
+      await mocks.updateTrip(tripId, { statsCache: null });
+      return filled;
+    });
+  },
+  patchSegmentAltitude: async (segmentId: string, point: any, maxChunks: number) => mocks.db.transaction(
+    'rw', [mocks.db.trackChunks, mocks.db.segments, mocks.db.trips], async () => {
+      const segment = await mocks.db.segments.get(segmentId);
+      if (!segment) return false;
+      const chunks = await mocks.db.trackChunks.where('[segmentId+seq]')
+        .between([segmentId, 0], [segmentId, Number.MAX_SAFE_INTEGER]).reverse()
+        .limit(maxChunks).toArray();
+      for (const chunk of chunks) {
+        if (!Array.isArray(chunk.points)) continue;
+        const index = chunk.points.findIndex((candidate: any) => candidate && candidate.alt == null
+          && Object.is(candidate.lat, point.lat) && Object.is(candidate.lon, point.lon)
+          && Object.is(candidate.t, point.t));
+        if (index < 0) continue;
+        const points = chunk.points.slice();
+        points[index] = { ...points[index], alt: point.alt, altSrc: point.altSrc };
+        await mocks.db.trackChunks.put({ ...chunk, points });
+        await mocks.updateTrip(segment.tripId, { statsCache: null });
+        return true;
+      }
+      return false;
+    })
 }));
 vi.mock('../src/core/providers', () => ({
   elevationEndpoint: () => 'https://elevation.test',

@@ -1171,8 +1171,9 @@ export class TrackMap {
     });
   }
 
-  fitMeet(padding = 70) {
+  fitMeet(padding = 70, manual = false) {
     if (!this.map || this.destroyed) return;
+    if (manual) this._meetManualCameraUntil = Date.now() + 12000;
     this._meetAutoZoomReady = false;
     this._meetLastDistance = Number.NaN;
     this._meetLastSelf = null;
@@ -1208,7 +1209,7 @@ export class TrackMap {
     this._meetCameraAnimating = true;
     this.map.once('moveend', () => { this._meetCameraAnimating = false; });
     this.map.fitBounds([[minLon, minLat], [maxLon, maxLat]], {
-      padding: { top: padding, right: padding, bottom: padding + this._viewportBottom, left: padding },
+      padding,
       duration: 650, maxZoom: 16
     });
   }

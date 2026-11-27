@@ -19,6 +19,7 @@ import { createMusicSession } from './music';
 import { makeVideoRecorder, videoSupported } from './videoCapture';
 import { buildProfile, drawProfileChart, altitudeInUnit, distanceInUnit, speedInUnit } from './profileChart';
 import { bridgeTrackGapsForExport } from './gapRepair';
+import { normalizeShareStyle, trackColorValue } from './shareStyle';
 
 export { videoSupported };
 
@@ -153,6 +154,7 @@ function clockOf(ts) {
  * @returns {Promise<{blob, mime, width, height, seconds, usedVectorFallback:boolean, musicTrack:string|null}>}
  */
 export async function generateTrackVideo(full, {
+  style: styleInput = null,
   privacy = { radius: 300, hideSensitive: true },
   vectorOnly = false,
   basemapId = '',
@@ -162,6 +164,7 @@ export async function generateTrackVideo(full, {
   signal
 }: any = {}): Promise<any> {
   if (!videoSupported()) throw new Error('video-unsupported');
+  const design = normalizeShareStyle(styleInput || {});
   const musicSession = createMusicSession(music);
   try {
   const cropped = await bridgeTrackGapsForExport(full, applyPrivacy(full, privacy), privacy, { signal });
@@ -176,6 +179,9 @@ export async function generateTrackVideo(full, {
   const time = tripTimeInfo(full);
   const P = canvasPalette();
   const theme = effectiveTheme();
+  const trackColor = trackColorValue(design.trackColor, '');
+  const hideStart = !!privacy.hideStartIcon;
+  const hideEnd = !!privacy.hideEndIcon;
   await loadBrandFonts();
 
   let lastProg = 0;
@@ -236,6 +242,70 @@ export async function generateTrackVideo(full, {
   const routePx = [];
   for (const seg of m.segments) for (const p of seg.points) routePx.push(m.fit!.toPx(p));
   const routeEnds = [routePx[0], routePx[routePx.length - 1]].filter(Boolean);
+  const clampNum = (v, a, b) => Math.max(a, Math.min(b, v));
+  const smooth = (v) => {
+    const x = clampNum(v, 0, 1);
+    return x * x * (3 - 2 * x);
+  };
+  function cameraFor(idx, u) {
+    const mode = design.camera;
+    const centre = { scale: 1, x: W / 2, y: MAP_H / 2 };
+    if (mode === 'overview') return centre;
+    if (mode === 'aerial') {
+      const k = smooth(u);
+      return {
+        scale: 1.06 - 0.06 * k,
+        x: W / 2 - 26 * (1 - k),
+        y: MAP_H / 2 - 18 * (1 - k)
+      };
+    }
+    const current = routePx[Math.min(routePx.length - 1, Math.max(0, idx))] || [W / 2, MAP_H / 2];
+    const follow = { scale: 1.52, x: current[0], y: current[1] };
+    if (mode === 'follow') {
+      const entry = smooth(Math.min(1, u / 0.12));
+      const pull = smooth((u - 0.88) / 0.12);
+      const base = {
+        scale: 1 + (follow.scale - 1) * entry,
+        x: W / 2 + (follow.x - W / 2) * entry,
+        y: MAP_H / 2 + (follow.y - MAP_H / 2) * entry
+      };
+      return clampCamera({
+        scale: base.scale + (1.0 - base.scale) * pull,
+        x: base.x + (W / 2 - base.x) * pull,
+        y: base.y + (MAP_H / 2 - base.y) * pull
+      });
+    }
+    // auto: establish the route, follow it, then pull back to the overview.
+    if (u < 0.1) {
+      const k = smooth(u / 0.1);
+      return clampCamera({
+        scale: 1 + (follow.scale - 1) * k,
+        x: W / 2 + (follow.x - W / 2) * k,
+        y: MAP_H / 2 + (follow.y - MAP_H / 2) * k
+      });
+    }
+    if (u > 0.82) {
+      const k = smooth((u - 0.82) / 0.18);
+      return clampCamera({
+        scale: follow.scale + (1.0 - follow.scale) * k,
+        x: follow.x + (W / 2 - follow.x) * k,
+        y: follow.y + (MAP_H / 2 - follow.y) * k
+      });
+    }
+    return clampCamera(follow);
+  }
+  function clampCamera(cam) {
+    if (cam.scale <= 1.0001) return { scale: 1, x: W / 2, y: MAP_H / 2 };
+    const halfW = W / (2 * cam.scale), halfH = MAP_H / (2 * cam.scale);
+    return {
+      scale: cam.scale,
+      x: clampNum(cam.x, halfW, W - halfW),
+      y: clampNum(cam.y, halfH, MAP_H - halfH)
+    };
+  }
+  function camScreen(p, cam) {
+    return [W / 2 + (p[0] - cam.x) * cam.scale, MAP_H / 2 + (p[1] - cam.y) * cam.scale];
+  }
   const insideRect = (p, x, y, w, h, pad = 10) =>
     p[0] >= x - pad && p[0] <= x + w + pad && p[1] >= y - pad && p[1] <= y + h + pad;
   for (const n of nodes) {
@@ -305,9 +375,11 @@ export async function generateTrackVideo(full, {
   const dateStr = time?.date || new Date(full.trip.createdAt).toLocaleDateString();
   const activity = t(`record.activities.${full.trip.activity}`);
 
-  function drawNodePulse(n, replayMs, alpha) {
+  function drawNodePulse(n, replayMs, alpha, cam) {
     if (!m.fit) return;
-    const [x, y] = m.fit.toPx(n.disp);
+    const [sx, sy] = m.fit.toPx(n.disp);
+    const [x, y] = camScreen([sx, sy], cam);
+    if (x < -40 || x > W + 40 || y < -40 || y > MAP_H + 40) return;
     const phase = (replayMs % 1400) / 1400;
     ctx.save();
     ctx.lineWidth = 3.5;
@@ -396,15 +468,98 @@ export async function generateTrackVideo(full, {
     ctx.restore();
   }
 
+  function drawPhotoCutIn(n, alpha) {
+    if (!n?.photo) return;
+    const w = 780, h = 460;
+    const x = (W - w) / 2;
+    const y = MAP_H - h - 110 + (1 - alpha) * 38;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = 'rgba(0,0,0,0.38)';
+    ctx.shadowBlur = 36;
+    ctx.shadowOffsetY = 14;
+    roundRectPath(ctx, x, y, w, h, 26);
+    ctx.fillStyle = P.panel;
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.save();
+    roundRectPath(ctx, x, y, w, h, 26);
+    ctx.clip();
+    drawCover(ctx, n.photo, x, y, w, h);
+    const shade = ctx.createLinearGradient(0, y + h * 0.34, 0, y + h);
+    shade.addColorStop(0, 'rgba(0,0,0,0)');
+    shade.addColorStop(0.58, 'rgba(0,0,0,0.18)');
+    shade.addColorStop(1, 'rgba(0,0,0,0.78)');
+    ctx.fillStyle = shade;
+    ctx.fillRect(x, y, w, h);
+    ctx.restore();
+    roundRectPath(ctx, x, y, w, h, 26);
+    ctx.strokeStyle = 'rgba(255,255,255,0.48)';
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
+
+    const icon = WP_ICONS[n.type] || '📍';
+    const clock = clockOf(n.wp.time);
+    ctx.textAlign = 'left';
+    ctx.font = `24px ${FONT}`;
+    ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    ctx.fillText(icon, x + 30, y + h - 92);
+    ctx.font = `700 22px ${FONT}`;
+    ctx.fillStyle = P.accent;
+    ctx.fillText(fitText(ctx, t(`wp.types.${n.type}`), w - 200), x + 66, y + h - 92);
+    if (n.desc) {
+      const lines = wrapLines(ctx, n.desc, w - 60, 2);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = 'rgba(255,255,255,0.82)';
+      ctx.font = `500 24px ${FONT}`;
+      let ty = y + h - 132;
+      for (const line of lines) {
+        ctx.fillText(fitText(ctx, line, w - 60), x + 30, ty);
+        ty -= 28;
+      }
+    }
+    if (n.title) {
+      ctx.font = `800 42px ${FONT}`;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(fitText(ctx, n.title, w - 120), x + 30, y + h - 42);
+    } else {
+      ctx.font = `800 40px ${FONT}`;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(fitText(ctx, n.wp.name || t(`wp.types.${n.type}`), w - 120), x + 30, y + h - 42);
+    }
+    if (clock) {
+      ctx.textAlign = 'right';
+      ctx.font = `600 22px ${FONT}`;
+      ctx.fillStyle = 'rgba(255,255,255,0.84)';
+      ctx.fillText(clock, x + w - 28, y + h - 92);
+    }
+    if (n.photoCount > 1) {
+      ctx.textAlign = 'right';
+      ctx.font = `700 20px ${FONT}`;
+      ctx.fillStyle = 'rgba(255,255,255,0.86)';
+      ctx.fillText(`+${n.photoCount - 1}`, x + w - 28, y + 40);
+    }
+    ctx.restore();
+  }
   function drawFrame(idx, u) {
+    const cam = cameraFor(idx, u);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, W, MAP_H);
+    ctx.clip();
+    ctx.translate(W / 2, MAP_H / 2);
+    ctx.scale(cam.scale, cam.scale);
+    ctx.translate(-cam.x, -cam.y);
     ctx.drawImage(m.bg, 0, 0);
     paintTrack(ctx, m.fit, render.segs, m.waypoints, {
       upto: render.origIdx ? countUpTo(render.origIdx, idx) : idx + 1,
-      lineWidth: 7, dotRadius: 13, darkBg: m.darkBg
+      lineWidth: design.trackWidth, dotRadius: 13, darkBg: m.darkBg,
+      trackColor, hideStart, hideEnd, headKind: 'playhead'
     });
+    ctx.restore();
     ctx.fillStyle = P.progressTrack;
     ctx.fillRect(0, MAP_H - 8, W, 8);
-    ctx.fillStyle = P.accent;
+    ctx.fillStyle = trackColor || P.accent;
     ctx.fillRect(0, MAP_H - 8, W * u, 8);
 
     const replayMs = u * playMs;
@@ -416,8 +571,9 @@ export async function generateTrackVideo(full, {
       if (a > 0.001 && a >= activeAlpha - 1e-6) { activeNode = n; activeAlpha = a; }
     }
     if (activeNode) {
-      drawNodePulse(activeNode, replayMs, activeAlpha);
-      drawNodeCard(activeNode, activeAlpha);
+      drawNodePulse(activeNode, replayMs, activeAlpha, cam);
+      if (design.photoCutIn && activeNode!.photo) drawPhotoCutIn(activeNode!, activeAlpha);
+      else drawNodeCard(activeNode!, activeAlpha);
     }
 
     const py0 = MAP_H;
@@ -625,9 +781,10 @@ export async function generateTrackVideo(full, {
     ctx.font = `30px ${FONT}`;
     ctx.fillText(t('export.videoThanksSub'), W / 2, 704);
     ctx.fillStyle = P.accent;
-    ctx.font = `600 40px ${SPORT_FONT}`;
-    ctx.fillText(t('app.slogan'), W / 2, 790);
-    const qr = 320, qy = 850;
+    ctx.font = `600 36px ${SPORT_FONT}`;
+    ctx.fillText(t('app.slogan1'), W / 2, 780);
+    ctx.fillText(t('app.slogan2'), W / 2, 824);
+    const qr = 320, qy = 864;
     drawQr(ctx, SITE_URL, (W - qr) / 2, qy, qr);
     ctx.textAlign = 'center';
     ctx.fillStyle = P.muted;

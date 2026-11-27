@@ -131,13 +131,14 @@ export function drawBrandBlock(
   const mw = maxTextWidth || undefined;
   ctx.textAlign = 'left';
   ctx.fillStyle = colors.accent;
-  ctx.font = `700 ${Math.round(34 * s)}px ${SPORT_FONT}`;
-  ctx.fillText(t('app.slogan'), tx, y + qrSize * 0.33, mw);
+  ctx.font = `700 ${Math.round(26 * s)}px ${SPORT_FONT}`;
+  ctx.fillText(t('app.slogan1'), tx, y + qrSize * 0.22, mw);
+  ctx.fillText(t('app.slogan2'), tx, y + qrSize * 0.50, mw);
   ctx.fillStyle = colors.text;
-  ctx.font = `600 ${Math.round(25 * s)}px ${SPORT_FONT}`;
-  ctx.fillText(SITE_URL, tx, y + qrSize * 0.63, mw);
+  ctx.font = `600 ${Math.round(24 * s)}px ${SPORT_FONT}`;
+  ctx.fillText(SITE_URL, tx, y + qrSize * 0.70, mw);
   ctx.fillStyle = colors.muted;
   ctx.font = `500 ${Math.round(21 * s)}px ${SPORT_FONT}`;
-  ctx.fillText(`${t('app.scan')} · ${t('app.brandLine')}`, tx, y + qrSize * 0.92, mw);
+  ctx.fillText(`${t('app.scan')} · ${t('app.brandLine')}`, tx, y + qrSize * 0.94, mw);
   return Math.max(qrSize, Math.round(qrSize * 0.92 + 8 * s));
 }

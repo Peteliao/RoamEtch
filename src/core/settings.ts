@@ -51,6 +51,15 @@ const DEFAULTS = {
   meetTurnUrl: '',
   meetTurnUser: '',
   meetTurnPass: '',
+  syncDeviceName: '',           // shown on paired devices; blank uses a generated label
+  syncRelayMode: 'mqtt',        // mqtt | ws, independent from live team settings
+  syncMqttUrl: '',              // blank = race the built-in public WSS nodes
+  syncMqttPrefix: 'roametch/v2/sync',
+  syncWsUrl: '',                // must contain {room}
+  syncStun: DEFAULT_MEET_STUN.join('\n'),
+  syncTurnUrl: '',
+  syncTurnUser: '',
+  syncTurnPass: '',
   sim: {                       // debug simulation switches [v1.4]
     enabled: false,
     network: 'off',            // off | cn | global | offline | corsfail

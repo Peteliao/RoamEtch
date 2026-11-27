@@ -360,7 +360,7 @@ export async function startRecording({ tripId = null, name = '', activity = null
 
     const seg = await store.addSegment(trip.id);
     rec.segmentId = seg.id;
-    rec.live.segCount = await store.db.segments.where('tripId').equals(trip.id).count();
+    rec.live.segCount = await store.countTripSegments(trip.id);
     await store.updateTrip(trip.id, { status: 'recording' });
 
     if (!simulated && !startWatch()) throw new Error('geolocation unavailable');
@@ -941,7 +941,7 @@ export async function recoverPendingSpill() {
       localStorage.removeItem(SPILL_KEY);
       return 0;
     }
-    const seg = await store.db.segments.get(data.segmentId);
+    const seg = await store.getSegment(data.segmentId);
     if (!seg || seg.tripId !== data.tripId) {
       localStorage.removeItem(SPILL_KEY);
       return 0;

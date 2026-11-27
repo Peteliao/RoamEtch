@@ -3,7 +3,7 @@
 // protocol can be unit tested without DOM or relay.
 import { haversine } from './geo';
 
-export const MEET_FEATURE_VERSION = 3;
+export const MEET_FEATURE_VERSION = 4;
 export const MEET_MARKER_TYPES = ['here', 'gather', 'supply', 'danger', 'scenic', 'parking'] as const;
 export type MeetMarkerType = typeof MEET_MARKER_TYPES[number];
 export const MEET_MARKER_TTL_OPTIONS = [15, 30, 60, 120] as const;

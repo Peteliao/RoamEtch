@@ -21,7 +21,7 @@ vi.mock('../src/core/store', () => ({
   loadTripFull: mocks.loadTripFull,
   loadLastTrackTimestamp: mocks.loadLastTrackTimestamp,
   appendPoints: mocks.appendPoints,
-  db: { segments: { get: mocks.getSegment } }
+  getSegment: mocks.getSegment
 }));
 vi.mock('../src/core/elevation', () => ({ patchFlushedAltitude: vi.fn(), resolveAltitude: vi.fn() }));
 vi.mock('../src/core/locks', () => ({

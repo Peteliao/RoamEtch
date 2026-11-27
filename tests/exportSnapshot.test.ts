@@ -453,6 +453,43 @@ describe('export snapshots', () => {
     expect(video.hasAttribute('src')).toBe(false);
   });
 
+  it('forwards share style, camera and icon privacy, and clears previews when style changes', async () => {
+    const { view } = await mount();
+    const privacyCard = card(view, 'export.privacy');
+    const startIcon = privacyCard.querySelector<HTMLInputElement>('input.hide-start-icon')!;
+    startIcon.checked = true;
+    startIcon.dispatchEvent(new Event('change'));
+    expect(privacyCard.querySelector<HTMLElement>('.privacy-summary')!.textContent).toContain('export.startIconHidden');
+
+    const posterCard = card(view, 'export.poster');
+    const preview = posterCard.querySelector<HTMLElement>('.poster-preview')!;
+    posterCard.querySelector<HTMLButtonElement>('.btn.primary')!.click();
+    await vi.waitFor(() => expect(preview.querySelector('img')).not.toBeNull());
+    const posterOpts = mocks.generatePoster.mock.calls[0][1];
+    expect(posterOpts.privacy).toEqual({ radius: 0, hideSensitive: true, hideStartIcon: true });
+    expect(posterOpts.style).toMatchObject({ background: 'theme', trackColor: 'theme', trackWidth: 6.5, layout: 'stack' });
+
+    const background = posterCard.querySelector<HTMLSelectElement>('.share-style select')!;
+    background.value = 'night';
+    background.dispatchEvent(new Event('change'));
+    expect(preview.style.display).toBe('none');
+    expect(preview.querySelector('img')).toBeNull();
+
+    const videoCard = card(view, 'export.video');
+    const camera = videoCard.querySelector<HTMLSelectElement>('select.video-camera')!;
+    camera.value = 'follow';
+    camera.dispatchEvent(new Event('change'));
+    const photoCutIn = videoCard.querySelector<HTMLInputElement>('input.photo-cut-in')!;
+    photoCutIn.checked = false;
+    photoCutIn.dispatchEvent(new Event('change'));
+    videoCard.querySelector<HTMLButtonElement>('.btn.primary')!.click();
+
+    await vi.waitFor(() => expect(mocks.generateTrackVideo).toHaveBeenCalledTimes(1));
+    const videoOpts = mocks.generateTrackVideo.mock.calls[0][1];
+    expect(videoOpts.privacy).toEqual({ radius: 0, hideSensitive: true, hideStartIcon: true });
+    expect(videoOpts.style).toMatchObject({ background: 'night', camera: 'follow', photoCutIn: false });
+  });
+
   it('collapses privacy controls behind Adjust and updates the dynamic summary immediately', async () => {
     const { view } = await mount();
     const full = makeFull('a', 'Privacy trip', [
@@ -495,7 +532,7 @@ describe('export snapshots', () => {
     hide.checked = true;
     hide.dispatchEvent(new Event('change'));
     expect(summary.textContent).toContain('export.sensitiveHidden');
-    const vector = controls.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')[1];
+    const vector = controls.querySelector<HTMLInputElement>('input.vector-only')!;
     vector.checked = true;
     vector.dispatchEvent(new Event('change'));
     expect(summary.textContent).toContain('export.vectorOnlyOn');

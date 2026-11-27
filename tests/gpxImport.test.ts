@@ -9,8 +9,8 @@ const mocks = vi.hoisted(() => ({
   updateTrip: vi.fn(),
   deleteTrip: vi.fn(),
   deleteSegment: vi.fn(),
-  streamGPX: vi.fn(),
-  trips: { add: vi.fn() }
+  publishTrip: vi.fn(),
+  streamGPX: vi.fn()
 }));
 
 vi.mock('../src/core/store', () => ({
@@ -21,7 +21,7 @@ vi.mock('../src/core/store', () => ({
   updateTrip: mocks.updateTrip,
   deleteTrip: mocks.deleteTrip,
   deleteSegment: mocks.deleteSegment,
-  db: { trips: mocks.trips }
+  publishTrip: mocks.publishTrip
 }));
 vi.mock('../src/core/gpxStream', () => ({ streamGPX: mocks.streamGPX }));
 
@@ -78,7 +78,7 @@ describe('streaming GPX import publication', () => {
     expect(mocks.createTrip).toHaveBeenCalledWith({
       id: trip.id, name: 'Streamed', status: 'finished', hasTime: true, createdAt: 1, publish: false
     });
-    expect(mocks.trips.add).toHaveBeenCalledWith(trip);
+    expect(mocks.publishTrip).toHaveBeenCalledWith(trip);
   });
 
   it('removes route data and creates an empty track segment when a later track takes precedence', async () => {

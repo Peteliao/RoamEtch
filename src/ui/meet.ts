@@ -55,7 +55,7 @@ export function createMeetView(navigate) {
   }, icon('follow'));
   const fitBtn = el('button', {
     class: 'iconbtn', type: 'button', title: t('record.fit'), 'aria-label': t('record.fit'),
-    onclick: () => map?.fitMeet()
+    onclick: () => map?.fitMeet(70, true)
   }, icon('fit'));
   const shareBtn = el('button', {
     class: 'iconbtn', type: 'button', title: t('meet.shareTitle'), 'aria-label': t('meet.shareTitle'),
@@ -97,6 +97,7 @@ export function createMeetView(navigate) {
   let autoFitDone = false;
   let lastCode = '';
   let panelCollapsed = false;
+  let lastHostId = '';
   let lastTickRender = 0;
   let rateLimitedUntil = 0;
   let chatModal = null;
@@ -590,7 +591,8 @@ export function createMeetView(navigate) {
     const params = msg.sysParams || {};
     const key = {
       join: 'join', leave: 'leave', kick: 'kick',
-      goalSet: 'goalSet', goalCleared: 'goalCleared'
+      goalSet: 'goalSet', goalCleared: 'goalCleared',
+      incompatible: 'incompatible', hostChanged: 'hostChanged'
     }[msg.sys];
     return key ? t(`meet.system.${key}`, params) : '';
   }
@@ -598,7 +600,10 @@ export function createMeetView(navigate) {
   function chatRow(s, msg) {
     if (msg.sys) {
       return el('div', { class: 'meet-chat-system' },
-        el('span', { class: 'mcs-ic' }, icon(msg.sys === 'join' ? 'meet' : msg.sys === 'kick' ? 'shield' : 'info', 13)),
+        el('span', { class: 'mcs-ic' }, icon(
+          msg.sys === 'join' ? 'meet'
+            : msg.sys === 'kick' ? 'shield'
+              : msg.sys === 'incompatible' ? 'warn' : 'info', 13)),
         el('span', {}, systemChatText(msg)));
     }
     const own = !!msg.self || msg.fromId === s.self?.id;
@@ -1128,6 +1133,7 @@ export function createMeetView(navigate) {
     else if (p?.positionStatus === 'stale') badges.push(badge(t('meet.positionStaleShort'), 'stale'));
     else if (p?.positionStatus === 'paused') badges.push(badge(t('meet.positionPausedShort'), 'paused'));
     if (p?.fixApprox) badges.push(el('span', { class: 'meet-badge approx', title: t('meet.fixApprox') }, '~'));
+    if (p?.shareTo === false) badges.push(badge(t('meet.hiddenPeerShort'), 'hidden'));
     if (p?.legacy) badges.push(badge(t('meet.legacyPeerShort'), 'legacy'));
     return badges;
   }
@@ -1190,6 +1196,24 @@ export function createMeetView(navigate) {
       else toast(t('meet.routeFail'), 'err');
     };
     actions.append(routeBtn);
+    if (p.networkStatus !== 'left') {
+      const visible = p.shareTo !== false;
+      const visBtn = el('button', {
+        class: 'iconbtn meet-row-btn' + (visible ? '' : ' muted'),
+        type: 'button',
+        title: visible ? t('meet.hideFromPeer', { name: p.name }) : t('meet.showToPeer', { name: p.name }),
+        'aria-label': visible ? t('meet.hideFromPeer', { name: p.name }) : t('meet.showToPeer', { name: p.name }),
+        'aria-pressed': String(!visible),
+        onclick: (e) => {
+          e.stopPropagation();
+          const done = meet.setPeerVisibility(p.id, !visible);
+          toast(t(done
+            ? (visible ? 'meet.visibilityOff' : 'meet.visibilityOn')
+            : 'meet.visibilityFail', { name: p.name }), done ? (visible ? 'warn' : 'ok') : 'err');
+        }
+      }, icon(visible ? 'eye' : 'eyeOff', 17));
+      actions.append(visBtn);
+    }
     if (s.isHost && p.networkStatus !== 'left') {
       const kickBtn = el('button', {
         class: 'iconbtn meet-row-btn danger', type: 'button',
@@ -1263,7 +1287,7 @@ export function createMeetView(navigate) {
       el('button', {
         class: 'iconbtn meet-row-btn', type: 'button',
         title: t('meet.spreadFit'), 'aria-label': t('meet.spreadFit'),
-        onclick: () => map?.fitMeet()
+        onclick: () => map?.fitMeet(70, true)
       }, icon('fit', 15)));
   }
 
@@ -1337,6 +1361,22 @@ export function createMeetView(navigate) {
         el('button', { class: 'btn sm primary', onclick: openShareSheet }, icon('share', 15), t('meet.copyLink'))
       ));
     }
+    if (s.incompatiblePeers?.length) {
+      panelBody.append(warningBanner('shield', t('meet.incompatiblePeers', { n: s.incompatiblePeers.length })));
+    }
+    const hiddenPeers = Number(s.security?.hiddenPeers) || 0;
+    if (s.keyEpoch > 0 || hiddenPeers > 0) {
+      panelBody.append(el('div', { class: 'meet-security-note' },
+        icon('shield', 15),
+        el('div', { class: 'msn-main' },
+          el('div', { class: 'msn-t' }, s.keyEpoch > 0
+            ? t('meet.securityEpoch', { n: s.keyEpoch })
+            : t('meet.hiddenSharing')),
+          el('div', { class: 'msn-d' },
+            [s.keyEpoch > 0 ? t('meet.securityEpochHint') : '',
+            hiddenPeers > 0 ? t('meet.hiddenPeers', { n: hiddenPeers }) : '']
+              .filter(Boolean).join(' · ')))));
+    }
     for (const card of [goalCard(s), spreadCard(s), markerSection(s)]) {
       if (card) panelBody.append(card);
     }
@@ -1375,8 +1415,10 @@ export function createMeetView(navigate) {
   function renderFoot(s) {
     panelFoot.innerHTML = '';
     const remainder = Math.max(0, s.expiresAt - Date.now());
-    const countdown = el('span', { class: 'meet-countdown', 'data-countdown': '' },
-      `${t('meet.expiryLabel')} ${fmtDuration(remainder)}`);
+    const countdown = el('span', {
+      class: 'meet-countdown', 'data-countdown': '',
+      title: t('meet.shareRemainingHint')
+    }, `${t('meet.shareRemaining')} ${fmtDuration(remainder)}`);
     const footTop = el('div', { class: 'mp-foot-top' }, countdown,
       el('span', { class: 'meet-foot-privacy' }, t('meet.footerPrivacy')));
     const pauseBtn = el('button', {
@@ -1405,7 +1447,7 @@ export function createMeetView(navigate) {
     const elCountdown = panel.querySelector('[data-countdown]');
     if (!elCountdown || !snap.active) return;
     const ms = remaining != null ? remaining : Math.max(0, snap.expiresAt - Date.now());
-    elCountdown.textContent = `${t('meet.expiryLabel')} ${fmtDuration(ms)}`;
+    elCountdown.textContent = `${t('meet.shareRemaining')} ${fmtDuration(ms)}`;
   }
 
   function renderTop(s) {
@@ -1471,6 +1513,16 @@ export function createMeetView(navigate) {
 
   function applySnapshot(s) {
     snap = s;
+    if (s.active && s.hostId) {
+      if (lastHostId && s.hostId !== lastHostId) {
+        const hostName = s.isHost ? (s.self?.name || t('meet.me'))
+          : (s.peers.find((p) => p.id === s.hostId)?.name || s.hostId);
+        toast(t('meet.hostChangedToast', { name: hostName }), 'info', 3400);
+      }
+      lastHostId = s.hostId;
+    } else if (!s.active) {
+      lastHostId = '';
+    }
     if (!s.active) closeChat();
     view.classList.toggle('meet-active', !!s.active);
     empty.style.display = s.active ? 'none' : 'flex';
@@ -1578,11 +1630,17 @@ export function createMeetView(navigate) {
             : t('meet.inviteExpiresAt', { time: new Date(s.inviteExpiresAt).toLocaleString() }),
           el('div', { class: 'min' }, t('meet.inviteExpiryHint'))))
       : null;
+    const sharingNote = el('div', { class: 'meet-invite-note' },
+      icon('clock', 14),
+      el('div', {},
+        t('meet.shareRemainingNote', { time: fmtDuration(Math.max(0, s.expiresAt - Date.now())) }),
+        el('div', { class: 'min' }, t('meet.shareRemainingHint'))));
     const body = el('div', { class: 'meet-share' },
       el('div', { class: 'meet-room-label' }, t('meet.roomLabel', { room: s.roomLabel })),
       el('div', { class: 'meet-code-big' }, s.invite),
       el('div', { class: 'meet-share-code-actions' }, copyCodeBtn),
       expiryNote,
+      sharingNote,
       el('div', { class: 'meet-code-key-note' }, t('meet.codeAsKey')),
       el('div', { class: 'meet-qr-frame' }, canvas, el('div', { class: 'meet-qr-hint' }, t('meet.qrHint'))),
       el('div', { class: 'meet-share-actions' }, copyLinkBtn, nativeBtn),
@@ -1957,6 +2015,10 @@ export function createMeetView(navigate) {
     if (!name) return;
     toast(t(kicked ? 'meet.peerKicked' : 'meet.peerLeft', { name }), 'info', 3000);
   });
+  on('meet:incompatible', ({ name, byHost }) => {
+    if (byHost || !name) return;
+    toast(t('meet.incompatibleRejected', { name }), 'warn', 4400);
+  });
   on('meet:ratelimited', ({ kind, retryAfterMs }) => {
     rateLimitedUntil = Date.now() + Math.max(0, Number(retryAfterMs) || 0);
     toast(t(`meet.rateLimited.${kind}`, { s: Math.max(1, Math.ceil((retryAfterMs || 0) / 1000)) }), 'warn', 2800);
@@ -1990,6 +2052,8 @@ export function createMeetView(navigate) {
     closeChat();
     if (reason === 'expired') toast(t('meet.expired'), 'warn', 4200);
     else if (reason === 'kicked') toast(t('meet.kickedOut'), 'warn', 4200);
+    else if (reason === 'room-closed') toast(t('meet.roomClosed'), 'warn', 4200);
+    else if (reason === 'incompatible') toast(t('meet.incompatibleEnded'), 'warn', 4800);
     else if (reason === 'manual') toast(t('meet.left'), 'ok');
   });
   on('meet:codeReset', () => {

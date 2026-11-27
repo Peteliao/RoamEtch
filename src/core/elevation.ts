@@ -2,7 +2,10 @@
 // Never fabricates or interpolates missing altitude.
 import { get } from './settings';
 import { elevationEndpoint, isServiceOffline } from './providers';
-import { elevCacheGet, elevCachePut, gridKey, db, updateTrip } from './store';
+import {
+  elevCacheGet, elevCachePut, gridKey, fillTrackChunkAltitudes,
+  firstSegmentChunkFrom, listSegments, patchSegmentAltitude
+} from './store';
 import { emit } from './events';
 
 const GPS_ACC_LIMIT = 30;      // metres altitudeAccuracy to trust GPS altitude
@@ -92,50 +95,11 @@ async function fetchBatch(coords, signal?: AbortSignal) {
 
 async function applyAltitudeFills(tripId, chunkId, fills, signal?: AbortSignal) {
   throwIfAborted(signal);
-  return db.transaction('rw', [db.trackChunks, db.trips], async () => {
-    throwIfAborted(signal);
-    const chunk = await db.trackChunks.get(chunkId);
-    throwIfAborted(signal);
-    if (!chunk || chunk.tripId !== tripId || !Array.isArray(chunk.points)) return 0;
-    let filled = 0;
-    const points = chunk.points.map((point, index) => {
-      const fill = fills.get(index);
-      if (!fill || !point || point.alt != null
-        || !Object.is(point.lat, fill.lat) || !Object.is(point.lon, fill.lon)
-        || !Object.is(point.t, fill.t)) return point;
-      filled++;
-      return { ...point, alt: fill.alt, altSrc: fill.src };
-    });
-    if (!filled) return 0;
-    throwIfAborted(signal);
-    await db.trackChunks.put({ ...chunk, points });
-    throwIfAborted(signal);
-    await updateTrip(tripId, { statsCache: null });
-    return filled;
-  });
+  return fillTrackChunkAltitudes(tripId, chunkId, fills, signal);
 }
 
 export async function patchFlushedAltitude(segmentId, point) {
-  return db.transaction('rw', [db.trackChunks, db.segments, db.trips], async () => {
-    const segment = await db.segments.get(segmentId);
-    if (!segment) return false;
-    const chunks = await db.trackChunks.where('[segmentId+seq]')
-      .between([segmentId, 0], [segmentId, Number.MAX_SAFE_INTEGER]).reverse()
-      .limit(MAX_ALTITUDE_LOOKUP_CHUNKS).toArray();
-    for (const chunk of chunks) {
-      if (!Array.isArray(chunk.points)) continue;
-      const index = chunk.points.findIndex((candidate) => candidate && candidate.alt == null
-        && Object.is(candidate.lat, point.lat) && Object.is(candidate.lon, point.lon)
-        && Object.is(candidate.t, point.t));
-      if (index < 0) continue;
-      const points = chunk.points.slice();
-      points[index] = { ...points[index], alt: point.alt, altSrc: point.altSrc };
-      await db.trackChunks.put({ ...chunk, points });
-      await updateTrip(segment.tripId, { statsCache: null });
-      return true;
-    }
-    return false;
-  });
+  return patchSegmentAltitude(segmentId, point, MAX_ALTITUDE_LOOKUP_CHUNKS);
 }
 
 /** Backfill null-altitude points of a trip in batches (after edits / back online). */
@@ -143,14 +107,13 @@ export async function backfillTripAltitudes(tripId, { onProgress, signal }: any 
   throwIfAborted(signal);
   if (isServiceOffline() || !navigator.onLine) return 0;
   let filled = 0;
-  const segments = await db.segments.where('tripId').equals(tripId).sortBy('index');
+  const segments = await listSegments(tripId);
   throwIfAborted(signal);
   for (const segment of segments) {
     let nextSeq = 0;
     while (true) {
       throwIfAborted(signal);
-      const chunk = await db.trackChunks.where('[segmentId+seq]')
-        .between([segment.id, nextSeq], [segment.id, Number.MAX_SAFE_INTEGER]).first();
+      const chunk = await firstSegmentChunkFrom(segment.id, nextSeq);
       throwIfAborted(signal);
       if (!chunk) break;
       if (Array.isArray(chunk.points)) {

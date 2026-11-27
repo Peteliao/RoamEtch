@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   loadTripTrack: vi.fn(), loadTrackSnapshot: vi.fn(), saveTrackSnapshotInTx: vi.fn(),
   saveTrackRepairVersionInTx: vi.fn(), loadTrackRepairVersion: vi.fn(),
   replaceSegmentPointsInTx: vi.fn(), updateTripInTx: vi.fn(), abortTransactionOnSignal: vi.fn(),
+  commitTrackEdits: vi.fn(),
   pushAction: vi.fn(), emit: vi.fn(),
   previewTrackCleanupAsync: vi.fn(), previewTrackRepairAsync: vi.fn()
 }));
@@ -22,7 +23,8 @@ vi.mock('../src/core/store', () => ({
   loadTrackRepairVersion: mocks.loadTrackRepairVersion,
   replaceSegmentPointsInTx: mocks.replaceSegmentPointsInTx,
   updateTripInTx: mocks.updateTripInTx,
-  abortTransactionOnSignal: mocks.abortTransactionOnSignal
+  abortTransactionOnSignal: mocks.abortTransactionOnSignal,
+  commitTrackEdits: mocks.commitTrackEdits
 }));
 vi.mock('../src/core/workerBridge', () => ({
   previewTrackCleanupAsync: mocks.previewTrackCleanupAsync,
@@ -65,6 +67,44 @@ beforeEach(() => {
   mocks.saveTrackRepairVersionInTx.mockResolvedValue({ versionId: 'repair-v1', version: 1, createdAt: 20 });
   mocks.replaceSegmentPointsInTx.mockResolvedValue(undefined);
   mocks.updateTripInTx.mockResolvedValue(1);
+  mocks.commitTrackEdits.mockImplementation(async (tripId: string, options: any) => {
+    const {
+      edits, useAfter, signal, expectedUpdatedAt = null, verify, verifySnapshot,
+      saveSnapshot = false, snapshotSegments = null, tripPatch = {}, persistVersion = null
+    } = options || {};
+    const throwIfAborted = () => {
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+    };
+    let detachAbort: (() => void) | undefined;
+    throwIfAborted();
+    try {
+      return await mocks.db.transaction('rw',
+        [mocks.db.trackChunks, mocks.db.trackSnapshots, mocks.db.segments, mocks.db.trips], async (transaction: any) => {
+          detachAbort = mocks.abortTransactionOnSignal(transaction, signal);
+          throwIfAborted();
+          const trip = await mocks.db.trips.get(tripId);
+          if (!trip || (expectedUpdatedAt != null && trip.updatedAt !== expectedUpdatedAt)) throw new Error('track-changed');
+          const current = await mocks.loadTripTrack(tripId, null, { cooperative: false });
+          if (verify && !await verify(current)) throw new Error('track-changed');
+          if (verifySnapshot && !verifySnapshot(await mocks.loadTrackSnapshot(tripId))) throw new Error('track-changed');
+          throwIfAborted();
+          if (saveSnapshot) await mocks.saveTrackSnapshotInTx(tripId, snapshotSegments || current?.segments || []);
+          for (const edit of edits || []) {
+            throwIfAborted();
+            await mocks.replaceSegmentPointsInTx(edit.segmentId, tripId, useAfter ? edit.after : edit.before);
+          }
+          throwIfAborted();
+          await mocks.updateTripInTx(tripId, { statsCache: null, thumbPoints: null, reportedDistance: null, ...tripPatch });
+          throwIfAborted();
+          if (persistVersion && useAfter) {
+            return mocks.saveTrackRepairVersionInTx(tripId, persistVersion.segments, persistVersion.metadata);
+          }
+          return null;
+        });
+    } finally {
+      detachAbort?.();
+    }
+  });
 });
 
 describe('persistent GPS cleanup', () => {

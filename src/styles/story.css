@@ -1,0 +1,139 @@
+/* ---------- travel story ---------- */
+.story-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.story-subtitle { margin-top: 4px; max-width: 720px; }
+.story-body { width: 100%; max-width: 980px; margin: 0 auto; padding: 4px 0 40px; }
+.story-cover {
+  margin: 10px 0 14px; padding: 20px 22px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg);
+}
+.story-eyebrow {
+  display: flex; align-items: center; gap: 7px;
+  color: var(--accent); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.story-saved-hint { margin-left: auto; color: var(--text-faint); letter-spacing: 0; text-transform: none; }
+.story-title-input {
+  display: block; width: 100%; margin: 12px 0 6px; padding: 2px 0;
+  background: transparent; border: 0; border-bottom: 1px dashed var(--border-strong);
+  color: var(--text); font-family: var(--font); font-size: clamp(24px, 5vw, 36px); font-weight: 700; line-height: 1.2;
+}
+.story-title-input:focus { outline: none; border-bottom-color: var(--accent); }
+.story-intro-input {
+  display: block; width: 100%; min-height: 62px; padding: 8px 10px; resize: vertical;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font: 14px/1.65 var(--font);
+}
+.story-intro-input:focus { outline: none; border-color: var(--accent); }
+.story-cover-meta {
+  display: flex; gap: 8px 18px; flex-wrap: wrap; margin-top: 12px;
+  color: var(--text-dim); font-size: 12.5px;
+}
+.story-cover-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.story-weather-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 4px 0 16px; padding: 11px 14px;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text-dim);
+}
+.story-weather-banner-text { flex: 1 1 280px; font-size: 12.5px; line-height: 1.55; }
+.story-days { display: flex; flex-direction: column; gap: 14px; }
+.story-day {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 16px 18px 18px;
+}
+.story-day-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.story-day-title { display: flex; align-items: flex-start; gap: 12px; flex: 1 1 260px; }
+.story-day-index {
+  color: var(--accent); font: 600 13px/1.7 var(--mono); letter-spacing: 0.12em;
+}
+.story-day-title h3 { margin: 0; font-size: 18px; line-height: 1.35; }
+.story-day-meta { margin-top: 3px; color: var(--text-faint); font-size: 12px; }
+.story-env {
+  display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 10px; margin: 14px 0;
+}
+.story-weather, .story-sun {
+  min-width: 0; padding: 12px 13px;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.story-weather-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.story-weather-head h4, .story-sun-head h4 { margin: 0; font-size: 14px; }
+.story-weather-ic { font-size: 20px; line-height: 1; }
+.story-weather-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.story-weather-actions .btn { padding: 3px 7px; font-size: 11.5px; }
+.story-weather-vals { display: flex; gap: 6px 14px; flex-wrap: wrap; margin-top: 8px; font-size: 13.5px; }
+.story-weather-src { margin-top: 6px; color: var(--text-faint); font-size: 11px; line-height: 1.5; }
+.story-weather-missing { margin-top: 4px; color: var(--warn); font-size: 11px; }
+.story-weather-err { margin-top: 5px; color: var(--danger); font-size: 11.5px; }
+.story-weather-note {
+  margin-top: 7px; padding-top: 7px; border-top: 1px dashed var(--border);
+  color: var(--text-dim); font-size: 12px;
+}
+.story-weather-empty { margin-top: 8px; color: var(--text-dim); font-size: 13px; }
+.story-tag {
+  padding: 1px 6px; border-radius: 999px; background: var(--accent-soft);
+  color: var(--accent); font-size: 10px; letter-spacing: 0.03em;
+}
+.story-sun-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.story-sun-times { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 13.5px; }
+.story-day-note {
+  display: block; width: 100%; min-height: 48px; resize: vertical; padding: 10px 12px;
+  background: var(--bg-input); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm); color: var(--text); font: 14px/1.65 var(--font);
+}
+.story-day-note:focus { outline: none; border-color: var(--accent); }
+.story-node-list { margin: 14px 0 4px; display: flex; flex-direction: column; }
+.story-node {
+  display: flex; align-items: flex-start; gap: 10px; padding: 9px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.story-node:last-child { border-bottom: 0; }
+.story-node-time { min-width: 48px; padding-top: 2px; color: var(--text-faint); font: 11.5px/1.6 var(--mono); }
+.story-node-main { flex: 1; min-width: 0; }
+.story-node-name { font-size: 14px; font-weight: 600; }
+.story-node-badge { margin-left: 8px; color: var(--text-faint); font-size: 11px; font-weight: 400; }
+.story-node-desc { margin-top: 2px; color: var(--text-dim); font-size: 12.5px; line-height: 1.55; }
+.story-node-edit { flex: 0 0 auto; padding: 3px 7px; font-size: 11.5px; }
+.story-node-empty { padding: 8px 0; color: var(--text-faint); font-size: 12.5px; }
+.story-photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 1fr)); gap: 8px; margin-top: 12px; }
+.story-photo {
+  padding: 0; overflow: hidden; aspect-ratio: 4 / 3; cursor: zoom-in;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center; color: var(--text-faint);
+}
+.story-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.story-photo:hover { border-color: var(--accent); }
+.story-lightbox { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.story-lightbox-img { max-width: 100%; max-height: 64vh; border-radius: var(--radius); object-fit: contain; background: var(--bg); }
+.story-lightbox-cap { color: var(--text-dim); font-size: 13px; text-align: center; }
+.story-field-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.story-field-row .field { margin: 0; }
+.story-import-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; max-height: 52vh; overflow: auto; }
+.story-import-progress { margin-top: 10px; color: var(--accent); font-size: 12px; }
+.story-import-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.story-import-item.unmatched { opacity: 0.66; cursor: default; }
+.story-import-item input { flex: 0 0 auto; }
+.story-import-item img, .story-import-noimg {
+  width: 52px; height: 52px; flex: 0 0 auto; object-fit: cover; border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center; background: var(--bg-input); color: var(--text-faint);
+}
+.story-import-main { flex: 1; min-width: 0; }
+.story-import-name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.story-import-meta { margin-top: 2px; color: var(--text-faint); font-size: 11px; }
+.story-import-match { margin-top: 3px; color: var(--text-dim); font-size: 11.5px; }
+.story-import-item.unmatched .story-import-match { color: var(--warn); }
+
+@media (max-width: 640px) {
+  .story-body { padding-bottom: 28px; }
+  .story-cover { padding: 16px; border-radius: var(--radius); }
+  .story-day { padding: 14px 13px 16px; border-radius: var(--radius); }
+  .story-env { grid-template-columns: 1fr; }
+  .story-field-row { grid-template-columns: 1fr 1fr; }
+  .story-head-actions { width: 100%; }
+  .story-head-actions .btn { flex: 1; justify-content: center; }
+  .story-photo-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .story-node-edit { padding: 3px 6px; }
+  .story-node-edit span:not(:first-child) { display: none; }
+}

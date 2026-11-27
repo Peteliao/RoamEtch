@@ -1,5 +1,6 @@
 // RoamEtch迹刻 bootstrap — pure frontend, offline-first, dual-region adaptive.
 import './styles/main.css';
+import './styles/story.css';
 import '@fontsource/barlow-condensed/600.css';
 import '@fontsource/barlow-condensed/700.css';
 import { initI18n, t } from './core/i18n';
@@ -114,10 +115,7 @@ async function performSharedTripImport(shell, hash, fingerprint, shared) {
       await forgetSharedImport(fingerprint);
     }
 
-    const result = await storeCore.db.transaction('rw', [
-      storeCore.db.trips, storeCore.db.segments, storeCore.db.trackChunks,
-      storeCore.db.waypoints, storeCore.db.media, storeCore.db.shareImports
-    ], async () => {
+    const result = await storeCore.runShareImportTransaction(async () => {
       const existing = await storeCore.getShareImport(fingerprint);
       if (existing && await storeCore.getTrip(existing.tripId)) {
         return { tripId: existing.tripId, created: false };

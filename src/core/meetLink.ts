@@ -1,7 +1,7 @@
 // Ephemeral meetup invites: a random public room id plus a 256-bit bearer
 // secret. Both live only in the URL fragment / QR code; the relay receives the
 // room id and opaque ciphertext, never the secret.
-const VERSION = 2;
+const WIRE_VERSION = 2;
 const INVITE_PREFIX = 'TM2';
 const ROOM_ID_BYTES = 16;
 const SECRET_BYTES = 32;
@@ -11,7 +11,8 @@ const NONCE_MAX = 0xffffffff;
 const SALT = new TextEncoder().encode('trackmint-meet-v2');
 const INVITE_RE = /^TM2\.([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/;
 
-export const MEET_PROTOCOL_VERSION = VERSION;
+/** Envelope format stays v2; the negotiated packet protocol is independent. */
+export const MEET_PROTOCOL_VERSION = 3;
 export const MEET_MAX_PACKET_CHARS = 128 * 1024;
 export const MEET_INVITE_MAX_TTL_MS = 30 * 24 * 60 * 60_000;
 const INVITE_EXPIRY_SIG_RE = /^[A-Za-z0-9_-]{43}$/;
@@ -163,23 +164,35 @@ export async function encryptMeetPacket(packet: unknown, room: MeetRoomKey) {
     plain
   ));
   const envelope = new Uint8Array(1 + iv.length + cipher.length);
-  envelope[0] = VERSION;
+  envelope[0] = WIRE_VERSION;
   envelope.set(iv, 1);
   envelope.set(cipher, 13);
   return b64urlEncode(envelope);
 }
 
-export async function decryptMeetPacket(text: string, room: MeetRoomKey): Promise<any | null> {
+export async function decryptMeetPacket(
+  text: string,
+  room: MeetRoomKey,
+  altKeys: CryptoKey[] = []
+): Promise<any | null> {
   if (!crypto?.subtle || typeof text !== 'string' || text.length > MEET_MAX_PACKET_CHARS || text.length < 32) return null;
   try {
     const bytes = b64urlDecode(text);
-    if (bytes[0] !== VERSION || bytes.length < 29) return null;
-    const plain = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: bytes.slice(1, 13), additionalData: aad(room.roomId) },
-      room.key,
-      bytes.slice(13)
-    );
-    return JSON.parse(new TextDecoder().decode(plain));
+    if (bytes[0] !== WIRE_VERSION || bytes.length < 29) return null;
+    const keys = [room.key, ...altKeys];
+    for (const key of keys) {
+      try {
+        const plain = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: bytes.slice(1, 13), additionalData: aad(room.roomId) },
+          key,
+          bytes.slice(13)
+        );
+        return JSON.parse(new TextDecoder().decode(plain));
+      } catch {
+        // Try the next retained epoch key.
+      }
+    }
+    return null;
   } catch {
     return null;
   }

@@ -21,6 +21,8 @@ import { setRewalkVoice } from '../core/rewalk';
 import { APP_VERSION } from '../core/version';
 import { THEME_OPTIONS } from '../core/themeRegistry';
 import { exportImage } from '../core/shareEnv';
+import { createSyncPanel } from './syncPanel';
+import { eraseSyncState } from '../core/syncStore';
 import { openInstallGuide, installSettingsInfo } from './install';
 import { el, icon, toast, confirmModal, filePicker, modal } from './helpers';
 
@@ -642,6 +644,7 @@ export function createSettingsView(navigate) {
     const again = await confirmModal({ title: t('settings.dangerTitle'), message: t('settings.clearConfirm2'), danger: true, confirmText: t('common.confirm') });
     if (!again) return;
     await eraseAll();
+    try { await eraseSyncState(); } catch (error) { console.warn('sync state clear failed', error); }
     await setActiveTrip(null);
     toast(t('settings.cleared'), 'ok');
     refreshStorage();
@@ -676,10 +679,12 @@ export function createSettingsView(navigate) {
   refreshStorage();
   on('backup:exported', refreshStorage);
   on('backup:restored', refreshStorage);
+  on('sync:completed', refreshStorage);
   const dangerZone = el('div', { class: 'danger-zone' },
     el('div', { class: 'dz-title' }, icon('warn', 14), t('settings.dangerTitle')),
     el('div', { class: 'small faint', style: { marginBottom: '10px' } }, t('settings.dangerHint')),
     eraseBtn);
+  const syncPanel = createSyncPanel();
   const dataCard = card('database', t('settings.dataBackup'), storageLine, persistenceLine,
     el('div', { class: 'row wrap', style: { marginTop: '8px' } }, persistBtn),
     el('div', { class: 'small faint', style: { margin: '5px 0 9px' } }, t('settings.storagePersistHint')),
@@ -907,14 +912,15 @@ export function createSettingsView(navigate) {
     section(t('settings.recordGroup')), recCard,
     section(t('settings.privacyGroup')), privacyCard,
     section(t('settings.mapGroup')), regionCard, mapAdvanced.details,
+    section(t('settings.syncGroup')), syncPanel.card,
     section(t('settings.dataGroup')), dataCard,
     section(t('settings.aboutGroup')), aboutCard, installCard, promoCard, debugSlot
   );
 
   return {
     view,
-    refresh: () => { renderProbe(); renderSimBanner(); refreshStorage(); },
-    destroy: () => healthController?.abort(),
+    refresh: () => { renderProbe(); renderSimBanner(); refreshStorage(); syncPanel.refresh(); },
+    destroy: () => { syncPanel.destroy(); healthController?.abort(); },
     resize: () => {},
     focus: (intent) => {
       const anchor = typeof intent === 'string' ? intent : intent?.anchor;

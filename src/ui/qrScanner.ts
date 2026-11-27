@@ -5,7 +5,22 @@ import { decodeQrVideoFrame } from '../core/qr';
 import { el, icon, trapFocus } from './helpers';
 import { pushOverlayState, removeOverlayState } from './history';
 
-export function openQrScanner(onResult: (text: string) => void) {
+export interface QrScannerLabels {
+  title?: string;
+  hint?: string;
+  starting?: string;
+  cameraFail?: string;
+  permission?: string;
+}
+
+export function openQrScanner(onResult: (text: string) => void, labels: QrScannerLabels = {}) {
+  const copy = {
+    title: labels.title || t('meet.scanTitle'),
+    hint: labels.hint || t('meet.scanHint'),
+    starting: labels.starting || t('meet.scanStarting'),
+    cameraFail: labels.cameraFail || t('meet.scanCameraFail'),
+    permission: labels.permission || t('meet.scanPermission')
+  };
   let closed = false;
   let stream: MediaStream | null = null;
   let timer = 0;
@@ -17,19 +32,19 @@ export function openQrScanner(onResult: (text: string) => void) {
   video.setAttribute('playsinline', '');
   (video as any).webkitPlaysinline = true;
   const scratch = document.createElement('canvas');
-  const hint = el('div', { class: 'qr-scan-hint' }, t('meet.scanHint'));
-  const status = el('div', { class: 'qr-scan-status' }, t('meet.scanStarting'));
+  const hint = el('div', { class: 'qr-scan-hint' }, copy.hint);
+  const status = el('div', { class: 'qr-scan-status' }, copy.starting);
   const retry = el('button', { class: 'qr-scan-retry', type: 'button', hidden: true }, icon('refresh', 16), t('common.retry'));
   const closeBtn = el('button', {
     class: 'qr-scan-close', type: 'button', 'aria-label': t('common.close'), onclick: () => close()
   }, icon('x', 22));
   const overlay = el('div', {
     class: 'qr-scan-overlay', role: 'dialog', 'aria-modal': 'true',
-    'aria-label': t('meet.scanTitle'), tabindex: '-1'
+    'aria-label': copy.title, tabindex: '-1'
   },
     video,
     el('div', { class: 'qr-scan-shade' }, el('div', { class: 'qr-scan-frame' })),
-    el('div', { class: 'qr-scan-top' }, el('div', { class: 'qr-scan-title' }, t('meet.scanTitle')), closeBtn),
+    el('div', { class: 'qr-scan-top' }, el('div', { class: 'qr-scan-title' }, copy.title), closeBtn),
     el('div', { class: 'qr-scan-bottom' }, hint, status, retry)
   );
   document.body.append(overlay);
@@ -95,9 +110,9 @@ export function openQrScanner(onResult: (text: string) => void) {
   async function start() {
     retry.hidden = true;
     status.classList.remove('err');
-    status.textContent = t('meet.scanStarting');
+    status.textContent = copy.starting;
     if (!navigator.mediaDevices?.getUserMedia) {
-      fail(t('meet.scanCameraFail'));
+      fail(copy.cameraFail);
       return;
     }
     stop();
@@ -134,7 +149,7 @@ export function openQrScanner(onResult: (text: string) => void) {
       void tick();
     } catch (e: any) {
       const name = String(e?.name || '');
-      fail(name === 'NotAllowedError' || name === 'SecurityError' ? t('meet.scanPermission') : t('meet.scanCameraFail'));
+      fail(name === 'NotAllowedError' || name === 'SecurityError' ? copy.permission : copy.cameraFail);
     }
   }
 

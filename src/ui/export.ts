@@ -7,12 +7,16 @@ import { applyPrivacy, countPrivacyCrops } from '../core/privacy';
 import { sampleTrackSegments } from '../core/geo';
 import { generatePoster } from '../core/poster';
 import { buildGPX, buildGeoJSON, buildKML } from '../core/gpx';
-import { buildGPXAsync } from '../core/workerBridge';
+import { buildGPXAsync, buildGeoJSONAsync, buildKMLAsync } from '../core/workerBridge';
 import { buildSelfContainedHTML, estimateHTMLSize } from '../core/htmlExport';
 import { buildShareLink } from '../core/shareLink';
 import { generateTrackVideo, videoSupported } from '../core/trackVideo';
 import { MUSIC_TRACKS, MUSIC_PREF_RANDOM, isMusicTrackId, musicSupported } from '../core/music';
 import { videoIsWebmOnly } from '../core/videoCapture';
+import {
+  SHARE_BACKGROUNDS, SHARE_FONTS, SHARE_LAYOUTS, SHARE_TRACK_COLORS, VIDEO_CAMERAS,
+  SHARE_STYLE_DEFAULTS, normalizeShareStyle, trackColorValue
+} from '../core/shareStyle';
 import { exportImage, exportFile, isWeChat, nativeShare } from '../core/shareEnv';
 import { listTrips, loadTripFull } from '../core/store';
 import { prepareMap } from '../core/mapPaint';
@@ -41,6 +45,9 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
   let posterBusy = false;
   let videoBusy = false;
   let htmlBusy = false;
+  let shareStyle = normalizeShareStyle({});
+  let hideStartIcon = false;
+  let hideEndIcon = false;
 
   const tripSel = el('select', { style: { width: '100%' } });
   const tripLabel = el('div', { class: 'small muted', style: { marginTop: '6px' } });
@@ -69,14 +76,27 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
   radiusInput.onchange = () => {
     radiusInput.value = String(Math.max(0, +radiusInput.value || 0));
     set('privacyRadius', +radiusInput.value);
+    invalidateGenerated();
     updatePrivacySummary(); updateLink(true); updateHtmlEstimate(); warmExport(curFull);
   };
   radiusInput.oninput = () => updatePrivacySummary();
   const hideCb = el('input', { type: 'checkbox' });
   hideCb.checked = true;
-  hideCb.onchange = () => { updatePrivacySummary(); updateLink(true); updateHtmlEstimate(); warmExport(curFull); };
-  const vectorCb = el('input', { type: 'checkbox' });
-  vectorCb.onchange = () => { updatePrivacySummary(); warmExport(curFull); };
+  hideCb.onchange = () => { invalidateGenerated(); updatePrivacySummary(); updateLink(true); updateHtmlEstimate(); warmExport(curFull); };
+  const startIconCb = el('input', { type: 'checkbox', class: 'hide-start-icon' });
+  startIconCb.onchange = () => {
+    hideStartIcon = startIconCb.checked;
+    invalidateGenerated();
+    updatePrivacySummary(); updateHtmlEstimate();
+  };
+  const endIconCb = el('input', { type: 'checkbox', class: 'hide-end-icon' });
+  endIconCb.onchange = () => {
+    hideEndIcon = endIconCb.checked;
+    invalidateGenerated();
+    updatePrivacySummary(); updateHtmlEstimate();
+  };
+  const vectorCb = el('input', { type: 'checkbox', class: 'vector-only' });
+  vectorCb.onchange = () => { invalidateGenerated(); updatePrivacySummary(); warmExport(curFull); };
   const privacySummary = el('div', { class: 'privacy-summary small muted', role: 'status', 'aria-live': 'polite' });
   const privacyCrop = el('div', { class: 'privacy-crop small faint', style: { marginTop: '8px' } });
   const privacyControls = el('div', { class: 'privacy-controls', id: 'export-privacy-controls', hidden: true, style: { display: 'none' } },
@@ -84,6 +104,8 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.privacyRadius')), el('div', { class: 'd' }, t('export.privacyRadiusHint'))),
       el('div', { class: 'inline-num' }, radiusInput, el('span', { class: 'small faint' }, 'm'))),
     el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.hideSensitive'))), labelSwitch(hideCb)),
+    el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.hideStartIcon'))), labelSwitch(startIconCb)),
+    el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.hideEndIcon'))), labelSwitch(endIconCb)),
     el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.vectorOnly'))), labelSwitch(vectorCb)),
     privacyCrop
   );
@@ -129,7 +151,13 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     toast(isWeChat() ? t('export.shareWechat') : t('export.shareUnsupported'), 'warn');
   }
   function privacyOpts() {
-    return { radius: Math.max(0, +radiusInput.value || 0), hideSensitive: hideCb.checked };
+    const opts: any = {
+      radius: Math.max(0, +radiusInput.value || 0),
+      hideSensitive: hideCb.checked
+    };
+    if (hideStartIcon) opts.hideStartIcon = true;
+    if (hideEndIcon) opts.hideEndIcon = true;
+    return opts;
   }
   function updatePrivacySummary() {
     const full = curFull;
@@ -143,6 +171,10 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     privacySummary.textContent = [
       privacy.radius > 0 ? `${t('export.checkCircle')} · ${privacy.radius} m` : t('export.privacyRadiusOff'),
       hideCb.checked ? t('export.sensitiveHidden') : t('export.sensitiveVisible'),
+      hideStartIcon || hideEndIcon
+        ? (hideStartIcon && hideEndIcon ? t('export.iconsBothHidden')
+          : hideStartIcon ? t('export.startIconHidden') : t('export.endIconHidden'))
+        : t('export.iconsVisible'),
       t(vectorCb.checked ? 'export.vectorOnlyOn' : 'export.vectorOnlyOff')
     ].join(' · ');
     privacyCrop.textContent = t('export.cropNote', { n: c.croppedPoints, m: c.croppedWaypoints });
@@ -205,6 +237,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       posterSize = s;
       sizeToggle.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
       b.classList.add('active');
+      invalidateGenerated();
     };
     sizeToggle.append(b);
     sizeButtons.push(b);
@@ -230,6 +263,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       generating = { full, version };
       const { blob, usedVectorFallback } = await generatePoster(full, {
         size: posterSize,
+        style: shareStyle,
         privacy: privacyOpts(),
         vectorOnly: vectorCb.checked,
         basemapId: getRecordMap?.()?.basemapId || '',
@@ -284,6 +318,117 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     el('div', { style: { marginTop: '10px' } }, previewBox)
   );
 
+  // ---- share style (poster + video + HTML track look) ----
+  const styleControls = [];
+  const styleSelect = (label, options, value, onChange) => {
+    const sel = el('select', { class: 'style-select' },
+      ...options.map(([k, text]) => el('option', { value: k }, text)));
+    sel.value = value;
+    sel.onchange = () => onChange(sel.value);
+    styleControls.push(sel);
+    return el('label', { class: 'style-field' }, el('span', {}, label), sel);
+  };
+  const styleRange = (label, min, max, step, value, format, onChange) => {
+    const out = el('span', { class: 'style-range-value' }, format(value));
+    const input = el('input', { type: 'range', min: String(min), max: String(max), step: String(step), value: String(value) });
+    input.oninput = () => { out.textContent = format(+input.value); };
+    input.onchange = () => onChange(+input.value);
+    styleControls.push(input);
+    return el('label', { class: 'style-field style-range' },
+      el('span', { class: 'style-range-head' }, el('span', {}, label), out), input);
+  };
+  const styleLayout = el('div', { class: 'seg-toggle sm style-layout' });
+  for (const [k, label] of [['stack', t('export.layoutStack')], ['overlay', t('export.layoutOverlay')]]) {
+    const b = el('button', { type: 'button', class: k === shareStyle.layout ? 'active' : '' }, label);
+    b.onclick = () => {
+      styleLayout.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+      applyStyle({ layout: k as any });
+    };
+    styleLayout.append(b);
+    styleControls.push(b);
+  }
+  const styleBg = styleSelect(t('export.styleBackground'), SHARE_BACKGROUNDS.map((k) => [k, t(`export.bg_${k}`)]), shareStyle.background,
+    (v) => applyStyle({ background: v as any }));
+  const styleFont = styleSelect(t('export.styleFont'), SHARE_FONTS.map((k) => [k, t(`export.font_${k}`)]), shareStyle.font,
+    (v) => applyStyle({ font: v as any }));
+  const styleRatio = styleRange(t('export.styleMapRatio'), 38, 72, 1, shareStyle.mapRatio, (v) => `${Math.round(v)}%`,
+    (v) => applyStyle({ mapRatio: v }));
+  const styleTrackColor = styleSelect(t('export.styleTrackColor'),
+    SHARE_TRACK_COLORS.map((k) => [k, t(`export.color_${k}`)]), shareStyle.trackColor,
+    (v) => applyStyle({ trackColor: v as any }));
+  const styleTrackWidth = styleRange(t('export.styleTrackWidth'), 3.5, 12, 0.5, shareStyle.trackWidth,
+    (v) => `${(+v.toFixed(1))} px`, (v) => applyStyle({ trackWidth: v }));
+  const styleBgSelect = styleBg.querySelector('select') as HTMLSelectElement;
+  const styleFontSelect = styleFont.querySelector('select') as HTMLSelectElement;
+  const styleTrackColorSelect = styleTrackColor.querySelector('select') as HTMLSelectElement;
+  const styleRatioInput = styleRatio.querySelector('input') as HTMLInputElement;
+  const styleTrackWidthInput = styleTrackWidth.querySelector('input') as HTMLInputElement;
+  const styleRatioOut = styleRatio.querySelector('.style-range-value') as HTMLElement;
+  const styleTrackWidthOut = styleTrackWidth.querySelector('.style-range-value') as HTMLElement;
+  const styleStatsCb = el('input', { type: 'checkbox' });
+  styleStatsCb.checked = shareStyle.statsCard;
+  styleStatsCb.onchange = () => applyStyle({ statsCard: styleStatsCb.checked });
+  styleControls.push(styleStatsCb);
+  const styleTitle = el('input', {
+    type: 'text', maxlength: '24', class: 'style-title-input',
+    placeholder: t('export.styleTitleHint'), 'aria-label': t('export.styleTitle')
+  });
+  styleTitle.value = shareStyle.title;
+  styleTitle.oninput = () => {
+    shareStyle = normalizeShareStyle({ ...shareStyle, title: styleTitle.value });
+    invalidateGenerated();
+  };
+  styleTitle.onchange = () => applyStyle({ title: styleTitle.value });
+  styleControls.push(styleTitle);
+  const styleReset = el('button', { type: 'button', class: 'btn ghost sm' }, t('export.styleReset'));
+  styleReset.onclick = () => {
+    shareStyle = normalizeShareStyle({ ...SHARE_STYLE_DEFAULTS });
+    syncStyleControls();
+    invalidateGenerated();
+  };
+  styleControls.push(styleReset);
+  const stylePanel = el('details', { class: 'share-style' },
+    el('summary', {}, icon('settings', 15), t('export.styleTitle'), el('span', { class: 'style-chevron' }, icon('chevron', 15))),
+    el('div', { class: 'share-style-body' },
+      el('div', { class: 'style-field style-field-wide' },
+        el('span', {}, t('export.styleLayout')), styleLayout),
+      styleBg,
+      styleFont,
+      styleRatio,
+      styleTrackColor,
+      styleTrackWidth,
+      el('label', { class: 'style-check' }, styleStatsCb, t('export.styleStats')),
+      el('label', { class: 'style-field style-field-wide' },
+        el('span', {}, t('export.styleTitleLabel')), styleTitle),
+      el('div', { class: 'style-actions' }, styleReset)
+    )
+  );
+
+  function applyStyle(patch) {
+    shareStyle = normalizeShareStyle({ ...shareStyle, ...patch });
+    syncStyleControls();
+    invalidateGenerated();
+  }
+  function syncStyleControls() {
+    styleLayout.querySelectorAll('button').forEach((x, i) => {
+      x.classList.toggle('active', (i === 0 ? 'stack' : 'overlay') === shareStyle.layout);
+    });
+    styleBgSelect.value = shareStyle.background;
+    styleFontSelect.value = shareStyle.font;
+    styleTrackColorSelect.value = shareStyle.trackColor;
+    styleRatioInput.value = String(shareStyle.mapRatio);
+    styleRatioOut.textContent = `${Math.round(shareStyle.mapRatio)}%`;
+    styleTrackWidthInput.value = String(shareStyle.trackWidth);
+    styleTrackWidthOut.textContent = `${+shareStyle.trackWidth.toFixed(1)} px`;
+    styleStatsCb.checked = shareStyle.statsCard;
+    styleTitle.value = shareStyle.title;
+    cameraSel.value = shareStyle.camera;
+    photoCutCb.checked = shareStyle.photoCutIn;
+  }
+  posterCard.insertBefore(stylePanel, previewBox.parentElement);
+
+
   // ---- track video ----
   const videoOk = videoSupported();
   const videoWebmOnly = videoOk && videoIsWebmOnly(musicSupported());
@@ -320,6 +465,21 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       el('span', {}, t('export.videoMusic')),
       musicSel)
     : null;
+  const cameraSel = el('select', { class: 'trip-sort video-camera', 'aria-label': t('export.videoCamera') },
+    ...VIDEO_CAMERAS.map((k) => el('option', { value: k }, t(`export.camera_${k}`))));
+  cameraSel.value = shareStyle.camera;
+  cameraSel.onchange = () => { shareStyle = normalizeShareStyle({ ...shareStyle, camera: cameraSel.value as any }); invalidateGenerated(); };
+  styleControls.push(cameraSel);
+  const photoCutCb = el('input', { type: 'checkbox', class: 'photo-cut-in' });
+  photoCutCb.checked = shareStyle.photoCutIn;
+  photoCutCb.onchange = () => { shareStyle = normalizeShareStyle({ ...shareStyle, photoCutIn: photoCutCb.checked }); invalidateGenerated(); };
+  styleControls.push(photoCutCb);
+  const cameraRow = el('div', { class: 'video-camera-row' },
+    el('label', { class: 'video-music-row' }, icon('camera', 16),
+      el('span', {}, t('export.videoCamera')), cameraSel),
+    el('label', { class: 'row', style: { cursor: 'pointer', fontSize: '13px' } }, photoCutCb, t('export.videoPhotoCutIn'))
+  );
+  syncStyleControls();
   vCancelBtn.onclick = () => videoAbort?.abort();
   vGenBtn.onclick = async () => {
     if (!hasCurrentTrip() || videoBusy || posterBusy || htmlBusy) return;
@@ -338,6 +498,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       generating = { full, version };
       vNote.textContent = t('export.videoKeepVisible');
       const r = await generateTrackVideo(full, {
+        style: shareStyle,
         privacy: privacyOpts(),
         vectorOnly: vectorCb.checked,
         basemapId: getRecordMap?.()?.basemapId || '',
@@ -397,6 +558,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     videoWebmOnly ? el('div', { class: 'debug-banner' }, '⚠ ' + t('export.videoWebmWarn')) : null,
     isWeChat() ? el('div', { class: 'small', style: { color: 'var(--warn)', marginBottom: '8px' } }, t('export.videoWechatHint')) : null,
     musicRow,
+    cameraRow,
     el('div', { class: 'card-line' }, durToggle, vGenBtn, vCancelBtn, vDlBtn, vShareBtn),
     vNote,
     vPreview
@@ -433,14 +595,20 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       const result = await croppedFull();
       if (!result || !requireCurrentSnapshot(result.snapshot)) return;
       const f = result.full;
-      exportFile(new Blob([JSON.stringify(buildGeoJSON(f), null, 1)], { type: 'application/geo+json' }), `${f.trip.name || 'trip'}.geojson`);
+      const pointCount = f.segments.reduce((sum, segment) => sum + segment.points.length, 0);
+      const geo = pointCount > 100_000 ? await buildGeoJSONAsync(f) : buildGeoJSON(f);
+      if (!requireCurrentSnapshot(result.snapshot)) return;
+      exportFile(new Blob([JSON.stringify(geo, null, 1)], { type: 'application/geo+json' }), `${f.trip.name || 'trip'}.geojson`);
       toast(t('export.exported'), 'ok');
     }),
     fileBtn(t('export.kml'), t('export.kmlHint'), async () => {
       const result = await croppedFull();
       if (!result || !requireCurrentSnapshot(result.snapshot)) return;
       const f = result.full;
-      exportFile(new Blob([buildKML(f)], { type: 'application/vnd.google-earth.kml+xml' }), `${f.trip.name || 'trip'}.kml`);
+      const pointCount = f.segments.reduce((sum, segment) => sum + segment.points.length, 0);
+      const kml = pointCount > 100_000 ? await buildKMLAsync(f) : buildKML(f);
+      if (!requireCurrentSnapshot(result.snapshot)) return;
+      exportFile(new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' }), `${f.trip.name || 'trip'}.kml`);
       toast(t('export.exported'), 'ok');
     })
   );
@@ -498,6 +666,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       generating = { full, version };
       const { html, size, photos } = await buildSelfContainedHTML(full, {
         tier: htmlTier,
+        style: shareStyle,
         privacy: privacyOpts(),
         includePhotos: htmlTier !== 'none' && htmlPhotosCb.checked,
         onProgress: (p) => {
@@ -635,6 +804,9 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
 
   function revokePosterUrl() {
     if (posterUrl) { URL.revokeObjectURL(posterUrl); posterUrl = null; }
+  }
+  function invalidateGenerated() {
+    if (posterBlob || videoBlob) resetOutputs();
   }
   function resetOutputs(preserveSignal = null) {
     outputVersion++;
@@ -778,8 +950,11 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     tripSel.disabled = videoBusy;
     radiusInput.disabled = !available || generating;
     hideCb.disabled = !available || generating;
+    startIconCb.disabled = !available || generating;
+    endIconCb.disabled = !available || generating;
     vectorCb.disabled = !available || generating;
     privacyAdjust.disabled = !available || generating;
+    styleControls.forEach((c) => { c.disabled = !available || generating; });
     sizeButtons.forEach((b) => { b.disabled = !available || generating; });
     genBtn.disabled = !available || generating;
     dlBtn.disabled = !posterBlob;

@@ -3,9 +3,10 @@ import { applyPrivacy } from '../src/core/privacy';
 import { bridgeTrackGapsForExport, repairTrackGaps, routeOverRoads } from '../src/core/gapRepair';
 
 const mocks = vi.hoisted(() => ({
-  db: { trips: { get: vi.fn() }, trackChunks: {}, segments: {}, transaction: vi.fn() },
+  db: { trips: { get: vi.fn() }, trackChunks: {}, trackSnapshots: {}, segments: {}, transaction: vi.fn() },
   loadTripTrack: vi.fn(), replaceSegmentPointsInTx: vi.fn(), updateTripInTx: vi.fn(),
-  abortTransactionOnSignal: vi.fn(), pushAction: vi.fn(), emit: vi.fn()
+  abortTransactionOnSignal: vi.fn(), commitTrackEdits: vi.fn(), pushAction: vi.fn(), emit: vi.fn()
+  , loadTrackSnapshot: vi.fn(), saveTrackSnapshotInTx: vi.fn(), saveTrackRepairVersionInTx: vi.fn()
 }));
 
 vi.mock('../src/core/store', () => ({
@@ -13,7 +14,11 @@ vi.mock('../src/core/store', () => ({
   loadTripTrack: mocks.loadTripTrack,
   replaceSegmentPointsInTx: mocks.replaceSegmentPointsInTx,
   updateTripInTx: mocks.updateTripInTx,
-  abortTransactionOnSignal: mocks.abortTransactionOnSignal
+  abortTransactionOnSignal: mocks.abortTransactionOnSignal,
+  commitTrackEdits: mocks.commitTrackEdits,
+  loadTrackSnapshot: mocks.loadTrackSnapshot,
+  saveTrackSnapshotInTx: mocks.saveTrackSnapshotInTx,
+  saveTrackRepairVersionInTx: mocks.saveTrackRepairVersionInTx
 }));
 vi.mock('../src/core/history', () => ({ pushAction: mocks.pushAction }));
 vi.mock('../src/core/events', () => ({ emit: mocks.emit }));
@@ -38,6 +43,47 @@ beforeEach(() => {
   mocks.db.trips.get.mockResolvedValue({ id: 'trip-1', updatedAt: 10 });
   mocks.replaceSegmentPointsInTx.mockResolvedValue(undefined);
   mocks.updateTripInTx.mockResolvedValue(1);
+  mocks.loadTrackSnapshot.mockResolvedValue([]);
+  mocks.saveTrackSnapshotInTx.mockResolvedValue(true);
+  mocks.saveTrackRepairVersionInTx.mockResolvedValue(null);
+  mocks.commitTrackEdits.mockImplementation(async (tripId: string, options: any) => {
+    const {
+      edits, useAfter, signal, expectedUpdatedAt = null, verify, verifySnapshot,
+      saveSnapshot = false, snapshotSegments = null, tripPatch = {}, persistVersion = null
+    } = options || {};
+    const throwIfAborted = () => {
+      if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+    };
+    let detachAbort: (() => void) | undefined;
+    throwIfAborted();
+    try {
+      return await mocks.db.transaction('rw',
+        [mocks.db.trackChunks, mocks.db.trackSnapshots, mocks.db.segments, mocks.db.trips], async (transaction: any) => {
+          detachAbort = mocks.abortTransactionOnSignal(transaction, signal);
+          throwIfAborted();
+          const trip = await mocks.db.trips.get(tripId);
+          if (!trip || (expectedUpdatedAt != null && trip.updatedAt !== expectedUpdatedAt)) throw new Error('track-changed');
+          const current = await mocks.loadTripTrack(tripId, null, { cooperative: false });
+          if (verify && !await verify(current)) throw new Error('track-changed');
+          if (verifySnapshot && !verifySnapshot(await mocks.loadTrackSnapshot(tripId))) throw new Error('track-changed');
+          throwIfAborted();
+          if (saveSnapshot) await mocks.saveTrackSnapshotInTx(tripId, snapshotSegments || current?.segments || []);
+          for (const edit of edits || []) {
+            throwIfAborted();
+            await mocks.replaceSegmentPointsInTx(edit.segmentId, tripId, useAfter ? edit.after : edit.before);
+          }
+          throwIfAborted();
+          await mocks.updateTripInTx(tripId, { statsCache: null, thumbPoints: null, reportedDistance: null, ...tripPatch });
+          throwIfAborted();
+          if (persistVersion && useAfter) {
+            return mocks.saveTrackRepairVersionInTx(tripId, persistVersion.segments, persistVersion.metadata);
+          }
+          return null;
+        });
+    } finally {
+      detachAbort?.();
+    }
+  });
 });
 
 afterEach(() => vi.unstubAllGlobals());

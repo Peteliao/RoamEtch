@@ -6,10 +6,19 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../src/core/store', () => ({
-  db: {
-    waypoints: {
-      orderBy: vi.fn(() => ({ each: mocks.each }))
-    }
+  collectWaypointCounts: async (tripIds: string[], signal?: AbortSignal) => {
+    const known = new Set(tripIds);
+    const counts = new Map<string, { hasPhotos: boolean; waypointCount: number }>();
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    await mocks.each((row: any) => {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (!known.has(row.tripId)) return;
+      const current = counts.get(row.tripId) || { hasPhotos: false, waypointCount: 0 };
+      current.waypointCount++;
+      if (row.type === 'photo' || row.mediaIds?.length) current.hasPhotos = true;
+      counts.set(row.tripId, current);
+    });
+    return counts;
   }
 }));
 

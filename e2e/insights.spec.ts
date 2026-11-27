@@ -59,6 +59,14 @@ test('advanced filters, all-history heatmap, annual records and track comparison
   await gotoTab(page, 'trips');
   await expect(page.locator('.trip-item')).toHaveCount(2);
 
+  const filterSelect = page.locator('.trips-toolbar .trip-filter-select');
+  await expect(filterSelect).toHaveValue('all');
+  await expect(filterSelect.locator('option')).toHaveCount(7);
+  await filterSelect.selectOption('favorite');
+  await expect(page.locator('.trip-item')).toHaveCount(0);
+  await filterSelect.selectOption('all');
+  await expect(page.locator('.trip-item')).toHaveCount(2);
+
   await page.locator('.trip-filter-btn').click();
   let dialog = page.getByRole('dialog', { name: '筛选行程' });
   await dialog.locator('[data-filter="minDistance"]').fill('3');
@@ -78,6 +86,7 @@ test('advanced filters, all-history heatmap, annual records and track comparison
   dialog = page.getByRole('dialog', { name: '筛选行程' });
   await dialog.getByRole('button', { name: '清除筛选', exact: true }).click();
   await expect(page.locator('.trip-item')).toHaveCount(2);
+  await expect(filterSelect).toHaveValue('all');
 
   const footprint = page.locator('.footprint-card');
   await footprint.locator('.footprint-toggle').click();
@@ -102,6 +111,18 @@ test('advanced filters, all-history heatmap, annual records and track comparison
   dialog = page.getByRole('dialog', { name: '双轨迹对比' });
   await expect(dialog.locator('.compare-result')).toBeVisible({ timeout: 30_000 });
   await expect(dialog.locator('.compare-summary')).toHaveCount(2);
+  await expect(dialog.locator('.compare-legend span')).toHaveCount(2);
+  await expect(dialog.locator('.compare-map canvas')).toBeVisible();
+  await expect(dialog.locator('.compare-map-hint')).toBeVisible();
+  await expect(dialog.locator('.compare-history')).toContainText('点击替换 B');
+  await expect(dialog.locator('.compare-result')).not.toContainText('null');
+  const resultOverflow = await dialog.locator('.compare-view').evaluate((node) => node.scrollWidth - node.clientWidth);
+  expect(resultOverflow).toBeLessThanOrEqual(1);
+  const mapFitsPanel = await dialog.locator('.compare-map').evaluate((node) => {
+    const body = node.closest('.m-body');
+    return body ? node.getBoundingClientRect().width <= body.getBoundingClientRect().width + 1 : true;
+  });
+  expect(mapFitsPanel).toBe(true);
   await expect(dialog.locator('.compare-sample').first()).toBeVisible();
   const beforeA = await dialog.getByLabel('轨迹 A').inputValue();
   const beforeB = await dialog.getByLabel('轨迹 B').inputValue();

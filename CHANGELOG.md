@@ -4,6 +4,133 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.9.1] - 2026-11-28
+
+### Changed
+
+- Replaced the advertising slogan everywhere with the bilingual
+  “漫游有迹，刻入舆图；数据归己，不寄云端。” / “Roam free, etched into your
+  map. Data stays yours—never in the cloud.” Canvas posters, track videos, and
+  HTML exports render it on two lines so the longer copy fits.
+- The trip library activity filter is now one dropdown — all, hike, drive, bike,
+  run, travel, favorites — defaulting to all, replacing the chip row.
+
+### Fixed
+
+- Track comparison now fits the map to the actual A and B segment geometry
+  instead of leaving the viewport near Beijing with no visible tracks, and the
+  map section explains that it overlays only the selected two tracks.
+- The comparison result no longer renders a literal `null` after its note when
+  there are no invalid points.
+- The comparison panel no longer overflows horizontally on phones: selectors,
+  summary cards, charts, and the map stay within the sheet, while wide split
+  tables scroll inside their own container.
+- Past-route suggestions now state that selecting one replaces track B only and
+  never adds a third track.
+- Video photo cut-ins now include the node description instead of showing only
+  the photo, title, and type.
+- Meet “fit team” no longer double-counts the bottom-sheet inset, so the whole
+  team is framed above the panel instead of leaving the camera unchanged; using
+  it also pauses automatic proximity zoom for 12 seconds.
+
+## [3.9.0] - 2026-11-28
+
+### Added
+
+- Added a share-style editor shared by posters and videos: theme/night/paper
+  backgrounds, stack/overlay layouts, sans/serif/mono title fonts, map ratio,
+  track color and width, stats-card visibility, and a custom title, with live
+  preview, one-tap reset, and stale-output invalidation.
+- Added four video camera paths — auto push-in, follow, aerial, and fixed
+  overview — plus waypoint photo cut-ins and a replay-synced elevation cursor
+  with live distance, speed, altitude, ascent/descent, and grade. Video rendering
+  remains cancellable and never leaves a half-written file.
+- Added interactive standalone HTML replay: real progress-bar and elevation-chart
+  scrubbing that keeps the chosen position, route progress with a moving marker,
+  recording segments drawn independently, a node photo gallery and lightbox with
+  previous/next, keyboard control (Space, arrows, Home/End, zoom, reset, theme),
+  and consistent preview/export privacy.
+- Added independent start- and end-marker hiding to posters, videos, HTML, and the
+  travel book, separate from the start/end privacy circle.
+- Added a trip Story tab that groups a track into local-day chapters, independent
+  of recording segments, with a cover title, introduction, per-day notes, day
+  metrics, nodes, and photos. Photos can be matched by EXIF capture time and GPS
+  into a previewable candidate list and confirmed or cancelled before writing.
+- Added per-day, per-location weather from Open-Meteo (recent forecast or
+  historical archive) with temperature, condition, rain probability, wind, and UV,
+  explicit source/sample-time/network/cache labels, partial-field disclosure, and
+  manual supplements stored locally. Sunrise and sunset are computed offline with
+  NOAA and shown separately as ambient context, never as weather data.
+- Added a printable single-file travel book with cover, table of contents, day
+  chapters, route sketches, nodes, photos, weather disclosure, and sunrise/sunset
+  notes. Privacy cropping, sensitive-node hiding, and start/end icon choices are
+  applied before day grouping, so hidden geometry never reaches the file.
+- Added real cross-device incremental sync in Settings. Devices pair by `RMS1.`
+  QR code or pasted code using an ECDSA P-256 device identity and a human-readable
+  fingerprint; signaling is AES-GCM encrypted through the same blind relay model,
+  and trip bytes move only over an authenticated WebRTC data channel with TOFU
+  device pinning.
+- Sync compares SHA-256 record hashes against a paged manifest, applies
+  last-writer-wins versions and tombstones, and pages missing records by table.
+  Media moves in 16 KiB chunks with per-payload hashes, and a final ledger digest
+  verifies both sides before completion. The sync ledger lives in a separate
+  `roametch-sync` IndexedDB so erasing pairing data never deletes trips.
+- Added paired-device management, per-peer last-sync/count details, cancellable
+  transfers, relay/STUN/TURN overrides, and clear privacy copy. In-progress
+  recordings are skipped on first pairing; once finished, a later sync brings
+  them over.
+- Added protocol v3 to live meetups: explicit protocol-range/feature negotiation
+  with hard rejection, ephemeral ECDH P-256 pairwise channels, host-driven epoch
+  key rotation on join/leave/removal/host election, a 20-second old-key grace for
+  in-flight packets, and per-teammate location visibility. System chat now covers
+  key rotation and host changes, and the security strip shows the key generation.
+- Added formal storage and service boundaries: `TripRepository`,
+  `MediaRepository`, `RouteRepository`, `DexieSyncDataRepository`,
+  `SyncDataRepository`, and `BackupService`, with contract tests. UI sync code goes
+  through `SyncService`, and remaining raw Dexie reads are confined to the
+  storage layer.
+- Extended Worker coverage to streamed GPX import, GPX/GeoJSON/KML export,
+  heatmaps, two-track comparison, annual reports, profile resampling, and backup
+  archive construction. Shared workers now release when idle, abortable tasks get
+  dedicated workers, large point arrays use transferables, and session tokens stop
+  stale replies from overwriting newer state. Cancelling one task no longer kills
+  other tasks or falls back to blocking the main thread.
+
+### Changed
+
+- The share view now groups privacy, style, and export controls and reuses one
+  normalized style across posters, videos, and HTML/book output.
+- Trip detail adds a Story section between Data and Share; story text and manual
+  weather travel with the trip record and therefore participate in backup and
+  sync.
+- Large GPX exports switch to the Worker above 100k points, backup ZIP creation
+  runs in the Worker, and GPX imports at or above 256 KiB stream in a dedicated
+  Worker with acknowledgement-based backpressure and cleanup on cancel.
+- Documentation, changelog, security notes, and architecture diagrams now cover
+  protocol v3, incremental sync boundaries, the repository layering, and Worker
+  ownership.
+
+### Security
+
+- Sync relay traffic contains only a random pairing room id plus AES-GCM
+  ciphertext; the invitation secret is carried out of band and never sent to the
+  relay. The data channel uses ephemeral WebRTC DTLS keys, and a changed peer
+  identity is refused instead of silently re-pinned.
+- Team epoch rotation is not full forward secrecy: the base invitation key still
+  bootstraps `hello`, and a removed member who retains the full invite can rejoin
+  under a new identity. Pairwise direct packets hide locations from a hidden
+  teammate but reveal that ciphertext is being sent to others.
+
+### Not included
+
+- Device sync is explicit and device-to-device only. There is no account, cloud
+  history, automatic background sync, or server copy. Settings, backup history,
+  elevation caches, repair snapshots, quarantined rows, and unfinished recordings
+  are not synchronized; sync is not a replacement for a full backup.
+- Weather requires a network. Cached days and manual supplements are the only
+  offline sources, and a cached forecast is labeled rather than refreshed
+  silently.
+
 ## [3.8.0] - 2026-11-27
 
 ### Added
@@ -43,10 +170,11 @@ All notable changes to RoamEtch are documented here. The format follows
 
 ### Not included
 
-- The raw TM2 invite remains a bearer secret: signed expiry prevents tampering and new
-  joins after expiry, but cannot revoke an already-copied key or force an active member
-  out. Key rotation/revocation on membership change, per-peer location visibility,
-  hard rejection of future protocol versions, and roadmap items 20–23 remain deferred.
+- At this release the raw TM2 invite remained a bearer secret and signed expiry could
+  not revoke an already-copied key. Key rotation/revocation on membership change,
+  per-peer location visibility, protocol rejection, and roadmap items 20–23 were
+  deferred; 3.9.0 delivers the membership and protocol parts and the remaining
+  product-deepening items.
 
 ## [3.7.1] - 2026-11-27
 

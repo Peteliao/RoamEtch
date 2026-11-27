@@ -1,6 +1,6 @@
 import { t } from '../core/i18n';
 import { get } from '../core/settings';
-import { loadTripTrack } from '../core/store';
+import { routeRepository } from '../core/routeRepository';
 import { fmtAltitude, fmtDistance, fmtDuration, fmtPace, fmtSpeed } from '../core/geo';
 import {
   buildAnnualReport,
@@ -10,7 +10,7 @@ import {
   type AnnualTotals,
   type PersonalRecord
 } from '../core/annualReport';
-import { computeDistanceSplitsAsync } from '../core/workerBridge';
+import { buildAnnualReportAsync, computeDistanceSplitsAsync } from '../core/workerBridge';
 import { generateFootprintImage } from '../core/footprintShare';
 import { exportImage, nativeShare } from '../core/shareEnv';
 import { el, icon, modal, toast } from './helpers';
@@ -459,7 +459,7 @@ export function openGrowthReport(trips, options: { initialYear?: number; initial
       if (target) target.replaceChildren(el('div', { class: 'growth-loading', role: 'status' },
         icon('refresh', 16), t('growth.recordsProgress', { done: index, total: candidates.length })));
       try {
-        const track = await loadTripTrack(trip.id);
+        const track = await routeRepository.load(trip.id);
         if (!isCurrent()) return;
         // A missing track is local to this trip. Keep analysing the successful
         // subset and leave the whole year/activity key uncached for a later retry.
@@ -564,7 +564,7 @@ export function openGrowthReport(trips, options: { initialYear?: number; initial
     }
   }
 
-  function renderReport() {
+  async function renderReport() {
     const year = selectedYear;
     const activity = selectedActivity;
     if (closed) return;
@@ -582,10 +582,25 @@ export function openGrowthReport(trips, options: { initialYear?: number; initial
     }
     const key = reportKey(year, activity);
     const entries = filterGrowthEntries(completed, year, activity);
-    const report = buildAnnualReport(entries, year);
-    const previous = validYear(year - 1)
-      ? buildAnnualReport(filterGrowthEntries(completed, year - 1, activity), year - 1)
-      : null;
+    const previousEntries = validYear(year - 1) ? filterGrowthEntries(completed, year - 1, activity) : null;
+    let report: AnnualReport;
+    let previous: AnnualReport | null;
+    if (entries.length > 120 || (previousEntries?.length ?? 0) > 120) {
+      try {
+        [report, previous] = await Promise.all([
+          buildAnnualReportAsync(entries, year),
+          previousEntries ? buildAnnualReportAsync(previousEntries, year - 1) : Promise.resolve(null)
+        ]);
+      } catch {
+        if (currentVersion !== version || closed) return;
+        report = buildAnnualReport(entries, year);
+        previous = previousEntries ? buildAnnualReport(previousEntries, year - 1) : null;
+      }
+      if (currentVersion !== version || closed || key !== reportKey(selectedYear, selectedActivity)) return;
+    } else {
+      report = buildAnnualReport(entries, year);
+      previous = previousEntries ? buildAnnualReport(previousEntries, year - 1) : null;
+    }
     visibleReport = report;
     visibleReportKey = key;
     const units = get('units');
@@ -638,6 +653,6 @@ export function openGrowthReport(trips, options: { initialYear?: number; initial
     void loadRecords(year, activity, key, currentVersion);
   }
 
-  renderReport();
+  void renderReport();
   return dialog;
 }

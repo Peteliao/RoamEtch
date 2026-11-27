@@ -109,6 +109,11 @@ describe('meetup voice and emoji chat', () => {
       k: 'msg', id: 'bob', name: 'Bob', c: '#5aa7f0', v: snapshot.protocol,
       sq: 1, ts: Date.now(), ...voicePacket()
     };
+    harness.relayOptions.onMessage(JSON.stringify({
+      k: 'hi', id: 'bob', name: 'Bob', c: '#5aa7f0', v: snapshot.protocol,
+      sq: 1, ts: Date.now(), ep: 0, pv: 4, pmin: 3, pmax: 3, pk: 'A'.repeat(87)
+    }));
+    await vi.waitFor(() => expect(meetModule.getMeetSnapshot().peers).toHaveLength(1));
     harness.relayOptions.onMessage(JSON.stringify({ ...base, mid: 'incoming01' }));
     await vi.waitFor(() => expect(meetModule.getMeetSnapshot().messages.some((m: any) => m.voice)).toBe(true));
     const voiceMessage = meetModule.getMeetSnapshot().messages.find((m: any) => m.voice);
@@ -132,6 +137,12 @@ describe('meetup voice and emoji chat', () => {
     try {
       expect(await meetModule.sendMeetMessage('local')).toBe(true);
       expect(received).not.toHaveBeenCalled();
+
+      harness.relayOptions.onMessage(JSON.stringify({
+        k: 'hi', id: 'bob', name: 'Bob', c: '#5aa7f0', v: snapshot.protocol,
+        sq: 1, ts: Date.now(), ep: 0, pv: 4, pmin: 3, pmax: 3, pk: 'A'.repeat(87)
+      }));
+      await vi.waitFor(() => expect(meetModule.getMeetSnapshot().peers).toHaveLength(1));
 
       const packet = {
         k: 'msg', id: 'bob', name: 'Bob', c: '#5aa7f0', v: snapshot.protocol,

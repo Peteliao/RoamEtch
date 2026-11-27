@@ -14,6 +14,7 @@ import { SITE_URL, drawQr } from './brand';
 import { paletteFor } from './palette';
 import { CONCRETE_THEME_IDS, HTML_THEME_CYCLE, htmlCssVars, themeDefinition } from './themeRegistry';
 import { VIEWER_CSS, VIEWER_JS } from './htmlExportViewer';
+import { normalizeShareStyle, trackColorValue } from './shareStyle';
 
 export const HTML_TIERS = {
   clear: { tol: 3, points: 2_000, waypoints: 30, photos: 12, budget: 680_000 },
@@ -138,23 +139,31 @@ function nearestTrackDistance(track, lat, lon) {
 
 async function attachPhotos(nodes, media, enabled, cfg) {
   if (!enabled || !cfg.photos || !media?.length) return 0;
-  const byId = new Map(media.map((m) => [m.id, m]));
+  const byId = new Map<any, any>();
+  for (const m of (media as any[])) byId.set(m.id, m);
   let budget = cfg.budget;
   let used = 0;
+  const perNode = 3;
   for (const node of nodes) {
     if (used >= cfg.photos) break;
     const ids = node.wp.mediaIds || [];
     if (!ids.length) continue;
-    const rec = ids.map((id) => byId.get(id)).find(Boolean);
-    const blob = rec?.thumb || rec?.blob;
-    if (!blob) continue;
-    try {
-      const url = await blobDataUrl(blob);
-      if (!url || url.length > 140_000 || url.length > budget) continue;
-      node.img = url;
-      budget -= url.length;
-      used++;
-    } catch { /* a single unreadable thumb should not fail the export */ }
+    const imgs = [];
+    for (const id of ids) {
+      if (imgs.length >= perNode || used >= cfg.photos || budget <= 0) break;
+      const rec = byId.get(id);
+      const blob = rec?.thumb || rec?.blob;
+      if (!blob) continue;
+      try {
+        const url = await blobDataUrl(blob);
+        if (!url || url.length > 140_000 || url.length > budget) continue;
+        imgs.push(url);
+        budget -= url.length;
+        used++;
+      } catch { /* a single unreadable thumb should not fail the export */ }
+    }
+    node.imgs = imgs;
+    node.img = imgs[0] || '';
   }
   return used;
 }
@@ -170,7 +179,8 @@ function clockText(ts, locale, sameDayAs) {
 
 type BuildOpts = {
   tier?: string;
-  privacy?: { radius?: number; hideSensitive?: boolean };
+  style?: any;
+  privacy?: { radius?: number; hideSensitive?: boolean; hideStartIcon?: boolean; hideEndIcon?: boolean };
   includePhotos?: boolean;
   places?: string[];
   onProgress?: (p: number) => void;
@@ -192,13 +202,23 @@ export function estimateHTMLSize(full, { tier = 'clear', privacy = {}, includePh
 
 export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
   const { tier = 'clear', privacy = {}, includePhotos = true, onProgress } = opts;
+  const style = normalizeShareStyle(opts.style || {});
   const cfg = htmlTierConfig(tier);
   const cropped = applyPrivacy(full, privacy);
-  const routePts = cropped.segments.flatMap((s) => s.points || []);
   const tol = cfg.tol;
   const pointLimit = cfg.points;
   const wpsLimit = cfg.waypoints;
-  const pts = simplify(routePts, tol).slice(0, pointLimit);
+  const simplified = cropped.segments
+    .map((segment) => simplify(segment.points || [], tol))
+    .filter((segment) => segment.length >= 2);
+  const totalSimplified = simplified.reduce((sum, segment) => sum + segment.length, 0);
+  const stride = Math.max(1, Math.ceil(totalSimplified / pointLimit));
+  const segs = simplified
+    .map((segment) => segment.filter((_, index) => index % stride === 0 || index === segment.length - 1))
+    .filter((segment) => segment.length >= 2)
+    .map((segment) => segment.map((p) => [Math.round(p.lon * 1e6) / 1e6, Math.round(p.lat * 1e6) / 1e6]));
+  const pts = segs.flat();
+  const trackColor = trackColorValue(style.trackColor, '');
   const stats = computeStats(cropped.segments, {
     ascentThreshold: get('ascentThreshold'),
     activity: full.trip.activity,
@@ -239,7 +259,8 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
         dNum: dist ?? Number.MAX_SAFE_INTEGER,
         de: String(w.desc || '').slice(0, 600),
         pc: (w.mediaIds || []).length,
-        img: ''
+        img: '',
+        imgs: [] as string[]
       };
     })
     .sort((a, b) => a.dNum - b.dNum || a.idx - b.idx);
@@ -272,6 +293,10 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
   const privacyText = privacyRadius > 0
     ? t('export.htmlPrivacyOn', { r: privacyRadius })
     : t('export.htmlPrivacyOff');
+  const privacyIcons = privacy.hideStartIcon || privacy.hideEndIcon
+    ? (privacy.hideStartIcon && privacy.hideEndIcon ? t('export.htmlIconsBothHidden')
+      : privacy.hideStartIcon ? t('export.htmlStartIconHidden') : t('export.htmlEndIconHidden'))
+    : '';
 
   const detailRows: [string, string][] = [];
   if (stats.hasTime) {
@@ -298,12 +323,13 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
   };
 
   const data = {
-    v: 2,
+    v: 3,
     tier,
-    pts: pts.map((p) => [Math.round(p.lon * 1e6) / 1e6, Math.round(p.lat * 1e6) / 1e6]),
+    segs,
+    pts: pts.map((p) => [p[0], p[1]]),
     wps: nodes.map((n) => ({
       n: n.name, ty: n.type, tl: n.typeLabel, ic: n.icon,
-      la: n.la, lo: n.lo, tm: n.tm, dst: n.dst, de: n.de
+      la: n.la, lo: n.lo, tm: n.tm, dst: n.dst, de: n.de, ph: n.imgs
     })),
     profile,
     profileEnd: profileEndObj ? `${profileEndObj.v} ${profileEndObj.u}` : '',
@@ -311,7 +337,11 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
     labels,
     palettes: canvasPalettes(),
     css: Object.fromEntries(CONCRETE_THEME_IDS.map((th) => [th, cssVars(th)])),
-    themeCycle: HTML_THEME_CYCLE
+    themeCycle: HTML_THEME_CYCLE,
+    hideStart: !!privacy.hideStartIcon,
+    hideEnd: !!privacy.hideEndIcon,
+    trackColor,
+    trackWidth: style.trackWidth
   };
   const json = JSON.stringify(data).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 
@@ -334,7 +364,7 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
             <div class="node-title"><span>${esc(n.name)}</span><span class="nbadge">${esc(n.typeLabel)}</span></div>
             ${bits.length ? `<div class="node-meta">${esc(bits.join(' · '))}</div>` : ''}
             ${n.de ? `<p>${esc(n.de)}</p>` : ''}
-            ${n.img ? `<img src="${n.img}" alt="${esc(n.name)}" loading="lazy" decoding="async">` : ''}
+            ${n.imgs.length ? `<div class="node-gallery">${n.imgs.map((src, index) => `<img src="${src}" alt="${esc(n.name)} ${index + 1}" loading="lazy" decoding="async">`).join('')}</div>` : ''}
           </div>
         </article>`;
       }).join('')}</div>`
@@ -344,7 +374,7 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
   const brandFoot = `<div class="brandfoot">
     ${qr ? `<img class="qr" src="${qr}" alt="QR">` : ''}
     <div>
-      <div class="bf-slogan">${esc(t('app.slogan'))}</div>
+      <div class="bf-slogan"><span>${esc(t('app.slogan1'))}</span><span>${esc(t('app.slogan2'))}</span></div>
       <a class="bf-link" href="${SITE_URL}" target="_blank" rel="noopener">${esc(SITE_URL.replace(/^https?:\/\//, ''))}</a>
       <div class="bf-sub">${esc(t('export.htmlScan'))}</div>
     </div>
@@ -424,7 +454,7 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
       <div class="sec">${esc(t('export.htmlTimeline'))} ${nodes.length ? `<span class="count">${nodes.length}</span>` : ''}</div>
       ${nodeHtml}
       ${brandFoot}
-      <div class="fine">${esc(privacyText)} · ${esc(t('export.htmlMadeBy'))}${photos ? ` · ${photos} ${esc(t('wp.photos'))}` : ''}<br><span id="attrib">© OpenStreetMap contributors</span></div>
+      <div class="fine">${esc(privacyText)}${privacyIcons ? ` · ${esc(privacyIcons)}` : ''} · ${esc(t('export.htmlMadeBy'))}${photos ? ` · ${photos} ${esc(t('wp.photos'))}` : ''}<br><span id="attrib">© OpenStreetMap contributors</span></div>
     </div>
   </aside>
 </div>

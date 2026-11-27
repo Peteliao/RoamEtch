@@ -74,11 +74,12 @@ describe('compute worker resilience', () => {
     const pending = computeStatsSummaryAsync(segments, { activity: 'hike' });
     const instance = MockWorker.instances[0];
 
-    expect(instance.postMessage).toHaveBeenCalledWith({
+    expect(instance.postMessage).toHaveBeenCalledWith(expect.objectContaining({
       id: 1,
+      session: expect.any(String),
       type: 'stats',
       payload: { segments, opts: { activity: 'hike', series: false } }
-    });
+    }));
     instance.onmessage?.({ data: { id: 1, ok: true, result: { pointCount: 2 } } });
 
     await expect(pending).resolves.toEqual({ pointCount: 2 });
@@ -92,7 +93,8 @@ describe('compute worker resilience', () => {
     instance.onmessage?.({ data: { id: 1, ok: true, result: expected } });
 
     await expect(pending).resolves.toEqual(expected);
-    expect(vi.getTimerCount()).toBe(0);
+    // The remaining timer is the idle-release deadline for the shared worker.
+    expect(vi.getTimerCount()).toBe(1);
     expect(instance.terminate).not.toHaveBeenCalled();
   });
 
@@ -124,11 +126,13 @@ describe('compute worker resilience', () => {
     await expect(first).resolves.toEqual(expected);
     await expect(second).resolves.toEqual(computeDistanceSplits(segments, 500, { activity: 'hike' }));
     expect(instance.terminate).toHaveBeenCalledTimes(1);
+    // Each task gets its own shared worker, so timeout does not poison the other.
+    expect(MockWorker.instances[1].terminate).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
 
     const next = computeDistanceSplitsAsync(segments, 1000, { activity: 'hike' });
-    expect(MockWorker.instances).toHaveLength(2);
-    MockWorker.instances[1].onmessage?.({ data: { id: 3, ok: true, result: expected } });
+    expect(MockWorker.instances).toHaveLength(3);
+    MockWorker.instances[2].onmessage?.({ data: { id: 3, ok: true, result: expected } });
     await expect(next).resolves.toEqual(expected);
   });
 
@@ -143,7 +147,7 @@ describe('compute worker resilience', () => {
     expect(instance.terminate).not.toHaveBeenCalled();
     instance.onmessage?.({ data: { id: 1, ok: true, result: { pointCount: 100_001 } } });
     await expect(pending).resolves.toEqual({ pointCount: 100_001 });
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it('transfers large worker payloads as columnar typed arrays', async () => {
@@ -174,11 +178,11 @@ describe('compute worker resilience', () => {
     const pending = buildGPXAsync(full);
     const instance = MockWorker.instances[0];
 
-    expect(instance.postMessage).toHaveBeenCalledWith({ id: 1, type: 'gpx', payload: { full } });
+    expect(instance.postMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 1, type: 'gpx', payload: { full } }));
     instance.onmessage?.({ data: { id: 1, ok: true, result: '<gpx>complete</gpx>' } });
 
     await expect(pending).resolves.toBe('<gpx>complete</gpx>');
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it('builds a heatmap in the worker and falls back with matching semantics', async () => {
@@ -189,7 +193,7 @@ describe('compute worker resilience', () => {
     const pending = buildHeatmapAsync(trips, { maxPoints: 21 });
     const instance = MockWorker.instances[0];
 
-    expect(instance.postMessage).toHaveBeenCalledWith({ id: 1, type: 'heatmap', payload: { trips, opts: { maxPoints: 21 } } });
+    expect(instance.postMessage).toHaveBeenCalledWith(expect.objectContaining({ id: 1, type: 'heatmap', payload: { trips, opts: { maxPoints: 21 } } }));
     instance.onmessage?.({ data: { id: 1, ok: true, result } });
     await expect(pending).resolves.toEqual(result);
     expect(instance.terminate).not.toHaveBeenCalled();
@@ -208,10 +212,10 @@ describe('compute worker resilience', () => {
     const pending = compareTracksAsync(a, b, { sampleSpacingM: 25, maxSamples: 100, signal: controller.signal });
     const instance = MockWorker.instances[0];
 
-    expect(instance.postMessage).toHaveBeenCalledWith({
+    expect(instance.postMessage).toHaveBeenCalledWith(expect.objectContaining({
       id: 1, type: 'track-comparison',
       payload: { a, b, opts: { sampleSpacingM: 25, maxSamples: 100 } }
-    });
+    }));
     instance.onmessage?.({ data: { id: 1, ok: true, result: expected } });
     await expect(pending).resolves.toEqual(expected);
     expect(instance.terminate).toHaveBeenCalledTimes(1);
@@ -225,8 +229,9 @@ describe('compute worker resilience', () => {
     MockWorker.postError = true;
 
     await expect(computeDistanceSplitsAsync(segments, 1000, { activity: 'hike' })).resolves.toEqual(expected);
-    expect(MockWorker.instances[0].terminate).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
+    // A post failure only settles this task; the healthy shared worker is kept.
+    expect(MockWorker.instances[0].terminate).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it('rejects a reported task error without leaving a timeout behind', async () => {
@@ -237,7 +242,7 @@ describe('compute worker resilience', () => {
     instance.onmessage?.({ data: { id: 1, ok: false, error: 'invalid track' } });
 
     await expect(pending).rejects.toThrow('invalid track');
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it('does not dispatch a task when its signal is already aborted', async () => {
@@ -300,7 +305,7 @@ describe('compute worker resilience', () => {
     expect(vi.getTimerCount()).toBe(1);
     otherWorker.onmessage?.({ data: { id: 2, ok: true, result: computeDistanceSplits(segments, 500, { activity: 'hike' }) } });
     await expect(other).resolves.toEqual(computeDistanceSplits(segments, 500, { activity: 'hike' }));
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it('uses the lightweight cleanup fallback when workers are unavailable', async () => {
@@ -313,6 +318,51 @@ describe('compute worker resilience', () => {
       previewTrackCleanup(segments, 'hike')
     );
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('times out only the stuck task and leaves the other worker running', async () => {
+    const { computeDistanceSplitsAsync, buildHeatmapAsync } = await import('../src/core/workerBridge');
+    const stuck = computeDistanceSplitsAsync(segments, 500, { activity: 'hike' });
+    const heat = buildHeatmapAsync([{ trip: { id: 'h', privacy: { radius: 0 } }, segments }]);
+    const stuckWorker = MockWorker.instances[0];
+    const heatWorker = MockWorker.instances[1];
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await expect(stuck).resolves.toEqual(computeDistanceSplits(segments, 500, { activity: 'hike' }));
+    expect(stuckWorker.terminate).toHaveBeenCalledTimes(1);
+    expect(heatWorker.terminate).not.toHaveBeenCalled();
+    heatWorker.onmessage?.({ data: { id: 2, ok: true, result: { points: [] } } });
+    await expect(heat).resolves.toEqual({ points: [] });
+  });
+
+  it('releases an idle shared worker after the keep-alive window', async () => {
+    const { computeDistanceSplitsAsync } = await import('../src/core/workerBridge');
+    const pending = computeDistanceSplitsAsync(segments, 1000, { activity: 'hike' });
+    const instance = MockWorker.instances[0];
+    instance.onmessage?.({ data: { id: 1, ok: true, result: expected } });
+    await expect(pending).resolves.toEqual(expected);
+
+    await vi.advanceTimersByTimeAsync(29_000);
+    expect(instance.terminate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(instance.terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a response whose session token does not match the worker generation', async () => {
+    const { computeDistanceSplitsAsync } = await import('../src/core/workerBridge');
+    let settled = false;
+    const pending = computeDistanceSplitsAsync(segments, 1000, { activity: 'hike' })
+      .then((value) => { settled = true; return value; });
+    const instance = MockWorker.instances[0];
+    const session = instance.postMessage.mock.calls[0][0].session;
+
+    instance.onmessage?.({ data: { id: 1, session: `${session}-stale`, ok: true, result: { stale: true } } });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    instance.onmessage?.({ data: { id: 1, session, ok: true, result: expected } });
+    await expect(pending).resolves.toEqual(expected);
   });
 
   it('does not start an unavailable-worker fallback after synchronous cancellation', async () => {

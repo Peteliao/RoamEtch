@@ -1,9 +1,11 @@
 // Full-database backup / restore as a .trip ZIP archive (JSON tables + media binaries).
-import { Zip, ZipDeflate, Unzip, UnzipInflate, strToU8, type UnzipFile } from 'fflate';
+import { Unzip, UnzipInflate, type UnzipFile } from 'fflate';
 import { db, TRIP_SCHEMA_VERSION, abortTransactionOnSignal } from './store';
 import { emit } from './events';
 import { sha256Hex, stableStringify } from './integrity';
-import { decryptBackupBytes, encryptBackupBlob, ENCRYPTED_BACKUP_EXT, isEncryptedBackupBytes } from './backupCrypto';
+import { decryptBackupBytes, isEncryptedBackupBytes } from './backupCrypto';
+import { BackupLimitError, buildBackupArchive } from './backupArchive';
+import { buildBackupArchiveAsync } from './workerBridge';
 
 const FORMAT = 'localtrace-backup';
 const VERSION = 4;
@@ -63,14 +65,7 @@ interface ParsedZip {
   inspectionVersion: 2;
 }
 
-export class BackupLimitError extends Error {
-  readonly code = 'backup-limit-exceeded';
-
-  constructor(message: string) {
-    super(message);
-    this.name = 'BackupLimitError';
-  }
-}
+export { BackupLimitError };
 
 const RESTORE_LIMIT_GUIDANCE = 'Use a smaller full backup, or export selected trips to GPX from the source device and import them individually. GPX does not include media or share-import history.';
 
@@ -274,74 +269,19 @@ export async function exportBackup({ password = '', target = db }: BackupExportO
     mediaMeta: media.map((m) => ({ id: m.id, tripId: m.tripId, width: m.width, height: m.height, createdAt: m.createdAt })),
     elevCache, shareImports, quarantine
   };
-  const chunks: Uint8Array<ArrayBuffer>[] = [];
-  const fileHashes = {};
-  let zipError: unknown = null;
-  let zipBytes = 0;
-  let uncompressedBytes = 0;
-  let archiveEntries = 0;
-  const zip = new Zip((error, chunk) => {
-    if (error) zipError = error;
-    else if (chunk.byteLength) {
-      zipBytes += chunk.byteLength;
-      if (zipBytes > MAX_BACKUP_BYTES) zipError = exportLimit('compressed backup exceeds the 256 MiB restore limit');
-      chunks.push(chunk);
-    }
+  const archive = await buildBackupArchiveAsync({
+    manifest,
+    media: media.map((m) => ({ id: m.id, blob: m.blob, thumb: m.thumb })),
+    password
   });
-  const addEntry = (name: string, bytes: Uint8Array) => {
-    if (bytes.byteLength > MAX_ENTRY_BYTES) throw exportLimit(`archive entry ${name} exceeds the 20 MiB restore limit`);
-    if (name === 'manifest.json' && bytes.byteLength > MAX_MANIFEST_BYTES) {
-      throw exportLimit('backup manifest exceeds the 16 MiB restore limit');
-    }
-    archiveEntries++;
-    uncompressedBytes += bytes.byteLength;
-    if (uncompressedBytes > MAX_UNCOMPRESSED_BYTES) throw exportLimit('uncompressed backup exceeds the 512 MiB restore limit');
-    const entry = new ZipDeflate(name, { level: 6 });
-    zip.add(entry);
-    for (let offset = 0; offset < bytes.byteLength; offset += 1024 * 1024) {
-      entry.push(bytes.subarray(offset, offset + 1024 * 1024));
-    }
-    entry.push(new Uint8Array(), true);
-    if (zipError) throw zipError;
+  return {
+    blob: archive.blob,
+    filename: archive.filename,
+    tripCount: trips.length,
+    exportedAt,
+    counts: manifest.counts,
+    encrypted: archive.encrypted
   };
-  try {
-    for (const m of media) {
-      if (m.blob?.size > MAX_ENTRY_BYTES || m.thumb?.size > MAX_ENTRY_BYTES) {
-        throw exportLimit(`media entry ${m.id} exceeds the 20 MiB restore limit`);
-      }
-      const photo = await blobToU8(m.blob);
-      const photoPath = `media/${m.id}.jpg`;
-      fileHashes[photoPath] = { bytes: photo.byteLength, sha256: await sha256Hex(photo) };
-      addEntry(photoPath, photo);
-      if (m.thumb) {
-        const thumb = await blobToU8(m.thumb);
-        const thumbPath = `media/${m.id}.thumb.jpg`;
-        fileHashes[thumbPath] = { bytes: thumb.byteLength, sha256: await sha256Hex(thumb) };
-        addEntry(thumbPath, thumb);
-      }
-    }
-    manifest.integrity = {
-      algo: 'SHA-256',
-      payload: await payloadDigest(manifest),
-      files: fileHashes
-    };
-    addEntry('manifest.json', strToU8(JSON.stringify(manifest)));
-    zip.end();
-    if (zipError) throw zipError;
-  } catch (error) {
-    zip.terminate();
-    throw error;
-  }
-  const zipBlob = new Blob(chunks, { type: 'application/zip' });
-  chunks.length = 0;
-  const stamp = exportedAt.slice(0, 10).replace(/-/g, '');
-  const encrypted = !!password;
-  const blob = encrypted ? await encryptBackupBlob(zipBlob, password) : zipBlob;
-  if (blob.size > MAX_BACKUP_BYTES) throw exportLimit('final backup envelope exceeds the 256 MiB restore limit');
-  const filename = encrypted
-    ? `roametch-backup-${stamp}${ENCRYPTED_BACKUP_EXT}`
-    : `roametch-backup-${stamp}.trip`;
-  return { blob, filename, tripCount: trips.length, exportedAt, counts: manifest.counts, encrypted };
 }
 
 async function* byteChunks(data: Uint8Array, signal?: AbortSignal) {

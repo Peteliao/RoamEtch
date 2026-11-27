@@ -29,7 +29,7 @@ vi.mock('../src/core/store', () => ({
   updateTrip: mocks.updateTrip,
   appendPoints: mocks.appendPoints,
   pruneEmptySegments: mocks.pruneEmptySegments,
-  db: { segments: { where: () => ({ equals: () => ({ count: async () => 1 }) }) } }
+  countTripSegments: async () => 1
 }));
 vi.mock('../src/core/elevation', () => ({
   patchFlushedAltitude: vi.fn(),

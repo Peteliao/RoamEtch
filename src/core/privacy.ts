@@ -5,6 +5,8 @@ import { haversine } from './geo';
 export type PrivacyOptions = {
   radius?: number;
   hideSensitive?: boolean;
+  hideStartIcon?: boolean;
+  hideEndIcon?: boolean;
   start?: any;
   end?: any;
 };

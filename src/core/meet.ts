@@ -39,6 +39,25 @@ import {
   type MeetMarker
 } from './meetCollab';
 import { acceptMeetSequence, pruneMeetReplay } from './meetReplay';
+import {
+  MEET_PROTOCOL_MIN,
+  MEET_PROTOCOL_MAX,
+  MEET_VERSION_MIN_FEATURE,
+  decodeEpochSecret,
+  deriveMeetEpochKey,
+  deriveMeetPairwiseKey,
+  epochSecretB64,
+  generateEpochSecret,
+  generateMeetKeyPair,
+  importMeetPublicKey,
+  meetLocationPlan,
+  meetRoomWithKey,
+  negotiateMeetProtocol,
+  openMeetDirect,
+  sealMeetDirect,
+  type MeetKeyPair,
+  type MeetVisibility
+} from './meetKeys';
 import { createMeetRelay } from './meetRelay';
 import { shouldPublishFix } from './meetCadence';
 import { routeOverRoads } from './gapRepair';
@@ -75,6 +94,8 @@ const CHAT_RATE_WINDOW_MS = 3_000;
 const CHAT_RATE_LIMIT = 6;
 const IMAGE_RECEIVE_GAP_MS = CHAT_IMAGE_COOLDOWN_MS - 750;
 const RTC_SIGNAL_QUEUE_LIMIT = 64;
+const EPOCH_KEY_GRACE_MS = 20_000;
+const HELLO_RETRY_MS = 12_000;
 const PEER_COLORS = ['#5aa7f0', '#f5b942', '#f26d6d', '#b07cf7', '#f28ac6', '#7ed957', '#ff9e5e', '#45d1c8'];
 
 type MeetSession = any;
@@ -328,7 +349,7 @@ function positionStatus(position: any, now: number, sharing = position.sharing) 
   return weakGpsReason(position.acc ?? null, position.accuracyHistory) ? 'weak' : 'fresh';
 }
 
-function peerView(p: any, self: any, hostId: string | null, now: number, goal: MeetGoal | null = null) {
+function peerView(p: any, self: any, hostId: string | null, now: number, goal: MeetGoal | null = null, shareTo = true) {
   const distance = self.hasFix && p.lat != null && p.lon != null
     ? haversine(self.lat, self.lon, p.lat, p.lon)
     : null;
@@ -361,8 +382,10 @@ function peerView(p: any, self: any, hostId: string | null, now: number, goal: M
     goalDistance,
     bearing: bearingDeg,
     clock,
-    protocolVersion: Number(p.pv) || 2,
-    legacy: (Number(p.pv) || 2) < MEET_FEATURE_VERSION,
+    protocolVersion: Number(p.pv) || 0,
+    legacy: false,
+    compatible: p.compatible !== false,
+    shareTo,
     sharing: p.sharing !== false,
     isHost: p.id === hostId,
     lastContactAt: p.lastContactAt,
@@ -436,13 +459,21 @@ export function getMeetSnapshot() {
       inviteExpired: false,
       chatUnread: 0,
       expiresAt: 0,
+      keyEpoch: 0,
+      protocolMin: MEET_PROTOCOL_MIN,
+      protocolMax: MEET_PROTOCOL_MAX,
+      incompatiblePeers: [],
+      peerVisibility: {},
+      sharing: false,
       now: Date.now()
     };
   }
   const now = Date.now();
   const goal: MeetGoal | null = s.goal ? { ...s.goal } : null;
   const self = selfView(s, now, goal);
-  const peers = [...s.peers.values()].map((p) => peerView(p, self, s.hostId, now, goal));
+  const peers = [...s.peers.values()].map((p) => peerView(
+    p, self, s.hostId, now, goal, s.peerVisibility.get(p.id) !== 'hidden'
+  ));
   const peerRank = (p: any) => p.networkStatus === 'left' ? 3 : p.stale ? 2 : p.positionStatus === 'fresh' ? 0 : 1;
   peers.sort((a, b) => peerRank(a) - peerRank(b) || (a.distance ?? Infinity) - (b.distance ?? Infinity));
   const markers = activeMarkers(s, now)
@@ -489,6 +520,17 @@ export function getMeetSnapshot() {
     chatUnread: s.chatUnread,
     hostId: s.hostId,
     isHost: s.hostId === s.self.id,
+    keyEpoch: s.keyEpoch,
+    protocolMin: MEET_PROTOCOL_MIN,
+    protocolMax: MEET_PROTOCOL_MAX,
+    security: {
+      epoch: s.keyEpoch,
+      rotated: s.keyEpoch > 0,
+      hiddenPeers: [...s.peerVisibility.values()].filter((v) => v === 'hidden').length,
+      incompatiblePeers: s.incompatiblePeers.size
+    },
+    incompatiblePeers: [...s.incompatiblePeers.values()].map((entry: any) => ({ ...entry })),
+    peerVisibility: Object.fromEntries(s.peerVisibility),
     sharing: s.sharing,
     geoError: s.geoError,
     alerts: {
@@ -628,8 +670,9 @@ function startRelay() {
         s.relayError = detail?.reason || 'relay';
       } else if (state === 'connected') {
         s.relayError = null;
-        publishHi();
-        sendPresence();
+        if (s.hostId === s.self.id) publishHi();
+        else if (s.keyEpoch > 0) sendPresence();
+        else publishHello();
       }
       emitState();
     }
@@ -637,7 +680,7 @@ function startRelay() {
   s.relay = relay;
 }
 
-function publishPacket(body: any, lane: 'critical' | 'rtc' = 'critical') {
+function publishPacket(body: any, lane: 'critical' | 'rtc' = 'critical', options: { room?: any } = {}) {
   const s = session;
   if (!s) return Promise.resolve(false);
   const rtcLane = s.rtcLane as RtcLane;
@@ -646,6 +689,7 @@ function publishPacket(body: any, lane: 'critical' | 'rtc' = 'critical') {
     || !rtcLane.active || rtcLane.queued >= RTC_SIGNAL_QUEUE_LIMIT)) return Promise.resolve(false);
   if (lane === 'rtc') rtcLane.queued++;
   const epoch = s.epoch;
+  const room = options.room || s.room;
   const previous = lane === 'rtc' ? rtcLane.promise : s.sendChain;
   const rtcCurrent = () => rtcLane.active && s.rtcLane === rtcLane;
   const job = previous.then(async () => {
@@ -655,7 +699,7 @@ function publishPacket(body: any, lane: 'critical' | 'rtc' = 'critical') {
       const seq = ++s.sendSeq;
       if (!Number.isSafeInteger(seq)) return false;
       const packet = { ...body, v: MEET_PROTOCOL_VERSION, sq: seq, ts: Date.now() };
-      const text = await encryptMeetPacket(packet, s.room);
+      const text = await encryptMeetPacket(packet, room);
       if (text.length > MEET_MAX_PACKET_CHARS) return false;
       if (session !== s || s.epoch !== epoch || s.relay !== relay || (lane === 'rtc' && !rtcCurrent())) return false;
       return relay.send(text);
@@ -721,7 +765,9 @@ function hiPacket() {
   const s = session;
   const body: any = {
     k: 'hi', id: s.self.id, name: s.self.name,
-    c: s.self.color, hostId: s.hostId || undefined, pv: MEET_FEATURE_VERSION
+    c: s.self.color, hostId: s.hostId || undefined,
+    ep: s.keyEpoch,
+    ...protocolFields(s)
   };
   if (s.hostId === s.self.id) {
     body.exp = s.expiresAt;
@@ -734,13 +780,33 @@ function hiPacket() {
 }
 
 function publishHi() {
+  const s = session;
+  if (!s) return Promise.resolve(false);
+  if (s.hostId !== s.self.id && s.keyEpoch === 0) return Promise.resolve(false);
   return publishPacket(hiPacket());
+}
+
+function helloPacket() {
+  const s = session;
+  return {
+    k: 'hello', id: s.self.id, name: s.self.name,
+    c: s.self.color, hostId: s.hostId || undefined,
+    ep: s.keyEpoch,
+    ...protocolFields(s)
+  };
+}
+
+function publishHello() {
+  const s = session;
+  if (!s || s.hostId === s.self.id) return Promise.resolve(false);
+  s.lastHelloAt = Date.now();
+  return publishPacket(helloPacket(), 'critical', { room: s.baseRoom });
 }
 
 function publishLoc() {
   const s = session;
   if (!s || !s.self.hasFix) return Promise.resolve(false);
-  return publishPacket({
+  return publishPositional({
     k: 'loc', id: s.self.id, name: s.self.name, c: s.self.color,
     la: s.self.lat, lo: s.self.lon, ac: s.self.acc,
     hd: s.self.heading, sp: s.self.speed, sh: s.sharing,
@@ -760,8 +826,8 @@ function publishState() {
 function publishGoal() {
   const s = session;
   if (!s || s.hostId !== s.self.id) return Promise.resolve(false);
-  if (!s.goal) return publishPacket({ k: 'goal', id: s.self.id, del: true });
-  return publishPacket({
+  if (!s.goal) return publishPositional({ k: 'goal', id: s.self.id, del: true });
+  return publishPositional({
     k: 'goal', id: s.self.id,
     la: s.goal.lat, lo: s.goal.lon, tx: s.goal.label
   });
@@ -773,7 +839,7 @@ function publishOwnMarkers() {
   const now = Date.now();
   for (const marker of activeMarkers(s, now)) {
     if (marker.by !== s.self.id) continue;
-    void publishPacket({
+    void publishPositional({
       k: 'mk', id: s.self.id,
       mkid: marker.id, mtyp: marker.type,
       la: marker.lat, lo: marker.lon, tx: marker.label,
@@ -785,6 +851,10 @@ function publishOwnMarkers() {
 function sendPresence() {
   const s = session;
   if (!s) return;
+  if (s.hostId !== s.self.id && s.keyEpoch === 0) {
+    publishHello();
+    return;
+  }
   publishHi();
   if (s.hostId === s.self.id) publishGoal();
   publishOwnMarkers();
@@ -812,13 +882,19 @@ function touchPeer(msg: any, now: number, ts: number) {
       sharing: true, ts: 0, lastSeen: 0, lastContactAt: 0, lastLocAt: 0,
       lastFixAt: 0, fixApprox: false, clockOffsetMs: null,
       left: false, leftAt: 0, accuracyHistory: [], viewState: '',
-      hostId: null, locSeq: 0, hiSeq: 0, stateSeq: 0, pv: 2
+      hostId: null, locSeq: 0, hiSeq: 0, stateSeq: 0, pv: 0,
+      pk: '', pairwise: null, compatible: false, joined: false, invitedEpoch: 0
     };
     s.peers.set(id, p);
   }
   if (msg.name) p.name = cleanName(msg.name) || p.name;
   if (/^#[0-9a-f]{6}$/i.test(String(msg.c))) p.color = msg.c;
-  if (msg.pv != null) p.pv = Math.max(1, Math.min(99, Math.round(Number(msg.pv)) || 2));
+  if (msg.pv != null) p.pv = Math.max(0, Math.min(99, Math.round(Number(msg.pv)) || 0));
+  const pk = typeof msg.pk === 'string' ? msg.pk : '';
+  if (pk && /^[A-Za-z0-9_-]{87}$/.test(pk)) {
+    if (p.pk !== pk) p.pairwise = null;
+    p.pk = pk;
+  }
   observePeerClock(p, ts, now);
   p.lastContactAt = now;
   p.lastSeen = now;
@@ -842,7 +918,9 @@ function markPeerLeft(s: MeetSession, id: string, now: number) {
   if (!peer) return false;
   peer.left = true;
   peer.leftAt = now;
+  peer.joined = false;
   s.p2p?.closePeer(id);
+  s.peerVisibility.delete(id);
   if (s.hostId === id) s.hostId = null;
   if (s.route?.peerId === id) s.route = null;
   s.alertNear.delete(id);
@@ -852,18 +930,409 @@ function markPeerLeft(s: MeetSession, id: string, now: number) {
   return true;
 }
 
+function protocolFields(s: MeetSession) {
+  return {
+    pv: MEET_FEATURE_VERSION,
+    pmin: MEET_PROTOCOL_MIN,
+    pmax: MEET_PROTOCOL_MAX,
+    pk: s.keyPair.publicB64
+  };
+}
+
+function securityVerdict(msg: any) {
+  const proto = negotiateMeetProtocol(msg?.pmin, msg?.pmax, msg?.pv);
+  if (proto.ok === false) return proto;
+  const feature = Math.round(Number(msg?.pv));
+  if (!Number.isFinite(feature) || feature < MEET_VERSION_MIN_FEATURE) {
+    return { ok: false as const, reason: 'old' as const, peerMin: proto.version, peerMax: proto.version };
+  }
+  if (!msg?.pk || typeof msg.pk !== 'string') {
+    return { ok: false as const, reason: 'missing' as const, peerMin: proto.version, peerMax: proto.version };
+  }
+  return proto;
+}
+
+function rejectIncomingPeer(s: MeetSession, msg: any, verdict: any) {
+  const id = String(msg.id || '').slice(0, 40);
+  if (!id || id === s.self.id || s.revoked.has(id)) return;
+  const existing = s.incompatiblePeers.get(id);
+  if (!existing) {
+    const name = cleanName(msg.name) || t('meet.unnamedPeer');
+    s.incompatiblePeers.set(id, { id, name, reason: verdict.reason });
+    pushSystemChat(s, 'incompatible', { name });
+    emit('meet:incompatible', { id, name, reason: verdict.reason });
+    emitState();
+  }
+  void publishPacket({
+    k: 'reject', id: s.self.id, to: id, reason: 'protocol',
+    need: [MEET_PROTOCOL_MIN, MEET_PROTOCOL_MAX, MEET_VERSION_MIN_FEATURE]
+  }, 'critical', { room: s.baseRoom });
+}
+
+async function ensurePairwise(s: MeetSession, peer: any) {
+  if (!peer) return null;
+  if (peer.pairwise) return peer.pairwise;
+  if (!peer.pk) return null;
+  try {
+    const publicKey = await importMeetPublicKey(peer.pk);
+    if (!publicKey) return null;
+    const key = await deriveMeetPairwiseKey(
+      s.keyPair.privateKey, publicKey, s.roomId, s.self.id, peer.id
+    );
+    if (session !== s) return null;
+    peer.pairwise = key;
+    return key;
+  } catch {
+    return null;
+  }
+}
+
+async function installEpoch(s: MeetSession, epoch: number, secretText: any, reason: string) {
+  if (!s || !Number.isSafeInteger(epoch) || epoch <= s.keyEpoch) return false;
+  const secret = decodeEpochSecret(secretText);
+  if (!secret) return false;
+  let key: CryptoKey;
+  try {
+    key = await deriveMeetEpochKey(s.roomId, epoch, secret);
+  } catch {
+    return false;
+  }
+  if (session !== s) return false;
+  s.previousKeys.push({ epoch: s.keyEpoch, key: s.room.key, until: Date.now() + EPOCH_KEY_GRACE_MS });
+  s.previousKeys = s.previousKeys.slice(-3);
+  s.keyEpoch = epoch;
+  s.epochSecret = secretText;
+  s.room = meetRoomWithKey(s.room, key);
+  s.secretEpoch = Math.max(s.secretEpoch || 0, epoch);
+  emit('meet:security', { type: 'rotated', epoch, reason });
+  emitState();
+  await publishHi();
+  return true;
+}
+
+async function rotateEpoch(s: MeetSession, reason: string) {
+  if (!s || s.hostId !== s.self.id || s.leaving) return false;
+  if (s.rotating) {
+    s.rotateQueued = true;
+    return false;
+  }
+  s.rotating = true;
+  const gen = s.epoch;
+  try {
+    do {
+      s.rotateQueued = false;
+      if (session !== s || s.epoch !== gen || s.hostId !== s.self.id || s.leaving) break;
+      const active = [...s.peers.values()].filter((p) => !p.left && !s.revoked.has(p.id)
+        && p.compatible && p.pk);
+      const epoch = s.keyEpoch + 1;
+      if (!active.length) {
+        await installEpoch(s, epoch, epochSecretB64(generateEpochSecret()), reason);
+        break;
+      }
+      const secret = generateEpochSecret();
+      const secretText = epochSecretB64(secret);
+      const roster = [s.self.id, ...active.map((p) => p.id)];
+      for (const peer of active) {
+        const pairwise = await ensurePairwise(s, peer);
+        if (!pairwise || session !== s) continue;
+        let box: string;
+        try {
+          box = await sealMeetDirect(pairwise, {
+            k: 'rekey', ep: epoch, sec: secretText, ids: roster, hostId: s.self.id
+          });
+        } catch {
+          continue;
+        }
+        const sent = await publishPacket({
+          k: 'dm', id: s.self.id, to: peer.id, box,
+          name: s.self.name, c: s.self.color, hostId: s.self.id,
+          ...protocolFields(s)
+        }, 'critical', { room: peer.joined ? s.room : s.baseRoom });
+        if (sent) {
+          peer.joined = true;
+          peer.invitedEpoch = epoch;
+        }
+      }
+      if (session !== s || s.epoch !== gen) break;
+      const ok = await installEpoch(s, epoch, secretText, reason);
+      if (ok) {
+        for (const [id] of s.peers) if (s.revoked.has(id)) s.peers.delete(id);
+        sendPresence();
+        emitState();
+      }
+    } while (s.rotateQueued && session === s);
+    return true;
+  } finally {
+    s.rotating = false;
+  }
+}
+
+async function sendWelcome(s: MeetSession, peer: any) {
+  if (!s.epochSecret || s.keyEpoch <= 0) return false;
+  const pairwise = await ensurePairwise(s, peer);
+  if (!pairwise || session !== s) return false;
+  const roster = [s.self.id, ...activeSharingPeers(s).map((p) => p.id)];
+  let box: string;
+  try {
+    box = await sealMeetDirect(pairwise, {
+      k: 'rekey', ep: s.keyEpoch, sec: s.epochSecret, ids: roster, hostId: s.self.id
+    });
+  } catch {
+    return false;
+  }
+  const sent = await publishPacket({
+    k: 'dm', id: s.self.id, to: peer.id, box,
+    name: s.self.name, c: s.self.color, hostId: s.self.id,
+    ...protocolFields(s)
+  }, 'critical', { room: peer.joined ? s.room : s.baseRoom });
+  if (sent) {
+    peer.joined = true;
+    peer.invitedEpoch = s.keyEpoch;
+  }
+  return sent;
+}
+
+function electHost(s: MeetSession, now: number) {
+  if (s.hostId) return;
+  const candidates = [
+    { id: s.self.id, name: s.self.name },
+    ...activeSharingPeers(s).map((p) => ({ id: p.id, name: p.name }))
+  ].sort((a, b) => a.id.localeCompare(b.id));
+  const winner = candidates[0];
+  if (!winner) return;
+  s.hostId = winner.id;
+  for (const p of s.peers.values()) p.hostId = winner.id;
+  if (winner.id === s.self.id) {
+    pushSystemChat(s, 'hostChanged', { name: s.self.name });
+    void rotateEpoch(s, 'host-elected');
+  } else {
+    pushSystemChat(s, 'hostChanged', { name: winner.name });
+    emit('meet:security', { type: 'host', hostId: winner.id, at: now });
+  }
+  emitState();
+}
+
+function activeSharingPeers(s: MeetSession) {
+  return [...s.peers.values()].filter((p) => !p.left && !s.revoked.has(p.id)
+    && p.compatible && p.joined);
+}
+
+async function publishDirect(s: MeetSession, peer: any, body: any) {
+  if (!peer || peer.left || s.revoked.has(peer.id)) return false;
+  const pairwise = await ensurePairwise(s, peer);
+  if (!pairwise || session !== s) return false;
+  let box: string;
+  try {
+    box = await sealMeetDirect(pairwise, body);
+  } catch {
+    return false;
+  }
+  return publishPacket({
+    k: 'dm', id: s.self.id, to: peer.id, box,
+    name: s.self.name, c: s.self.color, hostId: s.hostId || undefined,
+    ...protocolFields(s)
+  });
+}
+
+/** Broadcast while every peer is visible; otherwise send pairwise to visible peers only. */
+async function publishPositional(body: any) {
+  const s = session;
+  if (!s) return false;
+  const active = activeSharingPeers(s);
+  if (!active.length) return publishPacket(body);
+  const visibility = new Map<string, MeetVisibility>(active.map((p) => [
+    p.id, s.peerVisibility.get(p.id) === 'hidden' ? 'hidden' : 'full'
+  ]));
+  const ready = new Set(active.filter((p) => p.pairwise).map((p) => p.id));
+  const plan = meetLocationPlan(active.map((p) => p.id), visibility, ready);
+  if (plan.mode === 'broadcast') return publishPacket(body);
+  if (plan.mode === 'none') return false;
+  let sent = false;
+  for (const id of plan.targets) {
+    const peer = s.peers.get(id);
+    if (peer && await publishDirect(s, peer, body)) sent = true;
+  }
+  return sent;
+}
+
+async function processPeerLocation(s: MeetSession, msg: any, now: number, ts: number, senderId: string) {
+  const lat = Number(msg.la);
+  const lon = Number(msg.lo);
+  if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
+  let sampleAt = ts;
+  let fixApprox = true;
+  if (msg.ft != null) {
+    const ft = Number(msg.ft);
+    if (!Number.isSafeInteger(ft) || ft <= 0 || ft > ts + 1000) return;
+    sampleAt = ft;
+    fixApprox = false;
+  }
+  const touched = touchPeer(msg, now, ts);
+  if (!touched) return;
+  const p = touched.peer;
+  if (p.left) return;
+  const seq = Number(msg.sq);
+  if (!Number.isSafeInteger(seq)) return;
+  if (p.locSeq && seq <= p.locSeq) return;
+  p.locSeq = seq;
+  p.lastLocAt = now;
+  p.ts = ts;
+  p.joined = true;
+  if (s.hostId === s.self.id) p.hostId = s.self.id;
+  if (p.lastFixAt && sampleAt <= p.lastFixAt) {
+    if (touched.isNew) announceNewPeer(s, p);
+    emitState();
+    return;
+  }
+  p.lat = lat;
+  p.lon = lon;
+  p.acc = validAccuracy(msg.ac);
+  p.heading = msg.hd != null && isFinite(Number(msg.hd)) ? Number(msg.hd) : null;
+  p.speed = msg.sp != null && isFinite(Number(msg.sp)) ? Number(msg.sp) : null;
+  p.sharing = msg.sh !== false;
+  p.lastFixAt = sampleAt;
+  p.fixApprox = fixApprox;
+  rememberAccuracy(p, p.acc, sampleAt);
+  if (touched.isNew) announceNewPeer(s, p);
+  emitState();
+}
+
+function processPeerMarker(s: MeetSession, msg: any, now: number, senderId: string) {
+  const peer = s.peers.get(senderId);
+  if (!peer || peer.left) return;
+  const mkid = String(msg.mkid || '');
+  if (!/^[A-Za-z0-9_-]{8,32}$/.test(mkid)) return;
+  const key = markerKey(senderId, mkid);
+  if (msg.del) {
+    if (s.markers.delete(key)) {
+      emit('meet:marker', { action: 'delete', id: mkid, by: senderId });
+      emitState();
+    }
+    return;
+  }
+  const candidate = sanitizeMeetMarker(msg, now);
+  if (!candidate) return;
+  const existing = s.markers.get(key);
+  if (existing) {
+    existing.label = candidate.label;
+    existing.expiresAt = Math.min(existing.expiresAt, candidate.expiresAt);
+    existing.updatedAt = now;
+  } else {
+    s.markers.set(key, {
+      ...candidate,
+      by: senderId,
+      byName: peer.name
+    } as any);
+    trimPeerMarkers(s, senderId);
+    emit('meet:marker', { action: 'add', marker: { ...s.markers.get(key) } });
+  }
+  emitState();
+}
+
+function processPeerGoal(s: MeetSession, msg: any, now: number, senderId: string) {
+  if (senderId !== s.hostId) return;
+  if (msg.del) {
+    if (!s.goal) return;
+    s.goal = null;
+    s.alertNear.clear();
+    pushSystemChat(s, 'goalCleared', { name: s.peers.get(senderId)?.name || t('meet.hostBadge') });
+    emit('meet:goal', { action: 'clear', by: senderId });
+    emitState();
+    return;
+  }
+  const goal = sanitizeMeetGoal(msg, now);
+  if (!goal) return;
+  s.goal = { ...goal, by: senderId };
+  s.alertNear.clear();
+  pushSystemChat(s, 'goalSet', {
+    name: s.peers.get(senderId)?.name || t('meet.hostBadge'),
+    label: goal.label || t('meet.goalDefault')
+  });
+  emit('meet:goal', { action: 'set', goal: { ...s.goal }, by: s.goal.by });
+  emitState();
+}
+
+async function handleDirectPacket(s: MeetSession, msg: any, now: number, ts: number, senderId: string) {
+  if (String(msg.to || '') !== s.self.id || s.leaving) return;
+  const verdict = securityVerdict(msg);
+  if (verdict.ok === false) {
+    rejectIncomingPeer(s, msg, verdict);
+    return;
+  }
+  const touched = touchPeer(msg, now, ts);
+  if (!touched) return;
+  const peer = touched.peer;
+  const pairwise = await ensurePairwise(s, peer);
+  if (!pairwise || session !== s) return;
+  const inner = await openMeetDirect(pairwise, msg.box);
+  if (!inner || typeof inner.k !== 'string' || session !== s) return;
+  if (inner.k === 'rekey') {
+    const ep = Number(inner.ep);
+    const hostOk = senderId === s.hostId
+      || (!s.hostId && (String(msg.hostId || '') === senderId || String(inner.hostId || '') === senderId));
+    if (!hostOk || !Number.isSafeInteger(ep) || ep <= s.keyEpoch) return;
+    if (!s.hostId) s.hostId = senderId;
+    peer.joined = true;
+    peer.hostId = senderId;
+    const installed = await installEpoch(s, ep, inner.sec, senderId === s.self.id ? 'host' : 'welcome');
+    if (installed) {
+      for (const p of s.peers.values()) if (p.hostId !== senderId) p.hostId = senderId;
+      if (touched.isNew) announceNewPeer(s, peer);
+      sendPresence();
+      emitState();
+    }
+    return;
+  }
+  if (!peer.joined && s.keyEpoch > 0) return;
+  if (inner.k === 'loc') {
+    processPeerLocation(s, {
+      ...inner, id: senderId, name: peer.name, c: peer.color, sq: msg.sq, ts: msg.ts
+    }, now, ts, senderId);
+    return;
+  }
+  if (inner.k === 'mk') {
+    processPeerMarker(s, { ...inner, id: senderId }, now, senderId);
+    return;
+  }
+  if (inner.k === 'goal') {
+    processPeerGoal(s, { ...inner, id: senderId }, now, senderId);
+  }
+}
+
 async function handleIncoming(text: string) {
   const s = session;
   if (!s) return;
   const epoch = s.epoch;
   const room = s.room;
-  const msg = await decryptMeetPacket(text, room);
-  if (session !== s || s.epoch !== epoch || s.room !== room || !msg || msg.v !== MEET_PROTOCOL_VERSION || typeof msg.k !== 'string') return;
+  const altKeys = [
+    s.baseRoom.key,
+    ...s.previousKeys.filter((entry: any) => Date.now() < entry.until).map((entry: any) => entry.key)
+  ];
+  const msg = await decryptMeetPacket(text, room, altKeys);
+  if (session !== s || s.epoch !== epoch || !msg || typeof msg.k !== 'string') return;
   const now = Date.now();
   const ts = Number(msg.ts);
   if (!isFinite(ts) || Math.abs(now - ts) > PACKET_CLOCK_TOLERANCE_MS) return;
   const senderId = String(msg.id || '').slice(0, 40);
-  if (!senderId || senderId === s.self.id) return;
+  if (!senderId || senderId === s.self.id || s.revoked.has(senderId)) return;
+  if (msg.v !== MEET_PROTOCOL_VERSION) {
+    if (!s.legacyNotices.has(senderId)) {
+      s.legacyNotices.add(senderId);
+      const name = cleanName(msg.name) || t('meet.unnamedPeer');
+      s.incompatiblePeers.set(senderId, { id: senderId, name, reason: 'protocol' });
+      pushSystemChat(s, 'incompatible', { name });
+      emit('meet:incompatible', { id: senderId, name, reason: 'protocol' });
+      emitState();
+    }
+    return;
+  }
+  if (msg.k === 'hi' || msg.k === 'hello') {
+    const verdict = securityVerdict(msg);
+    if (verdict.ok === false) {
+      rejectIncomingPeer(s, msg, verdict);
+      return;
+    }
+  }
   if (msg.k === 'rtc') {
     if (s.leaving) return;
     const signal = sanitizeRtcSignal(msg, s.self.id, now);
@@ -872,8 +1341,55 @@ async function handleIncoming(text: string) {
     void s.p2p.handleSignal(signal).catch(() => undefined);
     return;
   }
-  if (!acceptMeetSequence(s.replay, senderId, Number(msg.sq), now)) {
+  // Presence carries its own hiSeq ordering; skipping the session guard lets a
+  // freshly admitted peer start its location stream at 1 after hello.
+  if (msg.k !== 'hi' && !acceptMeetSequence(s.replay, senderId, Number(msg.sq), now)) {
     noteReplayContact(msg, now);
+    return;
+  }
+
+  if (msg.k === 'dm') {
+    await handleDirectPacket(s, msg, now, ts, senderId);
+    return;
+  }
+
+  if (msg.k === 'reject') {
+    if (String(msg.to || '') !== s.self.id) return;
+    const byHost = senderId === s.hostId;
+    emit('meet:incompatible', {
+      id: senderId, name: cleanName(msg.name) || t('meet.unnamedPeer'),
+      reason: String(msg.reason || 'protocol'), byHost
+    });
+    if (byHost) await leaveMeet('incompatible');
+    return;
+  }
+
+  if (msg.k === 'closed') {
+    if (senderId !== s.hostId) return;
+    await leaveMeet('room-closed');
+    return;
+  }
+
+  if (msg.k === 'hello') {
+    if (s.leaving) return;
+    const touched = touchPeer(msg, now, ts);
+    if (!touched) return;
+    s.incompatiblePeers.delete(senderId);
+    const peer = touched.peer;
+    const wasLeft = peer.left;
+    peer.left = false;
+    peer.leftAt = 0;
+    peer.compatible = true;
+    peer.joined = false;
+    if (s.hostId === s.self.id) {
+      if (touched.isNew || wasLeft) announceNewPeer(s, peer);
+      if (s.rotating) return;
+      if (peer.invitedEpoch === s.keyEpoch && s.keyEpoch > 0) await sendWelcome(s, peer);
+      else await rotateEpoch(s, 'join');
+    } else if (touched.isNew || wasLeft) {
+      announceNewPeer(s, peer);
+    }
+    emitState();
     return;
   }
 
@@ -882,10 +1398,17 @@ async function handleIncoming(text: string) {
     if (existing?.hiSeq && Number(msg.sq) <= existing.hiSeq) return;
     const touched = touchPeer(msg, now, ts);
     if (!touched) return;
+    s.incompatiblePeers.delete(senderId);
     const wasLeft = touched.peer.left;
     touched.peer.left = false;
     touched.peer.leftAt = 0;
     touched.peer.hiSeq = Number(msg.sq);
+    touched.peer.compatible = true;
+    touched.peer.joined = true;
+    const advertisedEpoch = Number(msg.ep);
+    if (Number.isSafeInteger(advertisedEpoch) && advertisedEpoch > 0) {
+      touched.peer.invitedEpoch = Math.max(touched.peer.invitedEpoch || 0, advertisedEpoch);
+    }
     if (msg.id === msg.hostId && (!s.hostId || s.hostId === msg.id || s.hostId === s.self.id)) {
       if (!s.hostId) s.hostId = msg.id;
       if (s.hostId === msg.id && isFinite(Number(msg.exp))) {
@@ -921,6 +1444,8 @@ async function handleIncoming(text: string) {
   }
 
   if (msg.k === 'msg') {
+    const peer = s.peers.get(senderId);
+    if (!peer || peer.left || !peer.joined) return;
     const mid = String(msg.mid || '');
     if (!/^[A-Za-z0-9_-]{8,32}$/.test(mid) || s.chatSeen.has(mid)) return;
     const image = msg.im != null ? sanitizeChatImagePacket(msg) : null;
@@ -979,50 +1504,16 @@ async function handleIncoming(text: string) {
   }
 
   if (msg.k === 'loc') {
-    const lat = Number(msg.la);
-    const lon = Number(msg.lo);
-    if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
-    let sampleAt = ts;
-    let fixApprox = true;
-    if (msg.ft != null) {
-      const ft = Number(msg.ft);
-      if (!Number.isSafeInteger(ft) || ft <= 0 || ft > ts + 1000) return;
-      sampleAt = ft;
-      fixApprox = false;
-    }
-    const touched = touchPeer(msg, now, ts);
-    if (!touched) return;
-    const p = touched.peer;
-    if (p.left) return;
-    const seq = Number(msg.sq);
-    if (p.locSeq && seq <= p.locSeq) return;
-    p.locSeq = seq;
-    p.lastLocAt = now;
-    p.ts = ts;
-    if (s.hostId === s.self.id) p.hostId = s.self.id;
-    if (p.lastFixAt && sampleAt <= p.lastFixAt) {
-      if (touched.isNew) announceNewPeer(s, p);
-      emitState();
-      return;
-    }
-    p.lat = lat;
-    p.lon = lon;
-    p.acc = validAccuracy(msg.ac);
-    p.heading = msg.hd != null && isFinite(Number(msg.hd)) ? Number(msg.hd) : null;
-    p.speed = msg.sp != null && isFinite(Number(msg.sp)) ? Number(msg.sp) : null;
-    p.sharing = msg.sh !== false;
-    p.lastFixAt = sampleAt;
-    p.fixApprox = fixApprox;
-    rememberAccuracy(p, p.acc, sampleAt);
-    if (touched.isNew) announceNewPeer(s, p);
-    emitState();
+    const peer = s.peers.get(senderId);
+    if (!peer || peer.left || !peer.joined) return;
+    processPeerLocation(s, msg, now, ts, senderId);
     return;
   }
 
   if (msg.k === 'st') {
     const touched = touchPeer(msg, now, ts);
     if (!touched) return;
-    if (touched.peer.left) return;
+    if (touched.peer.left || !touched.peer.joined) return;
     const seq = Number(msg.sq);
     if (touched.peer.stateSeq && seq <= touched.peer.stateSeq) return;
     touched.peer.stateSeq = seq;
@@ -1044,71 +1535,31 @@ async function handleIncoming(text: string) {
   }
 
   if (msg.k === 'goal') {
-    if (senderId !== s.hostId) return;
-    if (msg.del) {
-      if (!s.goal) return;
-      s.goal = null;
-      s.alertNear.clear();
-      pushSystemChat(s, 'goalCleared', { name: s.peers.get(senderId)?.name || t('meet.hostBadge') });
-      emit('meet:goal', { action: 'clear', by: senderId });
-      emitState();
-      return;
-    }
-    const goal = sanitizeMeetGoal(msg, now);
-    if (!goal) return;
-    s.goal = { ...goal, by: senderId };
-    s.alertNear.clear();
-    pushSystemChat(s, 'goalSet', {
-      name: s.peers.get(senderId)?.name || t('meet.hostBadge'),
-      label: goal.label || t('meet.goalDefault')
-    });
-    emit('meet:goal', { action: 'set', goal: { ...s.goal }, by: s.goal.by });
-    emitState();
+    const peer = s.peers.get(senderId);
+    if (!peer || peer.left || !peer.joined) return;
+    processPeerGoal(s, msg, now, senderId);
     return;
   }
 
   if (msg.k === 'mk') {
     const peer = s.peers.get(senderId);
-    if (!peer || peer.left) return;
-    const mkid = String(msg.mkid || '');
-    if (!/^[A-Za-z0-9_-]{8,32}$/.test(mkid)) return;
-    const key = markerKey(senderId, mkid);
-    if (msg.del) {
-      if (s.markers.delete(key)) {
-        emit('meet:marker', { action: 'delete', id: mkid, by: senderId });
-        emitState();
-      }
-      return;
-    }
-    const candidate = sanitizeMeetMarker(msg, now);
-    if (!candidate) return;
-    const existing = s.markers.get(key);
-    if (existing) {
-      existing.label = candidate.label;
-      existing.expiresAt = Math.min(existing.expiresAt, candidate.expiresAt);
-      existing.updatedAt = now;
-    } else {
-      s.markers.set(key, {
-        ...candidate,
-        by: senderId,
-        byName: peer.name
-      } as any);
-      trimPeerMarkers(s, senderId);
-      emit('meet:marker', { action: 'add', marker: { ...s.markers.get(key) } });
-    }
-    emitState();
+    if (!peer || peer.left || !peer.joined) return;
+    processPeerMarker(s, msg, now, senderId);
     return;
   }
 
   if (msg.k === 'bye') {
     const peer = s.peers.get(senderId);
     if (!peer) return;
+    const wasHost = s.hostId === senderId;
     observePeerClock(peer, ts, now);
     peer.lastContactAt = now;
     peer.lastSeen = now;
     markPeerLeft(s, senderId, now);
     pushSystemChat(s, 'leave', { name: peer.name });
     emit('meet:peerleft', { id: senderId, name: peer.name });
+    if (wasHost) electHost(s, now);
+    else if (s.hostId === s.self.id) void rotateEpoch(s, 'leave');
     emitState();
     return;
   }
@@ -1124,11 +1575,13 @@ async function handleIncoming(text: string) {
       return;
     }
     const targetName = s.peers.get(target)?.name;
+    s.revoked.add(target);
     markPeerLeft(s, target, now);
     if (targetName) {
       pushSystemChat(s, 'kick', { name: targetName });
       emit('meet:peerleft', { id: target, name: targetName, kicked: true });
     }
+    if (s.hostId === s.self.id) void rotateEpoch(s, 'kick');
     emitState();
   }
 }
@@ -1185,6 +1638,11 @@ function tick() {
   if (!s) return;
   const now = Date.now();
   s.rtcRate.prune(now);
+  s.previousKeys = s.previousKeys.filter((entry: any) => now < entry.until);
+  if (s.hostId !== s.self.id && s.keyEpoch === 0
+    && s.relayState === 'connected' && now - (s.lastHelloAt || 0) >= HELLO_RETRY_MS) {
+    publishHello();
+  }
   const remaining = Math.max(0, s.expiresAt - now);
   emit('meet:tick', { remaining, now });
   if (remaining <= 0) {
@@ -1204,14 +1662,17 @@ function tick() {
   for (const [id, p] of s.peers) {
     const age = now - p.lastContactAt;
     if ((p.left ? now - p.leftAt : age) > REMOVE_MS) {
+      const wasHost = s.hostId === id;
       s.peers.delete(id);
       s.p2p?.closePeer(id);
-      if (s.hostId === id) s.hostId = null;
+      s.peerVisibility.delete(id);
+      if (wasHost) s.hostId = null;
       if (s.route?.peerId === id) s.route = null;
       s.alertNear.delete(id);
       for (const [key, marker] of s.markers) {
         if (marker.by === id) s.markers.delete(key);
       }
+      if (wasHost) electHost(s, now);
       changed = true;
       continue;
     }
@@ -1243,6 +1704,7 @@ async function beginSession({
 }) {
   if (session) await leaveMeet('switch');
   const room = await deriveMeetRoom(invite);
+  const keyPair = await generateMeetKeyPair();
   const selfName = resolveName(name);
   if (cleanName(name) && cleanName(name) !== get('meetName')) set('meetName', cleanName(name));
   const selfId = randomMeetId();
@@ -1265,6 +1727,19 @@ async function beginSession({
   session = {
     invite: room.invite,
     room,
+    baseRoom: room,
+    keyPair,
+    keyEpoch: 0,
+    epochSecret: null,
+    previousKeys: [],
+    peerVisibility: new Map(),
+    revoked: new Set(),
+    incompatiblePeers: new Map(),
+    legacyNotices: new Set(),
+    rotating: false,
+    rotateQueued: false,
+    lastHelloAt: 0,
+    secretEpoch: 0,
     roomId: room.roomId,
     roomLabel: roomLabelFor(room.roomId),
     link,
@@ -1358,7 +1833,7 @@ export async function leaveMeet(reason = 'manual') {
   if (!s || s.leaving) return;
   s.leaving = true;
   invalidateRtcLane(s);
-  if (reason !== 'switch') {
+  if (reason !== 'switch' && reason !== 'room-closed' && reason !== 'incompatible') {
     await Promise.race([publishPacket({ k: 'bye', id: s.self.id }), sleep(250)]);
   }
   cleanupSession(s);
@@ -1399,11 +1874,19 @@ function cleanupSession(s: MeetSession) {
   s.rtcSeen.clear();
   s.rtcRate.clear();
   s.replay.clear();
+  s.previousKeys = [];
+  s.peerVisibility.clear();
+  s.revoked.clear();
+  s.incompatiblePeers.clear();
+  s.legacyNotices.clear();
+  s.epochSecret = null;
 }
 
 export async function resetMeetCode() {
   const s = session;
   if (!s || s.hostId !== s.self.id) return null;
+  await Promise.race([publishPacket({ k: 'closed', id: s.self.id }), sleep(200)]);
+  if (session !== s) return null;
   invalidateRtcLane(s);
   s.epoch++;
   s.relayGen++;
@@ -1433,11 +1916,24 @@ export async function resetMeetCode() {
   s.routeLoading = '';
   const invite = generateMeetInvite();
   const room = await deriveMeetRoom(invite);
+  const keyPair = await generateMeetKeyPair();
   if (session !== s) return null;
   const inviteExpiresAt = Date.now() + inviteExpiryMinutes() * 60_000;
   const inviteSig = await signMeetInviteExpiry(room.invite, inviteExpiresAt);
   s.invite = room.invite;
   s.room = room;
+  s.baseRoom = room;
+  s.keyPair = keyPair;
+  s.keyEpoch = 0;
+  s.epochSecret = null;
+  s.previousKeys = [];
+  s.peerVisibility.clear();
+  s.revoked.clear();
+  s.incompatiblePeers.clear();
+  s.legacyNotices.clear();
+  s.rotating = false;
+  s.rotateQueued = false;
+  s.lastHelloAt = 0;
   s.roomId = room.roomId;
   s.roomLabel = roomLabelFor(room.roomId);
   s.inviteExpiresAt = inviteExpiresAt;
@@ -1469,6 +1965,53 @@ export function setMeetSharing(on: boolean) {
   if (s.sharing) sendPresence();
   else publishState();
   emitState();
+}
+
+async function sendOwnMarkersTo(s: MeetSession, peer: any, remove = false) {
+  const now = Date.now();
+  for (const marker of activeMarkers(s, now)) {
+    if (marker.by !== s.self.id) continue;
+    await publishDirect(s, peer, remove ? {
+      k: 'mk', id: s.self.id, del: true, mkid: marker.id
+    } : {
+      k: 'mk', id: s.self.id,
+      mkid: marker.id, mtyp: marker.type,
+      la: marker.lat, lo: marker.lon, tx: marker.label,
+      ttl: markerRemainingTtl(marker, now)
+    });
+  }
+}
+
+export function setMeetPeerVisibility(peerId: string, visible: boolean) {
+  const s = session;
+  if (!s) return false;
+  const peer = s.peers.get(peerId);
+  if (!peer || peer.left || peerId === s.self.id) return false;
+  const next = visible ? 'full' : 'hidden';
+  if ((s.peerVisibility.get(peerId) || 'full') === next) return true;
+  if (next === 'hidden') s.peerVisibility.set(peerId, 'hidden');
+  else s.peerVisibility.delete(peerId);
+  if (!visible) {
+    void sendOwnMarkersTo(s, peer, true);
+    emit('meet:security', { type: 'visibility', peerId, visible: false });
+  } else {
+    if (s.sharing && s.self.hasFix) void publishDirect(s, peer, {
+      k: 'loc', id: s.self.id, name: s.self.name, c: s.self.color,
+      la: s.self.lat, lo: s.self.lon, ac: s.self.acc,
+      hd: s.self.heading, sp: s.self.speed, sh: s.sharing,
+      ft: s.self.fixAt
+    });
+    void sendOwnMarkersTo(s, peer);
+    if (s.hostId === s.self.id && s.goal) {
+      void publishDirect(s, peer, {
+        k: 'goal', id: s.self.id,
+        la: s.goal.lat, lo: s.goal.lon, tx: s.goal.label
+      });
+    }
+    emit('meet:security', { type: 'visibility', peerId, visible: true });
+  }
+  emitState();
+  return true;
 }
 
 export async function sendMeetMessage(raw: string) {
@@ -1646,7 +2189,7 @@ export async function sendMeetMarker(input: { type?: string; label?: string; ttl
     ttl: ttlMin
   }, now);
   if (!marker) return false;
-  const ok = await publishPacket({
+  const ok = await publishPositional({
     k: 'mk', id: s.self.id,
     mkid: marker.id, mtyp: marker.type,
     la: marker.lat, lo: marker.lon, tx: marker.label, ttl: ttlMin
@@ -1666,7 +2209,7 @@ export async function deleteMeetMarker(id: string) {
   if (!s) return false;
   const key = markerKey(s.self.id, String(id || ''));
   if (!s.markers.has(key)) return false;
-  const ok = await publishPacket({ k: 'mk', id: s.self.id, del: true, mkid: id });
+  const ok = await publishPositional({ k: 'mk', id: s.self.id, del: true, mkid: id });
   if (session !== s || !ok) return false;
   s.markers.delete(key);
   emit('meet:marker', { action: 'delete', id, by: s.self.id });
@@ -1682,7 +2225,7 @@ export async function sendMeetGoal({ label = '' }: { label?: string } = {}) {
   if (sendLimitDenied(s, 'goal', now)) return false;
   const goal = sanitizeMeetGoal({ la: s.self.lat, lo: s.self.lon, tx: label }, now);
   if (!goal) return false;
-  const ok = await publishPacket({ k: 'goal', id: s.self.id, la: goal.lat, lo: goal.lon, tx: goal.label });
+  const ok = await publishPositional({ k: 'goal', id: s.self.id, la: goal.lat, lo: goal.lon, tx: goal.label });
   if (session !== s || !ok) return false;
   s.goal = { ...goal, by: s.self.id };
   s.alertNear.clear();
@@ -1696,7 +2239,7 @@ export async function clearMeetGoal() {
   const s = session;
   if (!s || s.hostId !== s.self.id || !s.goal) return false;
   if (sendLimitDenied(s, 'goal', Date.now())) return false;
-  const ok = await publishPacket({ k: 'goal', id: s.self.id, del: true });
+  const ok = await publishPositional({ k: 'goal', id: s.self.id, del: true });
   if (session !== s || !ok) return false;
   s.goal = null;
   s.alertNear.clear();
@@ -1725,13 +2268,15 @@ export async function kickMeetPeer(peerId: string) {
   const s = session;
   if (!s || s.hostId !== s.self.id || !peerId || peerId === s.self.id) return false;
   const target = s.peers.get(peerId);
-  await publishPacket({ k: 'kick', id: s.self.id, target: peerId, by: s.self.id });
+  if (!target || target.left) return false;
+  const sent = await publishPacket({ k: 'kick', id: s.self.id, target: peerId, by: s.self.id });
   if (session !== s) return false;
+  if (!sent) return false;
+  s.revoked.add(peerId);
   markPeerLeft(s, peerId, Date.now());
-  if (target) {
-    pushSystemChat(s, 'kick', { name: target.name });
-    emit('meet:peerleft', { id: peerId, name: target.name, kicked: true });
-  }
+  pushSystemChat(s, 'kick', { name: target.name });
+  emit('meet:peerleft', { id: peerId, name: target.name, kicked: true });
+  await rotateEpoch(s, 'kick');
   emitState();
   return true;
 }
@@ -1857,6 +2402,7 @@ export const meet = {
   markChatRead: markMeetChatRead,
   sendNow: sendMeetNow,
   retryGeo: retryMeetGeolocation,
+  setPeerVisibility: setMeetPeerVisibility,
   kick: kickMeetPeer,
   route: planMeetRoute,
   clearRoute: clearMeetRoute,

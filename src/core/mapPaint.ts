@@ -224,7 +224,8 @@ function lut(t, stops = BRIGHT_STOPS) {
  * night-style tiles.
  */
 export function paintTrack(ctx, fit, segments, waypoints, {
-  upto = Infinity, lineWidth = 6.5, dotRadius = 12, wpRadius = 5.5, darkBg = false
+  upto = Infinity, lineWidth = 6.5, dotRadius = 12, wpRadius = 5.5, darkBg = false,
+  trackColor = '', hideStart = false, hideEnd = false, headKind = 'end'
 } = {}) {
   if (!fit) return;
   const P = canvasPalette();
@@ -262,12 +263,19 @@ export function paintTrack(ctx, fit, segments, waypoints, {
   const chunk = Math.max(2, Math.ceil(count / 18));
   // Halo + casing separate the gradient from both pale street maps and dark
   // imagery; the thin highlight keeps the line from looking flat.
-  const passes = [
-    { w: lineWidth * 1.9, a: 0.20, color: halo },
-    { w: lineWidth + 2.8, a: bright ? 0.85 : 0.92, color: casing },
-    { w: lineWidth, a: 1 },
-    { w: Math.max(1.2, lineWidth * 0.24), a: bright ? 0.26 : 0.34, color: 'rgba(255,255,255,0.9)' }
-  ];
+  const passes = trackColor
+    ? [
+        { w: lineWidth * 1.9, a: 0.18, color: halo },
+        { w: lineWidth + 2.8, a: 0.90, color: casing },
+        { w: lineWidth, a: 1, color: trackColor },
+        { w: Math.max(1.2, lineWidth * 0.24), a: 0.26, color: 'rgba(255,255,255,0.9)' }
+      ]
+    : [
+        { w: lineWidth * 1.9, a: 0.20, color: halo },
+        { w: lineWidth + 2.8, a: bright ? 0.85 : 0.92, color: casing },
+        { w: lineWidth, a: 1 },
+        { w: Math.max(1.2, lineWidth * 0.24), a: bright ? 0.26 : 0.34, color: 'rgba(255,255,255,0.9)' }
+      ];
   for (const pass of passes) {
     ctx.globalAlpha = pass.a;
     ctx.lineWidth = pass.w;
@@ -306,7 +314,11 @@ export function paintTrack(ctx, fit, segments, waypoints, {
     ctx.lineWidth = 2.5;
     ctx.beginPath(); ctx.arc(x, y, dotRadius + 2.5, 0, 7); ctx.stroke();
   };
-  if (first) ring(first, P.accent);
-  if (head && head !== first) ring(head, P.amber);
+  if (first && !hideStart) ring(first, trackColor || P.accent);
+  const atEnd = head && head !== first;
+  const isPlayhead = headKind === 'playhead';
+  if (atEnd && !(hideEnd && (!isPlayhead || upto >= total))) {
+    ring(head, isPlayhead ? (trackColor || P.accent) : P.amber);
+  }
   ctx.restore();
 }

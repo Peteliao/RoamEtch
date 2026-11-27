@@ -15,7 +15,7 @@ import { WP_ICONS } from '../core/waypointMeta';
 import { canvasPalette } from '../core/palette';
 import { effectiveTheme } from '../core/theme';
 import { buildProfile, altitudeUnit, distanceInUnit, distanceUnit, speedUnit } from '../core/profileChart';
-import { computeDistanceSplitsAsync, previewTrackRepairAsync } from '../core/workerBridge';
+import { buildProfileAsync, computeDistanceSplitsAsync, previewTrackRepairAsync } from '../core/workerBridge';
 import { appState, setActiveTrip, refreshActiveTrip, isTripSectionActive } from './state';
 import { el, icon, confirmModal, toast } from './helpers';
 import { renderTripEmptyState } from './tripEmptyState';
@@ -104,6 +104,10 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
   }
 
   function renderEmpty() {
+    chartSession++;
+    chartAbort?.abort();
+    chartAbort = null;
+    destroyChart();
     renderTripEmptyState(emptyBox, navigate, {
       iconKey: 'analysis', titleKey: 'analysis.emptyTitle', hintKey: 'analysis.emptyHint'
     });
@@ -791,7 +795,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     const other = key === 'altitude' ? 'speed' : 'altitude';
     if (chartSeries[key] && !chartSeries[other]) return;
     chartSeries[key] = !chartSeries[key];
-    renderCharts(appState.stats);
+    void renderCharts(appState.stats);
   }
 
   function renderLegend(profile, units) {
@@ -819,7 +823,13 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     }
   }
 
-  function renderCharts(stats) {
+  let chartSession = 0;
+  let chartAbort: AbortController | null = null;
+
+  async function renderCharts(stats) {
+    const session = ++chartSession;
+    chartAbort?.abort();
+    chartAbort = null;
     const full = appState.activeTripFull;
     flatPoints = full?.segments.flatMap((s) => usableTrackPoints(s.points || [])) || [];
     const trackKey = full ? `${full.trip.id}:${full.trip.updatedAt || 0}` : '';
@@ -832,7 +842,22 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
       return;
     }
 
-    const profile = buildProfile(stats, units, 1800);
+    let profile;
+    if (flatPoints.length >= 40_000) {
+      const controller = new AbortController();
+      chartAbort = controller;
+      try {
+        profile = await buildProfileAsync(stats, units, 1800, { signal: controller.signal });
+      } catch {
+        if (session !== chartSession) return;
+        profile = buildProfile(stats, units, 1800);
+      } finally {
+        if (chartAbort === controller) chartAbort = null;
+      }
+      if (session !== chartSession) return;
+    } else {
+      profile = buildProfile(stats, units, 1800);
+    }
     syncSeriesVisibility(profile);
     const visible = {
       altitude: profile.hasAlt && chartSeries.altitude,
@@ -1177,7 +1202,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     renderGaps();
     renderStats(stats);
     renderQuality();
-    renderCharts(stats);
+    void renderCharts(stats);
     void renderSplits();
     renderSegments(stats);
     renderTimeline();
@@ -1188,12 +1213,12 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     if (!analysisActive()) return;
     renderStats(stats);
     renderQuality();
-    renderCharts(stats);
+    void renderCharts(stats);
     void renderSplits();
     renderSegments(stats);
   });
   on('theme:applied', () => {
-    if (analysisActive() && appState.stats) { renderCharts(appState.stats); }
+    if (analysisActive() && appState.stats) void renderCharts(appState.stats);
   });
 
   return {
@@ -1211,6 +1236,9 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
       repairSequence++;
       qualityController?.abort();
       repairController?.abort();
+      chartSession++;
+      chartAbort?.abort();
+      chartAbort = null;
       splitSequence++;
       splitComputeKey = '';
       miniMap?.destroy();
