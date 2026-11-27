@@ -6,9 +6,13 @@ import { wgs84ToGcj02, gcj02ToWgs84 } from '../core/coords';
 import { previewTrackCleanup } from '../core/gpsQuality';
 import { buildTrackRepairPreview } from '../core/trackRepair';
 import { buildGPX } from '../core/gpx';
+import { buildHeatmap } from '../core/heatmap';
+import { compareTracks } from '../core/trackComparison';
+import { decodeWorkerPayload } from '../core/workerPayload';
 
 self.onmessage = (e) => {
-  const { id, type, payload } = e.data;
+  const { id, type } = e.data;
+  const payload = decodeWorkerPayload(e.data.payload);
   try {
     let result;
     switch (type) {
@@ -37,6 +41,12 @@ self.onmessage = (e) => {
         break;
       case 'gpx':
         result = buildGPX(payload.full);
+        break;
+      case 'heatmap':
+        result = buildHeatmap(payload.trips, payload.opts);
+        break;
+      case 'track-comparison':
+        result = compareTracks(payload.a, payload.b, payload.opts);
         break;
       default:
         throw new Error('unknown task ' + type);

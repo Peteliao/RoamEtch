@@ -14,7 +14,7 @@ export const EVIDENCE_LIMITS = [
   'Remote tiles, geocoding, and elevation traffic are blocked; weak-network and carrier behavior are not exercised in the full-chain or lifecycle scenarios.',
   'The separate cold-start scenario uses Chromium CDP throughput, latency, and packet-loss shaping plus offline/online switching; this is browser-level shaping, not radio or carrier evidence.',
   'CDP heap values are sampled renderer JS heap, not total browser process memory or worker-combined memory.',
-  'GPX parsing and small-track serialization remain main-thread work; large-track map simplification and GPX serialization use compute.worker with a main-thread fallback, while IndexedDB structured cloning remains on the main thread.',
+  'GPX parsing and small-track serialization remain main-thread work; large-track map simplification and GPX serialization use compute.worker with a main-thread fallback. Large worker payloads use transferable columnar typed arrays; IndexedDB structured cloning remains on the main thread.',
   'The sanitized application diagnostic ring does not contain every recorder lifecycle event; segment/state evidence is captured in the attached test report.',
   'Three fixture trips are seeded and fingerprinted inside a disposable Playwright context; no persistent browser profile or eraseAll() is used.'
 ] as const;
@@ -191,9 +191,9 @@ export async function installStressProbes(page: Page) {
         this.addEventListener('error', (event) => workerState.errors.push({ index: this.record.index, message: event.message }));
         this.addEventListener('messageerror', () => workerState.errors.push({ index: this.record.index, message: 'messageerror' }));
       }
-      postMessage(message: any) {
-        this.record.sent.push({ id: message?.id, type: message?.type, pointCount: pointCount(message), at: performance.now() });
-        return super.postMessage(message);
+      postMessage(message: any, transferList?: Transferable[]) {
+        this.record.sent.push({ id: message?.id, type: message?.type, pointCount: message?.pointCount ?? pointCount(message), at: performance.now() });
+        return transferList ? super.postMessage(message, transferList) : super.postMessage(message);
       }
       terminate() {
         this.record.terminated = true;
@@ -414,16 +414,20 @@ export async function readTripStorageSummary(page: Page, tripId: string) {
       let maxChunkPoints = 0;
       let firstPoint = null;
       let lastPoint = null;
-      await db.trackChunks.where('[segmentId+seq]').between([segment.id, 0], [segment.id, Number.MAX_SAFE_INTEGER]).each((chunk: any) => {
-        chunkCount++;
-        sequence.add(chunk.seq);
-        const points = chunk.points || [];
-        pointCount += points.length;
-        minChunkPoints = Math.min(minChunkPoints, points.length);
-        maxChunkPoints = Math.max(maxChunkPoints, points.length);
-        if (!firstPoint && points.length) firstPoint = points[0];
-        if (points.length) lastPoint = points[points.length - 1];
-      });
+      for (let offset = 0; ; offset += 16) {
+        const chunks = await db.trackChunks.where('[segmentId+seq]').between([segment.id, 0], [segment.id, Number.MAX_SAFE_INTEGER]).offset(offset).limit(16).toArray();
+        for (const chunk of chunks) {
+          chunkCount++;
+          sequence.add(chunk.seq);
+          const points = chunk.points || [];
+          pointCount += points.length;
+          minChunkPoints = Math.min(minChunkPoints, points.length);
+          maxChunkPoints = Math.max(maxChunkPoints, points.length);
+          if (!firstPoint && points.length) firstPoint = points[0];
+          if (points.length) lastPoint = points[points.length - 1];
+        }
+        if (chunks.length < 16) break;
+      }
       segmentRows.push({
         id: segment.id, index: segment.index, startTime: segment.startTime, endTime: segment.endTime,
         chunkCount, pointCount, minChunkPoints, maxChunkPoints,
@@ -453,14 +457,18 @@ export async function readTripStorageSummary(page: Page, tripId: string) {
 export async function readRawChunkFingerprint(page: Page, tripId: string) {
   return page.evaluate(async (id) => {
     const rows = [];
-    await (window as any).__lt.store.db.trackChunks.where('tripId').equals(id).each((chunk: any) => {
-      rows.push({
-        id: chunk.id, segmentId: chunk.segmentId, seq: chunk.seq, count: chunk.points.length,
-        firstT: chunk.points[0]?.t, lastT: chunk.points[chunk.points.length - 1]?.t,
-        firstLat: chunk.points[0]?.lat, firstLon: chunk.points[0]?.lon,
-        lastLat: chunk.points[chunk.points.length - 1]?.lat, lastLon: chunk.points[chunk.points.length - 1]?.lon
-      });
-    });
+    for (let offset = 0; ; offset += 16) {
+      const chunks = await (window as any).__lt.store.db.trackChunks.where('tripId').equals(id).offset(offset).limit(16).toArray();
+      for (const chunk of chunks) {
+        rows.push({
+          id: chunk.id, segmentId: chunk.segmentId, seq: chunk.seq, count: chunk.points.length,
+          firstT: chunk.points[0]?.t, lastT: chunk.points[chunk.points.length - 1]?.t,
+          firstLat: chunk.points[0]?.lat, firstLon: chunk.points[0]?.lon,
+          lastLat: chunk.points[chunk.points.length - 1]?.lat, lastLon: chunk.points[chunk.points.length - 1]?.lon
+        });
+      }
+      if (chunks.length < 16) break;
+    }
     return rows.sort((a: any, b: any) => a.segmentId.localeCompare(b.segmentId) || a.seq - b.seq);
   }, tripId);
 }

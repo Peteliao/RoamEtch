@@ -3,7 +3,8 @@
 import { t } from '../core/i18n';
 import { get, set } from '../core/settings';
 import { on } from '../core/events';
-import { applyPrivacy } from '../core/privacy';
+import { applyPrivacy, countPrivacyCrops } from '../core/privacy';
+import { sampleTrackSegments } from '../core/geo';
 import { generatePoster } from '../core/poster';
 import { buildGPX, buildGeoJSON, buildKML } from '../core/gpx';
 import { buildGPXAsync } from '../core/workerBridge';
@@ -138,7 +139,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       return;
     }
     const privacy = privacyOpts();
-    const c = applyPrivacy(full, privacy);
+    const c = countPrivacyCrops(full, privacy);
     privacySummary.textContent = [
       privacy.radius > 0 ? `${t('export.checkCircle')} · ${privacy.radius} m` : t('export.privacyRadiusOff'),
       hideCb.checked ? t('export.sensitiveHidden') : t('export.sensitiveVisible'),
@@ -176,7 +177,8 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       }
       if (key !== warmKey || curFull?.trip.id !== full.trip.id || curFull.trip.updatedAt !== full.trip.updatedAt) return;
       try {
-        const cropped = applyPrivacy(full, privacy);
+        const preview = { ...full, segments: sampleTrackSegments(full.segments || [], 4000) };
+        const cropped = applyPrivacy(preview, privacy);
         const common = {
           segments: cropped.segments, waypoints: cropped.waypoints,
           basemapId: base, vectorOnly: vectorCb.checked, onProgress: undefined

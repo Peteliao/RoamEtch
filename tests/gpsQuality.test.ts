@@ -155,14 +155,56 @@ describe('GPS quality', () => {
     expect(q.avgAcc).toBe(5);
   });
 
-  it('assesses segments without flattening a second point array', () => {
-    const segments = [
-      { points: [fix(0), fix(30_000)] },
-      { points: [fix(60_000), fix(90_000)] }
+  it('preserves single-segment assessment', () => {
+    const points = [
+      { lat: 30, lon: 120, t: 0, acc: 80, alt: 100 },
+      { lat: 30, lon: 120.001, t: 30_000, acc: 90, alt: 160 },
+      { lat: 30, lon: 120.002, t: 150_000, acc: 70, alt: 220 }
     ];
-    expect(assessTrackGpsQuality(segments)).toEqual(
-      assessGpsQuality(segments.flatMap((segment) => segment.points))
+    expect(assessTrackGpsQuality([{ points }], { activity: 'drive' })).toEqual(
+      assessGpsQuality(points, { activity: 'drive' })
     );
+  });
+
+  it('does not invent altitude jumps or reversals across disconnected segments', () => {
+    const segments = [
+      { points: [
+        { lat: 30, lon: 120, t: 0, acc: 5, alt: 100 },
+        { lat: 30, lon: 120.001, t: 30_000, acc: 5, alt: 110 }
+      ] },
+      { points: [
+        { lat: 30, lon: 120, t: 60_000, acc: 5, alt: 210 },
+        { lat: 30, lon: 119.999, t: 90_000, acc: 5, alt: 220 }
+      ] }
+    ];
+    const flattened = assessGpsQuality(segments.flatMap((segment) => segment.points));
+    expect(flattened.altJumps).toBe(1);
+    expect(flattened.reversals).toBe(1);
+
+    expect(assessTrackGpsQuality(segments)).toMatchObject({
+      fixes: 4, avgAcc: 5, poorFixes: 0, poorRatio: 0,
+      gaps: 0, gapMs: 0, maxGapMs: 0, altJumps: 0, reversals: 0,
+      duplicateFixes: 0, invalidTimes: 0, hasTime: true, score: 100, rating: 'excellent'
+    });
+  });
+
+  it('aggregates accuracy, counts and score from independently measured segments', () => {
+    const segments = [
+      { points: [
+        { lat: 30, lon: 120, t: 0, acc: 80, alt: 100 },
+        { lat: 30, lon: 120.001, t: 30_000, acc: 90, alt: 160 },
+        { lat: 30, lon: 120.002, t: 150_000, acc: 70, alt: 220 }
+      ] },
+      { points: [
+        { lat: 30, lon: 120.003, t: 180_000, acc: 10, alt: 280 },
+        { lat: 30, lon: 120.004, t: 210_000, acc: 20, alt: 340 }
+      ] }
+    ];
+    expect(assessTrackGpsQuality(segments)).toMatchObject({
+      fixes: 5, avgAcc: 54, poorFixes: 3, poorRatio: 0.6,
+      gaps: 1, gapMs: 120_000, maxGapMs: 120_000, altJumps: 3, reversals: 0,
+      duplicateFixes: 0, invalidTimes: 0, hasTime: true, score: 28, rating: 'poor'
+    });
   });
 
   it('penalises poor accuracy and long gaps', () => {

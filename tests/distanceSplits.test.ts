@@ -44,7 +44,16 @@ describe('fixed-distance splits', () => {
       pointCount: 2,
       partial: false,
       startDistance: 0,
-      endDistance: 1000
+      endDistance: 1000,
+      startAlt: 100,
+      endAlt: 140,
+      netElevation: 40,
+      avgSlope: 4,
+      stillMs: 0,
+      breakMs: 500_000,
+      speedCv: null,
+      paceCv: null,
+      climbEfficiency: null
     });
     expect(full.parts).toHaveLength(1);
     expect(full.parts[0]).toMatchObject({ segmentId: 'track', segmentIndex: 0, startDistance: 0, endDistance: 1000 });
@@ -63,7 +72,16 @@ describe('fixed-distance splits', () => {
       maxSpeed: 2,
       pointCount: 2,
       partial: true,
-      startDistance: 1000
+      startDistance: 1000,
+      startAlt: 140,
+      endAlt: 160,
+      netElevation: 20,
+      avgSlope: 4,
+      stillMs: 0,
+      breakMs: 250_000,
+      speedCv: null,
+      paceCv: null,
+      climbEfficiency: null
     });
     expect(partial.distance).toBeCloseTo(500, 6);
     expect(partial.endDistance).toBeCloseTo(1500, 6);
@@ -237,6 +255,223 @@ describe('fixed-distance splits', () => {
     expect(splits[1].maxSpeed).toBeCloseTo(1000 / 600, 6);
   });
 
+  it('reports connected elevation and climbing efficiency for climbs and descents', () => {
+    const splits = computeDistanceSplits([{
+      id: 'terrain',
+      points: [at(0, 0, 100), at(100, 20_000, 120), at(200, 40_000, 100)]
+    }], 100, { activity: 'hike' });
+
+    expect(splits).toHaveLength(2);
+    const [climb, descent] = splits;
+    expect(climb).toMatchObject({
+      distance: 100,
+      duration: 20_000,
+      activeMs: 20_000,
+      movingMs: 20_000,
+      ascent: 7,
+      descent: 0,
+      startAlt: 100,
+      endAlt: 120,
+      netElevation: 20,
+      avgSlope: 20,
+      stillMs: 0,
+      breakMs: 0,
+      speedCv: null,
+      paceCv: null,
+      partial: false
+    });
+    expect(climb.climbEfficiency).toBeCloseTo(1260, 6);
+    expect(descent).toMatchObject({
+      distance: 100,
+      duration: 20_000,
+      activeMs: 20_000,
+      movingMs: 20_000,
+      ascent: 0,
+      descent: 7,
+      startAlt: 120,
+      endAlt: 100,
+      netElevation: -20,
+      avgSlope: -20,
+      stillMs: 0,
+      breakMs: 0,
+      speedCv: null,
+      paceCv: null,
+      partial: false
+    });
+    expect(descent.climbEfficiency).toBe(0);
+  });
+
+  it('leaves elevation-derived metrics null when altitude is unavailable', () => {
+    const [missingStart] = computeDistanceSplits([{
+      id: 'missing-start',
+      points: [at(0, 0, null), at(50, 10_000, 110), at(100, 20_000, 120)]
+    }], 100);
+    expect(missingStart).toMatchObject({
+      startAlt: null,
+      endAlt: 120,
+      netElevation: null,
+      avgSlope: null,
+      movingMs: 20_000,
+      climbEfficiency: null
+    });
+    expect(missingStart.ascent).toBe(0);
+    expect(missingStart.speedCv).toBeCloseTo(0, 12);
+    expect(missingStart.paceCv).toBeCloseTo(0, 12);
+
+    const [missingAll] = computeDistanceSplits([{
+      id: 'missing-all',
+      points: [at(0, 0, null), { ...at(100, 20_000), alt: undefined }]
+    }], 100);
+    expect(missingAll).toMatchObject({
+      startAlt: null,
+      endAlt: null,
+      netElevation: null,
+      avgSlope: null,
+      ascent: 0,
+      descent: 0,
+      movingMs: 20_000,
+      speedCv: null,
+      paceCv: null,
+      climbEfficiency: null
+    });
+  });
+
+  it('uses only valid moving steps for variability and classifies stops and gaps conservatively', () => {
+    const [split] = computeDistanceSplits([{
+      id: 'mixed-pace',
+      points: [
+        at(0, 0, null, { speed: 99 }),
+        at(30, 30_000, null, { speed: 1 }),
+        at(30, 60_000, null, { speed: 2.5 }),
+        at(90, 90_000, null, { speed: 2 }),
+        at(90, 240_000, null, { speed: 4 }),
+        at(180, 270_000, null, { speed: 3 }),
+        at(5000, 280_000, null, { speed: 100 })
+      ]
+    }], 1000, { activity: 'hike' });
+
+    expect(split).toMatchObject({
+      distance: 180,
+      duration: 280_000,
+      activeMs: 120_000,
+      movingMs: 90_000,
+      stillMs: 30_000,
+      breakMs: 160_000,
+      pointCount: 7,
+      partial: true,
+      climbEfficiency: null
+    });
+    expect(split.maxSpeed).toBeCloseTo(3, 6);
+    expect(split.speedCv).toBeCloseTo(0.5, 12);
+    expect(split.paceCv).toBeCloseTo(0.5677270907634907, 12);
+    expect(split.parts).toHaveLength(2);
+  });
+
+  it('keeps boundary fragments independent and requires two moving samples for variability', () => {
+    const splits = computeDistanceSplits([{
+      id: 'boundary',
+      points: [at(0, 0, 100), at(150, 30_000, 145)]
+    }], 100, { activity: 'hike' });
+
+    expect(splits).toHaveLength(2);
+    const [full, partial] = splits;
+    expect(full).toMatchObject({
+      distance: 100,
+      duration: 20_000,
+      activeMs: 20_000,
+      movingMs: 20_000,
+      startAlt: 100,
+      endAlt: 130,
+      netElevation: 30,
+      avgSlope: 30,
+      stillMs: 0,
+      breakMs: 0,
+      speedCv: null,
+      paceCv: null,
+      partial: false
+    });
+    expect(full.climbEfficiency).toBeCloseTo(1890, 6);
+    expect(full.parts[0].points[1].lon).toBeCloseTo(at(100).lon, 12);
+    expect(full.parts[0].points[1].t).toBe(20_000);
+    expect(full.parts[0].points[1].alt).toBe(130);
+    expect(partial).toMatchObject({
+      distance: 50,
+      duration: 10_000,
+      activeMs: 10_000,
+      movingMs: 10_000,
+      startAlt: 130,
+      endAlt: 145,
+      netElevation: 15,
+      avgSlope: 30,
+      stillMs: 0,
+      breakMs: 0,
+      speedCv: null,
+      paceCv: null,
+      partial: true
+    });
+    expect(partial.climbEfficiency).toBeCloseTo(1890, 6);
+    expect(partial.parts[0].points[0].lon).toBeCloseTo(at(100).lon, 12);
+    expect(partial.parts[0].points[0].t).toBe(20_000);
+    expect(partial.parts[0].points[0].alt).toBe(130);
+  });
+
+  it('isolates elevation gaps while combining moving samples and pauses across segments', () => {
+    const [split] = computeDistanceSplits([
+      { id: 'a', points: [at(0, 0, 100), at(60, 30_000, 110)] },
+      { id: 'b', points: [at(10_000, 120_000, 200), at(10_060, 150_000, 215)] }
+    ], 1000);
+
+    expect(split.distance).toBeCloseTo(120, 6);
+    expect(split).toMatchObject({
+      duration: 150_000,
+      activeMs: 60_000,
+      movingMs: 60_000,
+      stillMs: 0,
+      breakMs: 90_000,
+      startAlt: 100,
+      endAlt: 215,
+      netElevation: 25,
+      ascent: 5.25,
+      descent: 0,
+      pointCount: 4,
+      partial: true
+    });
+    expect(split.avgSlope).toBeCloseTo((25 / 120) * 100, 6);
+    expect(split.climbEfficiency).toBeCloseTo(315, 6);
+    expect(split.speedCv).toBeCloseTo(0, 12);
+    expect(split.paceCv).toBeCloseTo(0, 12);
+    expect(split.parts).toHaveLength(2);
+  });
+
+  it('does not infer split elevation through an altitude-free segment', () => {
+    const [split] = computeDistanceSplits([
+      { id: 'a', points: [at(0, 0, 100), at(60, 30_000, 110)] },
+      { id: 'b', points: [at(10_000, 120_000, null), at(10_060, 150_000, null)] },
+      { id: 'c', points: [at(20_000, 240_000, 200), at(20_060, 270_000, 210)] }
+    ], 1000);
+
+    expect(split.distance).toBeCloseTo(180, 6);
+    expect(split).toMatchObject({
+      duration: 270_000,
+      activeMs: 90_000,
+      movingMs: 90_000,
+      stillMs: 0,
+      breakMs: 180_000,
+      startAlt: 100,
+      endAlt: 210,
+      netElevation: null,
+      avgSlope: null,
+      ascent: 0,
+      descent: 0,
+      climbEfficiency: null,
+      pointCount: 6,
+      partial: true
+    });
+    expect(split.parts).toHaveLength(3);
+    expect(split.speedCv).toBeCloseTo(0, 12);
+    expect(split.paceCv).toBeCloseTo(0, 12);
+  });
+
   it('uses a strict greater-than 0.5 m/s moving threshold', () => {
     const [split] = computeDistanceSplits([{
       id: 'slow',
@@ -246,6 +481,13 @@ describe('fixed-distance splits', () => {
     expect(split.movingMs).toBe(0);
     expect(split.avgSpeed).toBe(0);
     expect(split.maxSpeed).toBeCloseTo(0.5, 6);
+    expect(split).toMatchObject({
+      stillMs: 120_000,
+      breakMs: 0,
+      speedCv: null,
+      paceCv: null,
+      climbEfficiency: null
+    });
   });
 
   it('handles empty, stationary, untimed, and constant-time tracks', () => {
@@ -260,7 +502,23 @@ describe('fixed-distance splits', () => {
       id: 'untimed',
       points: [{ lat: 0, lon: 0 }, { lat: 0, lon: at(100).lon }]
     }]);
-    expect(untimed).toMatchObject({ distance: 100, duration: 0, activeMs: 0, movingMs: 0, avgSpeed: 0, maxSpeed: 0 });
+    expect(untimed).toMatchObject({
+      distance: 100,
+      duration: 0,
+      activeMs: 0,
+      movingMs: 0,
+      avgSpeed: 0,
+      maxSpeed: 0,
+      startAlt: null,
+      endAlt: null,
+      netElevation: null,
+      avgSlope: null,
+      stillMs: 0,
+      breakMs: 0,
+      speedCv: null,
+      paceCv: null,
+      climbEfficiency: null
+    });
 
     expect(computeDistanceSplits([{
       id: 'constant-time',

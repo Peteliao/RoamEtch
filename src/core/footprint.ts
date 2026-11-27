@@ -1,6 +1,42 @@
 // Year / month footprint aggregation for the local trip library.
 import { fmtAltitude, fmtDistance } from './geo';
 
+export type CityFootprint = { name: string; lat: number; lon: number; countryCode: string; admin: string };
+
+/** Shared validation for upstream geocoding, caches and footprint aggregation. */
+export function normalizeCityFootprint(city: any): CityFootprint | null {
+  if (!city || typeof city !== 'object' || city.lat == null || city.lon == null || city.lat === '' || city.lon === '') return null;
+  const name = String(city.name || '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+  const rawCountry = String(city.countryCode || '').trim().toUpperCase();
+  const countryCode = /^[A-Z]{2}$/.test(rawCountry) ? rawCountry : 'ZZ';
+  const lat = Number(city.lat);
+  const lon = Number(city.lon);
+  if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)
+    || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  const admin = String(city.admin || '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+  return { name, lat, lon, countryCode, admin };
+}
+
+export function cityFootprintKey(city: CityFootprint) {
+  const normalized = normalizeCityFootprint(city);
+  return normalized ? `${normalized.countryCode}:${normalized.name.toLocaleLowerCase()}` : '';
+}
+
+export function footprintCacheKey({ year, activity, privacyRadius, trips }: {
+  year: number | 'all';
+  activity: string;
+  privacyRadius: number;
+  trips: any[];
+}) {
+  const radius = Number(privacyRadius);
+  const safeRadius = Number.isFinite(radius) && radius >= 0 ? radius : 0;
+  const revisions = (trips || []).map((trip) => JSON.stringify([
+    String(trip?.id || ''), trip?.updatedAt ?? trip?.revision ?? 0,
+    String(trip?.activity || ''), String(trip?.status || '')
+  ])).sort();
+  return JSON.stringify([String(year), String(activity || 'all'), safeRadius, revisions]);
+}
+
 function startDate(trip) {
   const d = new Date(trip?.createdAt);
   return isNaN(d.getTime()) ? null : d;
@@ -60,13 +96,13 @@ export function aggregateCityFootprints(entries: any[]) {
   const centres = new Map<string, { lat: number; lon: number; samples: number }>();
   for (const entry of entries || []) {
     const at = Number(entry.trip?.createdAt) || 0;
-    for (const city of entry.cities || []) {
-      const name = String(city.name || '').trim().replace(/\s+/g, ' ');
-      if (!name) continue;
-      const key = name.toLocaleLowerCase();
+    for (const rawCity of entry.cities || []) {
+      const city = normalizeCityFootprint(rawCity);
+      if (!city) continue;
+      const key = cityFootprintKey(city);
       let item = cities.get(key);
       if (!item) {
-        item = { name, trips: 0, visits: 0, tripIds: new Set(), firstAt: at, lastAt: at };
+        item = { ...city, trips: 0, visits: 0, tripIds: new Set(), firstAt: at, lastAt: at };
         cities.set(key, item);
       }
       if (!item.tripIds.has(entry.trip?.id)) {
@@ -77,15 +113,15 @@ export function aggregateCityFootprints(entries: any[]) {
       if (at && (!item.firstAt || at < item.firstAt)) item.firstAt = at;
       if (at > item.lastAt) item.lastAt = at;
       const centre = centres.get(key) || { lat: 0, lon: 0, samples: 0 };
-      centre.lat = (centre.lat * centre.samples + Number(city.lat)) / (centre.samples + 1);
-      centre.lon = (centre.lon * centre.samples + Number(city.lon)) / (centre.samples + 1);
+      centre.lat = (centre.lat * centre.samples + city.lat) / (centre.samples + 1);
+      centre.lon = (centre.lon * centre.samples + city.lon) / (centre.samples + 1);
       centre.samples++;
       centres.set(key, centre);
     }
   }
   return [...cities.values()]
     .map((city) => {
-      const centre = centres.get(city.name.toLocaleLowerCase());
+      const centre = centres.get(cityFootprintKey(city));
       return { ...city, lat: centre.lat, lon: centre.lon, tripIds: [...city.tripIds] };
     })
     .sort((a, b) => b.trips - a.trips || b.visits - a.visits || a.name.localeCompare(b.name));

@@ -53,7 +53,10 @@ export async function setActiveTrip(id, { fit = false } = {}) {
     emit('trip:active', null);
     return null;
   }
-  const full = await loadTripFull(id);
+  const trackSnapshot = id === appState.activeTripId ? appState.activeTripFull : null;
+  const full = trackSnapshot
+    ? await loadTripFull(id, { trackSnapshot })
+    : await loadTripFull(id);
   if (request !== activeTripRequest || appState.activeTripId !== id) return null;
   if (fit) appState.showTripInRecord = true;
   appState.activeTripFull = full;
@@ -65,8 +68,9 @@ export async function setActiveTrip(id, { fit = false } = {}) {
 export async function refreshActiveTrip(id = appState.activeTripId, {
   recalc = true,
   session = appState.tripSession,
-  view = null
-}: { recalc?: boolean; session?: number; view?: string | null } = {}) {
+  view = null,
+  metadataOnly = false
+}: { recalc?: boolean; session?: number; view?: string | null; metadataOnly?: boolean } = {}) {
   if (!id || session !== appState.tripSession || (view && view !== appState.view)) return null;
   // Recording edits can refresh their own trip without changing the selected trip.
   if (id !== appState.activeTripId) {
@@ -76,7 +80,10 @@ export async function refreshActiveTrip(id = appState.activeTripId, {
   }
   const request = ++activeTripRequest;
   statsRequest++;
-  const full = await loadTripFull(id);
+  const trackSnapshot = id === appState.activeTripId ? appState.activeTripFull : null;
+  const full = trackSnapshot
+    ? await loadTripFull(id, { trackSnapshot, trackUnchanged: metadataOnly })
+    : await loadTripFull(id);
   if (request !== activeTripRequest || appState.activeTripId !== id
     || session !== appState.tripSession || (view && view !== appState.view)) return null;
   if (appState.activeTripFull?.trip.activity !== full.trip.activity) appState.stats = null;

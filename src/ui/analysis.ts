@@ -19,6 +19,7 @@ import { computeDistanceSplitsAsync, previewTrackRepairAsync } from '../core/wor
 import { appState, setActiveTrip, refreshActiveTrip, isTripSectionActive } from './state';
 import { el, icon, confirmModal, toast } from './helpers';
 import { renderTripEmptyState } from './tripEmptyState';
+import { openTrackComparison } from './compare';
 
 export function createAnalysisView(navigate, { embedded = false } = {}) {
   const view = el('div', { class: 'view', id: 'view-analysis' });
@@ -27,10 +28,17 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
 
   const tripSel = el('select', { 'aria-label': t('analysis.selectTrip') });
   const shareBtn = el('button', { class: 'btn sm', onclick: () => navigate('export') }, icon('share', 14), t('tabs.export'));
+  const compareBtn = el('button', {
+    class: 'btn sm', onclick: async () => {
+      compareBtn.disabled = true;
+      try { openTrackComparison(await listTrips(), appState.activeTripId); }
+      finally { compareBtn.disabled = false; }
+    }
+  }, icon('analysis', 14), t('compare.open'));
   const head = el('div', { class: 'page-head analysis-head' },
     el('div', { class: 'page-head-row' },
       el('h2', { class: 'page-title' }, t('analysis.title')),
-      embedded ? null : shareBtn),
+      el('div', { class: 'analysis-actions' }, compareBtn, embedded ? null : shareBtn)),
     embedded ? null : el('div', { class: 'search-bar', style: { margin: '10px 0 14px' } }, icon('analysis', 18), tripSel));
   tripSel.onchange = async () => { if (tripSel.value) await setActiveTrip(tripSel.value); };
   const emptyBox = el('div', { class: 'empty-state analysis-empty', style: { display: 'none' } });
@@ -50,6 +58,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     el('div', { class: 'small faint', style: { marginBottom: '2px' } }, t('analysis.hoverHint')),
     chartWrap);
   const splitBody = el('div', { class: 'split-body' });
+  const splitDetail = el('div', { class: 'split-detail', hidden: true });
   const splitSelect = el('select', { 'aria-label': t('analysis.splitsInterval') });
   for (const interval of [500, 1000, 2000, 5000]) {
     splitSelect.append(el('option', { value: String(interval) }, interval < 1000 ? `${interval} m` : `${interval / 1000} km`));
@@ -60,7 +69,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
       el('h3', {}, icon('analysis', 18), t('analysis.splitsTitle')),
       splitSelect),
     el('div', { class: 'small faint split-hint' }, t('analysis.splitsHint')),
-    splitBody);
+    splitBody, splitDetail);
   const slopeCard = el('div', { class: 'card analysis-data' }, el('h3', {}, t('analysis.slopeDist')), el('canvas', { id: 'slope-canvas', style: { width: '100%', height: '120px' } }));
   const segCard = el('div', { class: 'card analysis-data' }, el('h3', {}, t('analysis.segTable')), el('div', { id: 'seg-table' }));
   const tlCard = el('div', { class: 'card analysis-data' }, el('h3', {}, t('analysis.timeline')), el('div', { id: 'timeline' }));
@@ -83,6 +92,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
   let splitResult = [];
   let splitTrackKey = '';
   let selectedSplitIndex: number | null = null;
+  let splitSelectionSyncing = false;
   let chartSeries = { altitude: true, speed: true };
   let chartProfile = null;
   let chartStats = null;
@@ -102,7 +112,16 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
 
   function ensureMiniMap() {
     if (miniMap) return;
-    miniMap = new TrackMap(miniMapBox, { compact: true, preserveDrawingBuffer: false }).init([116.4, 39.9], 10);
+    miniMap = new TrackMap(miniMapBox, {
+      compact: true,
+      preserveDrawingBuffer: false,
+      onTrackClick: (lon, lat) => {
+        const full = appState.activeTripFull;
+        const trackKey = full ? `${full.trip.id}:${full.trip.updatedAt || 0}` : '';
+        if (trackKey !== splitTrackKey) return;
+        selectSplit(splitIndexAtMapPoint(lat, lon), 'map');
+      }
+    }).init([116.4, 39.9], 10);
   }
 
   async function refreshTripList() {
@@ -617,6 +636,78 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     };
   }
 
+  function splitIndexAtDistance(distance) {
+    if (!Number.isFinite(distance)) return null;
+    const index = splitResult.findIndex((split) => distance < split.endDistance
+      || (split === splitResult.at(-1) && distance <= split.endDistance + 1e-6));
+    return index < 0 ? null : index;
+  }
+
+  function splitIndexAtMapPoint(lat, lon) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    const rad = (value) => value * Math.PI / 180;
+    const radius = 6371008.8;
+    const lonScale = radius * Math.max(1e-6, Math.cos(rad(lat)));
+    const local = (point) => {
+      const deltaLon = ((point.lon - lon + 540) % 360) - 180;
+      return [rad(deltaLon) * lonScale, rad(point.lat - lat) * radius];
+    };
+    let nearest = Infinity;
+    let selected = null;
+    for (const split of splitResult) {
+      for (const part of split.parts) {
+        const points = part.points || [];
+        for (let index = 0; index < points.length; index++) {
+          const [ax, ay] = local(points[index]);
+          if (index + 1 >= points.length) {
+            nearest = Math.min(nearest, ax * ax + ay * ay);
+            if (ax * ax + ay * ay === nearest) selected = split.index;
+            continue;
+          }
+          const [bx, by] = local(points[index + 1]);
+          const dx = bx - ax, dy = by - ay;
+          const lengthSquared = dx * dx + dy * dy;
+          const fraction = lengthSquared > 1e-12 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSquared)) : 0;
+          const px = ax + dx * fraction, py = ay + dy * fraction;
+          const distanceSquared = px * px + py * py;
+          if (distanceSquared < nearest) {
+            nearest = distanceSquared;
+            selected = split.index;
+          }
+        }
+      }
+    }
+    return selected;
+  }
+
+  function selectSplit(index: number | null, source: 'row' | 'chart' | 'map') {
+    if (splitSelectionSyncing) return;
+    const next = index != null && splitResult[index]
+      ? (selectedSplitIndex === index ? null : index)
+      : null;
+    splitSelectionSyncing = true;
+    try {
+      selectedSplitIndex = next;
+      splitDetail.dataset.source = source;
+      updateSplitSelection();
+      const selected = next == null ? null : splitResult[next];
+      miniMap?.setSplitHighlight(selected?.parts || [], !!selected);
+      chart?.redraw();
+      if (selected && chart && chartProfile) {
+        const middle = distanceInUnit((selected.startDistance + selected.endDistance) / 2, chartProfile.units);
+        let nearest = 0;
+        for (let i = 1; i < chartProfile.x.length; i++) {
+          if (Math.abs(chartProfile.x[i] - middle) < Math.abs(chartProfile.x[nearest] - middle)) nearest = i;
+        }
+        chart.setCursor({ left: chart.valToPos(chartProfile.x[nearest], 'x'), top: chart.bbox.top + chart.bbox.height / 2 });
+      } else if (chart) {
+        chart.setCursor({ left: -20, top: -20 });
+      }
+    } finally {
+      splitSelectionSyncing = false;
+    }
+  }
+
   function attachScrub(u, stats, profile, units, visible) {
     const over = u.over;
     let pointerId = null;
@@ -646,6 +737,16 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
       u.setCursor({ left, top });
       showReadout(e);
     };
+    const selectFromChart = (e) => {
+      scrub(e);
+      const idx = u.cursor.idx;
+      const sourceIdx = idx == null ? null : profile.sourceIndices[idx];
+      const distance = sourceIdx == null ? null : stats?.series?.d?.[sourceIdx];
+      selectSplit(splitIndexAtDistance(distance), 'chart');
+    };
+    over.addEventListener('click', (e) => {
+      if (e.pointerType === 'mouse') selectFromChart(e);
+    });
     over.addEventListener('pointerdown', (e) => {
       if (e.pointerType === 'mouse' || pointerId != null) return;
       pointerId = e.pointerId;
@@ -657,6 +758,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     });
     const end = (e) => {
       if (e.pointerId !== pointerId) return;
+      selectFromChart(e);
       pointerId = null;
       scrubBubble.style.display = 'none';
       try { over.releasePointerCapture(e.pointerId); } catch { /* already released */ }
@@ -881,10 +983,45 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     ctx.restore();
   }
 
+  function updateSplitSelection() {
+    const rows = splitBody.querySelectorAll('.split-row');
+    rows.forEach((row, index) => {
+      const selected = index === selectedSplitIndex;
+      row.classList.toggle('selected', selected);
+      row.setAttribute('aria-pressed', String(selected));
+    });
+    const split = selectedSplitIndex == null ? null : splitResult[selectedSplitIndex];
+    splitDetail.hidden = !split;
+    splitDetail.replaceChildren();
+    if (!split) return;
+    const units = get('units');
+    const net = fmtAltitude(split.netElevation, units);
+    const efficiency = split.climbEfficiency == null ? null : fmtAltitude(split.climbEfficiency, units);
+    const metric = (label, value) => el('div', { class: 'split-detail-metric' },
+      el('span', {}, label), el('strong', { class: 'mono' }, value));
+    const variation = (value) => value == null ? '—' : `${Math.round(value * 100)}%`;
+    splitDetail.append(
+      el('div', { class: 'split-detail-head' },
+        el('strong', {}, t('analysis.splitsSelected', { n: selectedSplitIndex + 1 })),
+        split.startAlt != null && split.endAlt != null
+          ? el('span', { class: 'small faint mono' }, `${t('analysis.splitsStartAlt')} ${fmtAltitude(split.startAlt, units).v}${fmtAltitude(split.startAlt, units).u} → ${t('analysis.splitsEndAlt')} ${fmtAltitude(split.endAlt, units).v}${fmtAltitude(split.endAlt, units).u}`)
+          : null),
+      el('div', { class: 'split-detail-grid' },
+        metric(t('analysis.splitsNetElevation'), split.netElevation == null ? '—' : `${split.netElevation >= 0 ? '↑' : '↓'}${net.v}${net.u}`),
+        metric(t('analysis.splitsAvgSlope'), split.avgSlope == null ? '—' : `${split.avgSlope.toFixed(1)}%`),
+        metric(t('analysis.splitsStill'), fmtDuration(split.stillMs, { compact: true })),
+        metric(t('analysis.splitsBreak'), fmtDuration(split.breakMs, { compact: true })),
+        metric(t('analysis.splitsSpeedCv'), variation(split.speedCv)),
+        metric(t('analysis.splitsPaceCv'), variation(split.paceCv)),
+        metric(t('analysis.splitsEfficiency'), efficiency ? `${efficiency.v}${efficiency.u}/h` : '—')),
+      el('div', { class: 'small faint split-detail-note' }, t('analysis.splitsMetricNote')));
+  }
+
   function renderSplitRows() {
     splitBody.innerHTML = '';
     if (!splitResult.length) {
       splitBody.append(el('div', { class: 'small faint' }, t('analysis.splitsEmpty')));
+      updateSplitSelection();
       return;
     }
     const units = get('units');
@@ -910,16 +1047,11 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
           ` · ${t('analysis.splitsAvgSpeed')} ${speed.v} ${speed.u}`,
           ` · ${t('analysis.splitsAvgPace')} ${pace.v}${pace.u}`,
           ` · ↑${ascent.v}${ascent.u}`)));
-      row.onclick = () => {
-        selectedSplitIndex = selectedSplitIndex === index ? null : index;
-        renderSplitRows();
-        const selected = selectedSplitIndex == null ? null : splitResult[selectedSplitIndex];
-        miniMap?.setSplitHighlight(selected?.parts || [], !!selected);
-        chart?.redraw();
-      };
+      row.onclick = () => selectSplit(index, 'row');
       list.append(row);
     });
     splitBody.append(list);
+    updateSplitSelection();
   }
 
   async function renderSplits() {
@@ -969,9 +1101,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
   }
 
   splitSelect.onchange = () => {
-    selectedSplitIndex = null;
-    miniMap?.setSplitHighlight([]);
-    chart?.redraw();
+    selectSplit(null, 'row');
     void renderSplits();
   };
 

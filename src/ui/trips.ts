@@ -1,11 +1,11 @@
 // Trips list: open/edit/analyze, GPX import, full backup/restore, storage monitor.
 import { t } from '../core/i18n';
 import { on } from '../core/events';
-import { listTrips, deleteTrip, updateTrip, loadTripFull, storageEstimate } from '../core/store';
+import { listTrips, deleteTrip, updateTrip, loadTripTrack, loadTripPreview, storageEstimate } from '../core/store';
 import { exportTripsZip, importTripFiles } from '../core/batch';
 import { startRewalk } from '../core/rewalk';
 import { importDemoTrip } from '../core/demo';
-import { aggregateCityFootprints, buildFootprints, withFootprintCities } from '../core/footprint';
+import { aggregateCityFootprints, buildFootprints, cityFootprintKey, footprintCacheKey, withFootprintCities } from '../core/footprint';
 import { generateFootprintImage, generateFootprintVideo, footprintCaption } from '../core/footprintShare';
 import { resolveTripCities } from '../core/shareInfo';
 import { paintTrack, prepareMap } from '../core/mapPaint';
@@ -13,7 +13,7 @@ import { videoSupported, videoIsWebmOnly } from '../core/videoCapture';
 import { exportBackupFlow, lastBackupLabel, backupDue } from './backupFlow';
 import { openInstallGuide, isIOS, isStandaloneMode } from './install';
 import { triggerDownload } from '../core/gpx';
-import { fmtDistance, fmtDuration, simplify } from '../core/geo';
+import { fmtAltitude, fmtDistance, fmtDuration, simplify } from '../core/geo';
 import { migrateLegacyKey } from '../core/storageKeys';
 import { get } from '../core/settings';
 import { exportImage, exportFile, isWeChat, wechatFileGuidance } from '../core/shareEnv';
@@ -21,11 +21,31 @@ import { appState, setActiveTrip, refreshActiveTrip, recalcNow } from './state';
 import { TrackMap } from './map';
 import { el, icon, toast, confirmModal, filePickerMulti, modal } from './helpers';
 import { createAnalysisView } from './analysis';
+import { openGrowthReport } from './growth';
+import { openMapTools } from './mapTools';
 import { createExportView } from './export';
 import { backFromUIState, currentUIState } from './history';
+import { buildTripFilterIndex } from '../core/tripLibrary';
+import { activeTripFilterCount, canonicalTripFilterValue, emptyTripFilters, filterTripIndexes, hasActiveTripFilters, indexTripForFilters, placeKey, tripFilterDisplayValue, tripFilterRouteOptions } from '../core/tripFilters';
+import { buildHeatmapAsync } from '../core/workerBridge';
+import { buildHeatmapBatchAsync, mergeHeatmaps } from '../core/heatmap';
 
 function thumbnailPoints(segments) {
-  const points = segments.flatMap((segment) => segment.points);
+  const total = segments.reduce((sum, segment) => sum + (segment.points?.length || 0), 0);
+  if (!total) return [];
+  const sampleCount = Math.min(total, 4000);
+  const points = [];
+  let segmentIndex = 0;
+  let segmentStart = 0;
+  for (let sample = 0; sample < sampleCount; sample++) {
+    const target = sampleCount === 1 ? 0 : Math.floor(sample * (total - 1) / (sampleCount - 1));
+    while (segmentIndex < segments.length - 1 && target >= segmentStart + segments[segmentIndex].points.length) {
+      segmentStart += segments[segmentIndex].points.length;
+      segmentIndex++;
+    }
+    const point = segments[segmentIndex].points[target - segmentStart];
+    if (point) points.push(point);
+  }
   return simplify(points, 40).slice(0, 160).map((p) => ({ lat: p.lat, lon: p.lon }));
 }
 
@@ -233,17 +253,21 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   const summary = el('div', { class: 'summary-strip' }, sTrips.c, sDist.c, sDays.c);
 
   const searchInput = el('input', { type: 'search', placeholder: t('trips.searchPh'), 'aria-label': t('trips.searchPh') });
-  searchInput.oninput = () => { searchTerm = searchInput.value.trim().toLowerCase(); renderList(); };
+  searchInput.oninput = () => { filters.query = searchInput.value.trim().toLowerCase(); renderList(); };
   const searchBar = el('div', { class: 'search-bar' }, icon('search', 18), searchInput);
 
   const ACTIVITIES = ['all', 'hike', 'drive', 'bike', 'run', 'travel'];
-  let activityFilter = 'all';
-  let favoriteOnly = false;
-  let searchTerm = '';
+  let filters = emptyTripFilters();
+  let filterIndexes = [];
+  let filterIndexLoading = false;
+  let filterIndexController = null;
+  let filterIndexVersion = 0;
   let sortMode = 'recent';
   let allTrips = [];
   let detailTrip = null;
-  let footprintYear = new Date().getFullYear();
+  let footprintYear: number | 'all' = new Date().getFullYear();
+  let footprintActivity = 'all';
+  let footprintLayer = 'heatmap';
   let footprintExpanded = false;
   const thumbNodes = new Map();
   let thumbRun = 0;
@@ -252,7 +276,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   for (const a of ACTIVITIES) {
     const label = a === 'all' ? t('trips.filterAll') : t(`record.activities.${a}`);
     const b = el('button', { class: 'chip' + (a === 'all' ? ' active' : ''), onclick: () => {
-      activityFilter = a;
+      filters.activity = a;
       for (const [key, btn] of chipButtons) btn.classList.toggle('active', key === a);
       renderList();
     } }, label);
@@ -262,8 +286,8 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   const favoriteChip = el('button', {
     class: 'chip chip-fav', title: t('trips.favoriteHint'),
     onclick: () => {
-      favoriteOnly = !favoriteOnly;
-      favoriteChip.classList.toggle('active', favoriteOnly);
+      filters.favoriteOnly = !filters.favoriteOnly;
+      favoriteChip.classList.toggle('active', filters.favoriteOnly);
       renderList();
     }
   }, icon('star', 13), t('trips.favorite'));
@@ -275,12 +299,19 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     el('option', { value: 'name' }, t('trips.sortName')));
   sortSel.value = sortMode;
   sortSel.onchange = () => { sortMode = sortSel.value; renderList(); };
-  const toolbar = el('div', { class: 'trips-toolbar' }, chipBar, sortSel);
+  const filterBtn = el('button', { class: 'btn sm trip-filter-btn', onclick: openFilterPanel }, icon('filter', 14), t('trips.advancedFilters'));
+  const toolbar = el('div', { class: 'trips-toolbar' }, chipBar, filterBtn, sortSel);
 
   const CITY_CONSENT_KEY = 'roametch.cityFootprintConsent.v1';
   const footprintStates = new Map();
   const footprintJobs = new Map();
   const footprintAborts = new Map();
+  const heatmapStates = new Map();
+  const heatmapJobs = new Map();
+  const heatmapAborts = new Map();
+  let heatmapVersion = 0;
+  let footprintVersion = 0;
+  let renderedFootprintKey = '';
   let footprintMap = null;
   let footprintMapKey = '';
   let viewDestroyed = false;
@@ -355,8 +386,8 @@ export function createTripsView(navigate, getRecordMap = () => null) {
       try {
         let points = trip.thumbPoints;
         if (!points || points.length < 2) {
-          const full = await loadTripFull(trip.id);
-          points = full ? thumbnailPoints(full.segments) : [];
+          const track = await loadTripPreview(trip.id);
+          points = track ? thumbnailPoints(track.segments) : [];
           if (points.length < 2 || run !== thumbRun) continue;
           await updateTrip(trip.id, { thumbPoints: points }, { touch: false });
           if (run !== thumbRun) continue;
@@ -383,12 +414,158 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     }
   }
 
+  function syncBasicFilterControls() {
+    for (const [key, btn] of chipButtons) btn.classList.toggle('active', key === filters.activity);
+    favoriteChip.classList.toggle('active', filters.favoriteOnly);
+    searchInput.value = filters.query;
+    updateFilterButton();
+  }
+
+  function updateFilterButton() {
+    const count = activeTripFilterCount(filters);
+    const active = hasActiveTripFilters(filters);
+    filterBtn.classList.toggle('active', active);
+    filterBtn.setAttribute('aria-pressed', String(active));
+    filterBtn.replaceChildren(icon('filter', 14), t('trips.advancedFilters') + (count ? ` (${count})` : ''));
+  }
+
+  function clearTripFilters() {
+    filters = emptyTripFilters();
+    syncBasicFilterControls();
+    renderList();
+  }
+
+  function filteredTrips() {
+    const entries = filterIndexes.length ? filterIndexes : allTrips.map((trip) => indexTripForFilters(trip));
+    return filterTripIndexes(entries, filters).map((entry) => entry.trip);
+  }
+
+  async function refreshFilterIndex() {
+    filterIndexController?.abort();
+    const controller = new AbortController();
+    const version = ++filterIndexVersion;
+    filterIndexController = controller;
+    filterIndexLoading = true;
+    updateFilterButton();
+    try {
+      const entries = await buildTripFilterIndex(allTrips, controller.signal);
+      if (version !== filterIndexVersion || controller.signal.aborted || viewDestroyed) return;
+      filterIndexes = entries;
+      renderList();
+    } catch (error) {
+      if (error?.name !== 'AbortError') toast(t('trips.filterIndexLoading'), 'warn');
+    } finally {
+      if (version === filterIndexVersion) {
+        filterIndexLoading = false;
+        updateFilterButton();
+      }
+    }
+  }
+
+  function openFilterPanel() {
+    const units = get('units');
+    const distanceUnit = units === 'imperial' ? 'mi' : 'km';
+    const ascentUnit = units === 'imperial' ? 'ft' : 'm';
+    const field = (label, input) => el('label', { class: 'filter-field' }, el('span', { class: 'filter-label' }, label), input);
+    const numberInput = (key, min = 0, max = null, measurement = null) => el('input', {
+      type: 'number', class: 'input', inputmode: 'decimal', min: String(min),
+      ...(max != null ? { max: String(max) } : {}), step: 'any',
+      value: measurement ? tripFilterDisplayValue(filters[key], measurement, units)
+        : (filters[key] == null ? '' : String(filters[key])),
+      'data-filter': key
+    });
+    const dateInput = (key) => el('input', {
+      type: 'date', class: 'input', value: filters[key], 'data-filter': key
+    });
+    const from = dateInput('fromDate');
+    const to = dateInput('toDate');
+    const minDistance = numberInput('minDistance', 0, null, 'distance');
+    const maxDistance = numberInput('maxDistance', 0, null, 'distance');
+    const minAscent = numberInput('minAscent', 0, null, 'ascent');
+    const maxAscent = numberInput('maxAscent', 0, null, 'ascent');
+    const waypoints = numberInput('minWaypoints', 0, 100_000);
+    const completeness = numberInput('minCompleteness', 0, 100);
+    const photos = el('select', { class: 'input', 'data-filter': 'hasPhotos' },
+      el('option', { value: 'any' }, t('trips.filterAny')),
+      el('option', { value: 'yes' }, t('trips.filterHasPhotos')),
+      el('option', { value: 'no' }, t('trips.filterNoPhotos')));
+    photos.value = filters.hasPhotos;
+    const placeOptions = new Map();
+    const entries = filterIndexes.length ? filterIndexes : allTrips.map((trip) => indexTripForFilters(trip));
+    for (const entry of entries) {
+      for (const place of entry.places) {
+        const key = placeKey(place);
+        if (!key || placeOptions.has(key)) continue;
+        placeOptions.set(key, `${place.name}${place.countryCode ? ` · ${place.countryCode}` : ''}${place.admin ? ` · ${place.admin}` : ''}`);
+      }
+    }
+    if (filters.place && !placeOptions.has(filters.place)) placeOptions.set(filters.place, filters.place);
+    const place = el('select', { class: 'input', 'data-filter': 'place' },
+      el('option', { value: '' }, t('trips.filterAnyPlace')),
+      ...[...placeOptions].map(([value, label]) => el('option', { value }, label)));
+    place.value = filters.place;
+    const routeOptions = tripFilterRouteOptions(entries);
+    if (filters.routeId && !routeOptions.some(([routeId]) => routeId === filters.routeId)) {
+      routeOptions.push([filters.routeId, filters.routeId]);
+    }
+    const route = el('select', { class: 'input', 'data-filter': 'routeId' },
+      el('option', { value: '' }, t('trips.filterAnyRoute')),
+      ...routeOptions.map(([value, label]) => el('option', { value }, label)));
+    route.value = filters.routeId;
+    const body = el('div', { class: 'filter-panel' },
+      el('div', { class: 'filter-group' }, el('h3', {}, t('trips.filterDate')),
+        el('div', { class: 'filter-grid' }, field(t('trips.filterFrom'), from), field(t('trips.filterTo'), to))),
+      el('div', { class: 'filter-group' }, el('h3', {}, t('trips.filterDistance', { unit: distanceUnit })),
+        el('div', { class: 'filter-grid' }, field(t('trips.filterMin'), minDistance), field(t('trips.filterMax'), maxDistance))),
+      el('div', { class: 'filter-group' }, el('h3', {}, t('trips.filterAscent', { unit: ascentUnit })),
+        el('div', { class: 'filter-grid' }, field(t('trips.filterMin'), minAscent), field(t('trips.filterMax'), maxAscent))),
+      el('div', { class: 'filter-group' },
+        el('div', { class: 'filter-grid' },
+          field(t('trips.filterPhotos'), photos),
+          field(t('trips.filterWaypoints'), waypoints),
+          field(t('trips.filterCompleteness'), completeness),
+          field(t('trips.filterPlace'), place)),
+        el('p', { class: 'small faint filter-hint' }, t('trips.filterCompletenessHint'))),
+      el('div', { class: 'filter-group' }, el('h3', {}, t('trips.filterRoute')), route));
+    const clear = el('button', { class: 'btn', onclick: () => { m.close(); clearTripFilters(); } }, t('trips.clearFilters'));
+    const apply = el('button', { class: 'btn primary', onclick: () => {
+      const read = (input) => input.value.trim() === '' ? null : Number(input.value);
+      const nextDistanceMin = read(minDistance), nextDistanceMax = read(maxDistance);
+      const nextAscentMin = read(minAscent), nextAscentMax = read(maxAscent);
+      const nextWaypoints = read(waypoints), nextCompleteness = read(completeness);
+      const numericValues = [nextDistanceMin, nextDistanceMax, nextAscentMin, nextAscentMax, nextWaypoints, nextCompleteness];
+      if (numericValues.some((value) => value != null && (!Number.isFinite(value) || value < 0)) ||
+          (nextWaypoints != null && !Number.isInteger(nextWaypoints)) ||
+          (nextCompleteness != null && nextCompleteness > 100) ||
+          (nextDistanceMin != null && nextDistanceMax != null && nextDistanceMin > nextDistanceMax) ||
+          (nextAscentMin != null && nextAscentMax != null && nextAscentMin > nextAscentMax) ||
+          (from.value && to.value && from.value > to.value)) {
+        toast(t('trips.filterRangeError'), 'warn');
+        return;
+      }
+      filters = {
+        ...filters, fromDate: from.value, toDate: to.value,
+        minDistance: canonicalTripFilterValue(nextDistanceMin, 'distance', units),
+        maxDistance: canonicalTripFilterValue(nextDistanceMax, 'distance', units),
+        minAscent: canonicalTripFilterValue(nextAscentMin, 'ascent', units),
+        maxAscent: canonicalTripFilterValue(nextAscentMax, 'ascent', units),
+        hasPhotos: photos.value, minWaypoints: nextWaypoints,
+        minCompleteness: nextCompleteness, place: place.value, routeId: route.value
+      };
+      m.close();
+      updateFilterButton();
+      renderList();
+    } }, t('common.apply'));
+    const m = modal({ title: t('trips.filterTitle'), body, footer: [clear, apply], wide: true });
+  }
+
   function renderList() {
     const units = get('units');
     thumbRun++;
     thumbNodes.clear();
     listBox.innerHTML = '';
     if (!allTrips.length) {
+      renderSummary([]);
       listBox.append(el('div', { class: 'empty-state' },
         el('div', { class: 'empty-ic' }, icon('mountain', 28)),
         el('div', { class: 'empty-title' }, t('trips.empty')),
@@ -398,13 +575,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
         el('div', { class: 'small faint', style: { marginTop: '8px' } }, t('demo.hint'))));
       return;
     }
-    const trips = allTrips.filter((tr) => {
-      if (activityFilter !== 'all' && tr.activity !== activityFilter) return false;
-      if (favoriteOnly && !tr.favorite) return false;
-      if (!searchTerm) return true;
-      const haystack = [tr.name || t('record.newTripName'), ...(tr.tags || [])].join(' ').toLowerCase();
-      return haystack.includes(searchTerm);
-    });
+    const trips = filteredTrips();
     trips.sort((a, b) => {
       if (sortMode === 'recent') {
         return (Number(b.favorite) - Number(a.favorite)) || (b.updatedAt - a.updatedAt);
@@ -414,21 +585,20 @@ export function createTripsView(navigate, getRecordMap = () => null) {
       return String(a.name || '').localeCompare(String(b.name || ''));
     });
     if (!trips.length) {
+      renderSummary(trips);
+      const indexing = filterIndexLoading && (filters.hasPhotos !== 'any' || filters.minWaypoints != null);
       listBox.append(el('div', { class: 'empty-state' },
-        el('div', { class: 'empty-title' }, t('trips.noMatch')),
-        el('div', { class: 'small' }, t('trips.noMatchHint')),
-        el('button', {
-          class: 'btn sm', style: { marginTop: '12px' }, onclick: () => {
-            searchTerm = ''; activityFilter = 'all'; favoriteOnly = false; searchInput.value = '';
-            for (const [key, btn] of chipButtons) btn.classList.toggle('active', key === 'all');
-            favoriteChip.classList.remove('active'); renderList();
-          }
+        el('div', { class: 'empty-title' }, indexing ? t('common.loading') : t('trips.noMatch')),
+        el('div', { class: 'small' }, indexing ? t('trips.filterIndexLoading') : t('trips.noMatchHint')),
+        indexing ? null : el('button', {
+          class: 'btn sm', style: { marginTop: '12px' }, onclick: clearTripFilters
         }, t('trips.clearFilters'))));
       return;
     }
     for (const trip of trips) {
       const st = trip.statsCache;
       const d = st ? fmtDistance(st.distance, units) : null;
+      const ascent = st ? fmtAltitude(st.ascent, units) : null;
       const statusKey = trip.status === 'recording' ? 'statusRecording' : trip.status === 'paused' ? 'statusPaused' : 'statusFinished';
       const thumb = el('div', { class: 'thumb', html: thumbSVG(trip.thumbPoints) });
       thumbNodes.set(trip.id, thumb);
@@ -460,19 +630,20 @@ export function createTripsView(navigate, getRecordMap = () => null) {
         el('div', { class: 'ti-stats' },
           el('div', { class: 'ti-stat' }, el('div', { class: 'v' }, d ? `${d.v}${d.u}` : '--'), el('div', { class: 'k' }, t('analysis.distance'))),
           el('div', { class: 'ti-stat' }, el('div', { class: 'v' }, st ? fmtDuration(st.duration, { compact: true }) : '--'), el('div', { class: 'k' }, t('analysis.duration'))),
-          el('div', { class: 'ti-stat' }, el('div', { class: 'v' }, st ? `↑${Math.round(st.ascent)}m` : '--'), el('div', { class: 'k' }, t('analysis.ascent'))))
+          el('div', { class: 'ti-stat' }, el('div', { class: 'v' }, ascent ? `↑${ascent.v}${ascent.u}` : '--'), el('div', { class: 'k' }, t('analysis.ascent'))))
       );
       listBox.append(item);
     }
     void hydrateThumbnails(trips);
+    renderSummary(trips);
   }
 
-  function renderSummary() {
+  function renderSummary(trips = allTrips) {
     const units = get('units');
-    const totalDist = allTrips.reduce((a, tr) => a + (tr.statsCache?.distance || 0), 0);
+    const totalDist = trips.reduce((a, tr) => a + (tr.statsCache?.distance || 0), 0);
     const d = fmtDistance(totalDist, units);
-    const days = new Set(allTrips.map((tr) => new Date(tr.createdAt).toDateString())).size;
-    sTrips.v.textContent = String(allTrips.length);
+    const days = new Set(trips.map((tr) => new Date(tr.createdAt).toDateString())).size;
+    sTrips.v.textContent = String(trips.length);
     sTrips.k.textContent = t('trips.sumTrips');
     sDist.v.innerHTML = `${d.v}<small>${d.u}</small>`;
     sDist.k.textContent = t('trips.sumDistance');
@@ -500,14 +671,118 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     try { return localStorage.getItem(CITY_CONSENT_KEY) === 'yes'; } catch { return false; }
   }
 
-  function yearTrips(year) {
-    return allTrips.filter((trip) => trip.status !== 'recording' && trip.status !== 'paused'
-      && new Date(trip.createdAt).getFullYear() === year);
+  function yearTrips(year: number | 'all' = footprintYear) {
+    return allTrips.filter((trip) => {
+      if (trip.status === 'recording' || trip.status === 'paused') return false;
+      const date = new Date(trip.createdAt);
+      if (!Number.isFinite(date.getTime())) return false;
+      return (year === 'all' || date.getFullYear() === Number(year))
+        && (footprintActivity === 'all' || trip.activity === footprintActivity);
+    });
+  }
+
+  function currentPrivacyRadius() {
+    const radius = Number(get('privacyRadius'));
+    return Number.isFinite(radius) && radius >= 0 ? radius : 0;
+  }
+
+  function footprintScopeKey(year = footprintYear, trips = yearTrips(year), activity = footprintActivity) {
+    return footprintCacheKey({ year, activity, privacyRadius: currentPrivacyRadius(), trips });
+  }
+
+  function cancelFootprintJobs() {
+    for (const controller of footprintAborts.values()) controller.abort();
+    footprintAborts.clear();
+    for (const jobKey of footprintJobs.keys()) footprintJobs.delete(jobKey);
+  }
+
+  function cancelHeatmapJobs() {
+    for (const controller of heatmapAborts.values()) controller.abort();
+    heatmapAborts.clear();
+    for (const jobKey of heatmapJobs.keys()) heatmapJobs.delete(jobKey);
+  }
+
+  async function loadHistoryHeatmap(year, activity, trips, retryTripIds: string[] | null = null) {
+    const key = footprintScopeKey(year, trips, activity);
+    if (heatmapJobs.has(key) || viewDestroyed) return;
+    cancelHeatmapJobs();
+    const version = ++heatmapVersion;
+    const previous = heatmapStates.get(key);
+    const retrySet = retryTripIds ? new Set(retryTripIds) : null;
+    const selectedTrips = retrySet ? trips.filter((trip) => retrySet.has(trip.id)) : trips;
+    const initialData = retrySet && previous?.key === key ? previous.data : null;
+    const priorFailed = retrySet && previous?.key === key ? [...(previous.failedTripIds || [])] : [];
+    const failedFor = (succeededIds: string[], failedIds: string[]) => {
+      const failed = new Set(priorFailed);
+      for (const id of succeededIds) failed.delete(id);
+      for (const id of failedIds) failed.add(id);
+      return trips.filter((trip) => failed.has(trip.id)).map((trip) => trip.id);
+    };
+    if (!selectedTrips.length) {
+      heatmapStates.set(key, {
+        key, version, status: priorFailed.length ? 'error' : 'ready', progress: 100,
+        data: initialData || mergeHeatmaps([]), failedTripIds: priorFailed
+      });
+      renderFootprint();
+      return;
+    }
+    heatmapStates.set(key, {
+      key, version, status: 'loading', progress: 0, data: initialData, failedTripIds: priorFailed
+    });
+    const controller = new AbortController();
+    const isCurrent = () => !controller.signal.aborted && heatmapStates.get(key)?.version === version;
+    const privacyRadius = currentPrivacyRadius();
+    heatmapAborts.set(key, controller);
+    const job = (async () => {
+      try {
+        const batch = await buildHeatmapBatchAsync(selectedTrips, async (trip) => {
+          const track = await loadTripTrack(trip.id);
+          if (!track) return null;
+          return buildHeatmapAsync([track], { maxPoints: 1200, gridSize: 0.001, privacyRadius }, { signal: controller.signal });
+        }, {
+          signal: controller.signal,
+          initial: initialData,
+          onProgress: ({ completed, total, result, succeededIds, failedIds }) => {
+            if (viewDestroyed || !isCurrent()) return;
+            const state = heatmapStates.get(key);
+            if (state?.status === 'loading') {
+              state.data = result;
+              state.progress = Math.round((completed / total) * 100);
+              state.failedTripIds = failedFor(succeededIds, failedIds);
+            }
+            if (completed === 1 || completed % 10 === 0 || completed === total) renderFootprint();
+          }
+        });
+        if (controller.signal.aborted || viewDestroyed || !isCurrent()) return;
+        const failedTripIds = failedFor(batch.succeededIds, batch.failedIds);
+        heatmapStates.set(key, {
+          key, version, progress: 100, data: batch.result, failedTripIds,
+          status: failedTripIds.length ? (batch.result.stats.tripCount > 0 ? 'partial' : 'error') : 'ready'
+        });
+      } catch (error) {
+        if (controller.signal.aborted || viewDestroyed || !isCurrent()) return;
+        console.warn('heatmap aggregation failed', error);
+        const state = heatmapStates.get(key);
+        heatmapStates.set(key, {
+          key, version, status: 'error', progress: 0,
+          data: state?.data || null, failedTripIds: state?.failedTripIds || []
+        });
+      } finally {
+        if (heatmapJobs.get(key) === job) heatmapJobs.delete(key);
+        if (heatmapAborts.get(key) === controller) heatmapAborts.delete(key);
+        if (!viewDestroyed && isCurrent()) renderFootprint();
+      }
+    })();
+    heatmapJobs.set(key, job);
+    renderFootprint();
+    await job;
   }
 
   function ensureFootprintMap() {
     if (footprintMap || viewDestroyed) return;
-    footprintMap = new TrackMap(footprintMapBox);
+    footprintMap = new TrackMap(footprintMapBox, {
+      onHeatmapClick: (properties, lngLat) => footprintMap.showHeatmapPopup(properties, lngLat)
+    });
     footprintMap.init([105, 35], 3);
     footprintMapBox.append(footprintMapStatus);
   }
@@ -524,82 +799,100 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     return true;
   }
 
-  async function loadFootprintCities(year, trips) {
-    if (footprintJobs.has(year) || viewDestroyed) return;
+  async function loadFootprintCities(year, activity, trips) {
+    const key = footprintScopeKey(year, trips, activity);
+    if (footprintJobs.has(key) || viewDestroyed) return;
+    cancelFootprintJobs();
+    const version = ++footprintVersion;
+    const previous = footprintStates.get(key);
+    const previousCities = previous?.key === key ? previous.cities || [] : [];
     if (!navigator.onLine) {
-      footprintStates.set(year, { ...(footprintStates.get(year) || {}), status: 'offline', ids: trips.map((tr) => tr.id).sort().join(',') });
+      footprintStates.set(key, { key, version, status: 'offline', cities: previousCities, progress: 0 });
       renderFootprint();
       return;
     }
-    const previous = footprintStates.get(year);
-    footprintStates.set(year, {
-      status: 'loading', progress: 0, cities: previous?.cities || [],
-      ids: trips.map((tr) => tr.id).sort().join(',')
-    });
-    renderFootprint();
+    footprintStates.set(key, { key, version, status: 'loading', progress: 0, cities: previousCities });
     const controller = new AbortController();
-    footprintAborts.set(year, controller);
+    const isCurrent = () => !controller.signal.aborted && footprintStates.get(key)?.version === version;
+    const privacyRadius = currentPrivacyRadius();
+    footprintAborts.set(key, controller);
     const job = (async () => {
       const entries = [];
       try {
         for (let i = 0; i < trips.length; i++) {
-          if (controller.signal.aborted || viewDestroyed) return;
+          if (controller.signal.aborted || viewDestroyed || !isCurrent()) return;
           const trip = trips[i];
-          const full = await loadTripFull(trip.id);
-          if (!full || controller.signal.aborted || viewDestroyed) continue;
-          const cities = await resolveTripCities(full, { radius: get('privacyRadius') }, {
+          const track = await loadTripTrack(trip.id);
+          if (!track || controller.signal.aborted || viewDestroyed || !isCurrent()) continue;
+          const cities = await resolveTripCities(track, { radius: privacyRadius }, {
             signal: controller.signal,
             onProgress: (p) => {
-              if (viewDestroyed || controller.signal.aborted) return;
-              const state = footprintStates.get(year);
+              if (viewDestroyed || !isCurrent()) return;
+              const state = footprintStates.get(key);
               if (state?.status === 'loading') state.progress = Math.round(((i + p) / trips.length) * 100);
               renderFootprint();
             }
           });
-          entries.push({ trip: full.trip, cities });
+          if (controller.signal.aborted || viewDestroyed || !isCurrent()) return;
+          if (cities.length) {
+            const places = cities.map(({ name, countryCode, admin }) => ({ name, countryCode, admin }));
+            if (JSON.stringify(places) !== JSON.stringify(track.trip.places || [])) {
+              await updateTrip(trip.id, { places }, { touch: false });
+              track.trip = { ...track.trip, places };
+              Object.assign(trip, { places });
+            }
+          }
+          entries.push({ trip: track.trip, cities });
           const citiesSoFar = aggregateCityFootprints(entries);
-          const state = footprintStates.get(year);
+          const state = footprintStates.get(key);
           if (state?.status === 'loading') {
             state.cities = citiesSoFar;
             state.progress = Math.round(((i + 1) / trips.length) * 100);
           }
           renderFootprint();
         }
-        if (controller.signal.aborted || viewDestroyed) return;
-        footprintStates.set(year, {
-          status: 'ready', cities: aggregateCityFootprints(entries),
-          ids: trips.map((tr) => tr.id).sort().join(',')
+        if (controller.signal.aborted || viewDestroyed || !isCurrent()) return;
+        footprintStates.set(key, {
+          key, version, status: 'ready', progress: 100,
+          cities: aggregateCityFootprints(entries)
         });
+        void refreshFilterIndex();
       } catch (err) {
-        if (err?.name !== 'AbortError' && !viewDestroyed) {
-          footprintStates.set(year, { status: 'error', cities: previous?.cities || [], progress: 0 });
-        }
+        if (controller.signal.aborted || viewDestroyed || !isCurrent()) return;
+        console.warn('city footprint aggregation failed', err);
+        const state = footprintStates.get(key);
+        footprintStates.set(key, {
+          key, version, status: 'error', progress: 0, cities: state?.cities || previousCities
+        });
       } finally {
-        footprintAborts.delete(year);
-        footprintJobs.delete(year);
-        if (!viewDestroyed) renderFootprint();
+        if (footprintAborts.get(key) === controller) footprintAborts.delete(key);
+        if (footprintJobs.get(key) === job) footprintJobs.delete(key);
+        if (!viewDestroyed && isCurrent()) renderFootprint();
       }
     })();
-    footprintJobs.set(year, job);
+    footprintJobs.set(key, job);
+    renderFootprint();
     await job;
   }
 
-  async function lightUpCities(year, trips) {
+  async function lightUpCities(year, activity, trips) {
     if (!await requestCityConsent(trips)) return;
-    await loadFootprintCities(year, trips);
+    await loadFootprintCities(year, activity, trips);
   }
 
-  function renderFootprintCities(year, trips, cities) {
+  function renderFootprintCities(year, activity, trips, cities) {
     ensureFootprintMap();
-    const state = footprintStates.get(year);
-    const key = `${year}:${cities.map((city) => `${city.name}:${city.lat}:${city.lon}:${city.trips}`).join('|')}`;
-    if (footprintMap && key !== footprintMapKey) {
+    const key = footprintScopeKey(year, trips, activity);
+    const state = footprintStates.get(key);
+    const mapKey = `${key}:cities:${cities.map((city) => `${cityFootprintKey(city)}:${city.lat}:${city.lon}:${city.trips}`).join('|')}`;
+    if (footprintMap && mapKey !== footprintMapKey) {
       footprintMap.setCityMarkers(cities.map((city) => ({
         ...city,
         label: `${city.name} · ${t('trips.footprintCityTrips', { trips: city.trips })}`
       })));
-      footprintMapKey = key;
+      footprintMapKey = mapKey;
     }
+    footprintMapStatus.classList.remove('warn');
     footprintMapStatus.style.display = state?.status === 'ready' && cities.length ? 'none' : '';
     footprintMapStatus.replaceChildren();
     if (state?.status === 'loading') {
@@ -608,19 +901,92 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     }
     if (state?.status === 'error' || state?.status === 'offline') {
       const message = state.status === 'offline' ? t('trips.footprintCityOffline') : t('trips.footprintCityFail');
-      const retry = el('button', { class: 'btn sm', onclick: () => lightUpCities(year, trips) }, t('common.retry'));
+      const retry = el('button', { class: 'btn sm', onclick: () => lightUpCities(year, activity, trips) }, t('common.retry'));
       footprintMapStatus.append(el('span', {}, message), retry);
       return;
     }
     if (state?.status === 'ready' && !cities.length) {
-      const retry = el('button', { class: 'btn sm', onclick: () => lightUpCities(year, trips) }, t('common.retry'));
+      const retry = el('button', { class: 'btn sm', onclick: () => lightUpCities(year, activity, trips) }, t('common.retry'));
       footprintMapStatus.append(el('span', {}, t('trips.footprintCityEmpty')), retry);
       return;
     }
     const load = el('button', {
-      class: 'btn sm primary', onclick: () => lightUpCities(year, trips)
+      class: 'btn sm primary', onclick: () => lightUpCities(year, activity, trips)
     }, icon('pin', 14), t('trips.footprintCityLoad'));
     footprintMapStatus.append(el('span', {}, t('trips.footprintCityEmpty')), load);
+  }
+
+  function renderHistoryHeatmap(year, activity, trips) {
+    ensureFootprintMap();
+    const key = footprintScopeKey(year, trips, activity);
+    const state = heatmapStates.get(key);
+    const failedKey = (state?.failedTripIds || []).join(',');
+    const dataKey = `${key}:${state?.status || 'empty'}:${state?.data?.features?.length || 0}:${state?.data?.stats?.sampledPoints || 0}:${state?.data?.stats?.maxWeight || 0}:${failedKey}`;
+    if (footprintMap && dataKey !== footprintMapKey) {
+      footprintMap.setCityMarkers([]);
+      footprintMap.setOverlayTracks([]);
+      footprintMap.setHeatmap(state?.data || null, true);
+      footprintMapKey = dataKey;
+    }
+    footprintMapStatus.classList.toggle('warn', state?.status === 'partial');
+    footprintMapStatus.style.display = '';
+    footprintMapStatus.replaceChildren();
+    if (state?.status === 'loading') {
+      footprintMapStatus.append(t('trips.heatmapLoading', { p: state.progress || 0 }));
+      return;
+    }
+    if (state?.status === 'error') {
+      const retry = el('button', {
+        class: 'btn sm',
+        onclick: () => loadHistoryHeatmap(year, activity, trips, state.failedTripIds?.length ? state.failedTripIds : null)
+      }, t('common.retry'));
+      footprintMapStatus.append(el('span', {}, t('trips.heatmapError')), retry);
+      return;
+    }
+    const stats = state?.data?.stats;
+    const summary = stats ? el('div', { class: 'small faint' }, t('trips.heatmapStats', {
+      trips: stats.tripCount, cells: stats.gridCells, cropped: stats.croppedPoints
+    })) : null;
+    if (state?.status === 'partial') {
+      const failed = state.failedTripIds?.length || 0;
+      const retry = el('button', { class: 'btn sm', onclick: () => loadHistoryHeatmap(year, activity, trips, state.failedTripIds) }, t('common.retry'));
+      footprintMapStatus.append(summary,
+        el('span', { role: 'alert' }, t('trips.heatmapPartial', { ok: trips.length - failed, fail: failed })), retry);
+      return;
+    }
+    if (!state?.data?.features.length) {
+      footprintMapStatus.append(el('span', {}, t('trips.heatmapEmpty')));
+      return;
+    }
+    footprintMapStatus.append(summary);
+  }
+
+  function footprintSummary(year, selectedTrips = yearTrips(year)) {
+    const trips = selectedTrips;
+    if (year !== 'all') {
+      return buildFootprints(trips, new Date(Number(year), 0, 1)).current;
+    }
+    const months = Array.from({ length: 12 }, (_, index) => ({ month: index + 1, trips: 0, distance: 0, ascent: 0, days: new Set() }));
+    const days = new Set();
+    const summary: any = { year: 'all', trips: trips.length, distance: 0, ascent: 0, duration: 0, days: 0, cities: [], months };
+    for (const trip of trips) {
+      const date = new Date(trip.createdAt);
+      const day = date.toDateString();
+      const distance = Number(trip.statsCache?.distance) || 0;
+      const ascent = Number(trip.statsCache?.ascent) || 0;
+      summary.distance += distance;
+      summary.ascent += ascent;
+      summary.duration += Number(trip.statsCache?.duration) || 0;
+      days.add(day);
+      const month = months[date.getMonth()];
+      month.trips++;
+      month.distance += distance;
+      month.ascent += ascent;
+      month.days.add(day);
+    }
+    summary.days = days.size;
+    summary.months = months.map((month) => ({ ...month, days: month.days.size }));
+    return summary;
   }
 
   function renderFootprint() {
@@ -628,14 +994,25 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     if (!allTrips.length) { footprintCard.style.display = 'none'; return; }
     const { years } = buildFootprints(allTrips);
     if (!years.length) { footprintCard.style.display = 'none'; return; }
-    if (!years.some((y) => y.year === footprintYear)) footprintYear = years[0].year;
-    const baseFp = years.find((y) => y.year === footprintYear) || years[0];
+    if (footprintYear !== 'all' && !years.some((year) => year.year === footprintYear)) footprintYear = years[0].year;
+    const trips = yearTrips(footprintYear);
+    const scopeKey = footprintScopeKey(footprintYear, trips, footprintActivity);
+    if (renderedFootprintKey && renderedFootprintKey !== scopeKey) {
+      cancelFootprintJobs();
+      cancelHeatmapJobs();
+    }
+    renderedFootprintKey = scopeKey;
+    const cityState = footprintStates.get(scopeKey);
+    const cities = cityState?.key === scopeKey ? cityState.cities || [] : [];
+    const fp = withFootprintCities({ ...footprintSummary(footprintYear, trips), activity: footprintActivity }, cities);
     const units = get('units');
-    const baseDistance = fmtDistance(baseFp.distance, units);
+    const d = fmtDistance(fp.distance, units);
+    const ascent = fmtAltitude(fp.ascent, units);
+    const yearLabel = footprintYear === 'all' ? t('trips.heatmapAllYears') : String(footprintYear);
     footprintToggle.replaceChildren(icon('calendar', 18),
       el('span', { class: 'footprint-toggle-copy' },
-        el('strong', {}, `${baseFp.year} · ${t('trips.footprintTitle')}`),
-        el('span', {}, `${baseFp.trips} ${t('trips.sumTrips')} · ${baseDistance.v}${baseDistance.u}`)),
+        el('strong', {}, `${yearLabel} · ${t('trips.footprintTitle')}`),
+        el('span', {}, `${fp.trips} ${t('trips.sumTrips')} · ${d.v}${d.u}`)),
       icon(footprintExpanded ? 'chevron' : 'chevronRight', 16));
     footprintToggle.setAttribute('aria-expanded', String(footprintExpanded));
     footprintContent.hidden = !footprintExpanded;
@@ -643,74 +1020,108 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     footprintCard.classList.toggle('expanded', footprintExpanded);
     footprintCard.style.display = '';
     if (!footprintExpanded) return;
-    const trips = yearTrips(baseFp.year);
-    const cityState = footprintStates.get(baseFp.year);
-    const fp = withFootprintCities(baseFp, cityState?.cities || []);
-    const d = fmtDistance(fp.distance, units);
     const yearSel = el('select', { class: 'footprint-year', 'aria-label': t('trips.footprintTitle') },
-      ...years.map((y) => el('option', { value: String(y.year) }, String(y.year))));
-    yearSel.value = String(fp.year);
-    yearSel.onchange = () => { footprintYear = Number(yearSel.value); renderFootprint(); };
-    const max = Math.max(1, ...fp.months.map((m) => m.distance));
-    const imageBtn = el('button', { class: 'btn sm' }, icon('photo', 14), t('trips.footprintShareImage'));
-    imageBtn.onclick = async () => {
-      imageBtn.disabled = true;
-      imageBtn.replaceChildren(icon('refresh', 14), t('common.loading'));
-      try {
-        const result = await generateFootprintImage(fp);
-        openFootprintImagePreview(result, fp);
-      } catch (err) {
-        console.error(err);
-        toast(t('trips.footprintImageFailed'), 'err');
-      } finally {
-        imageBtn.disabled = false;
-        imageBtn.replaceChildren(icon('photo', 14), t('trips.footprintShareImage'));
-      }
+      el('option', { value: 'all' }, t('trips.heatmapAllYears')),
+      ...years.map((year) => el('option', { value: String(year.year) }, String(year.year))));
+    yearSel.value = String(footprintYear);
+    yearSel.onchange = () => {
+      footprintYear = yearSel.value === 'all' ? 'all' : Number(yearSel.value);
+      if (footprintYear === 'all') footprintLayer = 'heatmap';
+      renderFootprint();
     };
-    const videoOk = videoSupported();
-    const videoBtn = el('button', {
-      class: 'btn sm', disabled: !videoOk,
-      title: videoOk ? '' : t('export.videoUnsupported')
-    }, icon('play', 14), t('trips.footprintShareVideo'));
-    if (videoOk) videoBtn.onclick = () => openFootprintVideoPreview(fp);
+    const activitySel = el('select', { class: 'footprint-year', 'aria-label': t('trips.heatmapActivity') },
+      ...ACTIVITIES.map((activity) => el('option', { value: activity }, activity === 'all' ? t('trips.filterAll') : t(`record.activities.${activity}`))));
+    activitySel.value = footprintActivity;
+    activitySel.onchange = () => { footprintActivity = activitySel.value; renderFootprint(); };
+    const layerButtons = el('div', { class: 'footprint-layers', role: 'group', 'aria-label': t('trips.footprintCityMap') },
+      el('button', { class: 'chip' + (footprintLayer === 'heatmap' ? ' active' : ''), onclick: () => { footprintLayer = 'heatmap'; renderFootprint(); } }, t('trips.heatmapCoverage')),
+      el('button', { class: 'chip' + (footprintLayer === 'cities' ? ' active' : ''), onclick: () => { footprintLayer = 'cities'; renderFootprint(); } }, t('trips.footprintCityMap')));
+    const max = Math.max(1, ...fp.months.map((month) => month.distance));
+    const growthBtn = el('button', {
+      class: 'btn sm', onclick: () => openGrowthReport(allTrips, {
+        initialYear: footprintYear === 'all' ? years[0]?.year : footprintYear,
+        onOpenTrip: (tripId) => {
+          void setActiveTrip(tripId);
+          navigate('trips', { detail: true, tripId, section: 'overview' });
+        }
+      })
+    }, icon('analysis', 14), t('growth.openReport'));
+    const shareButtons = footprintYear === 'all' ? [] : [
+      el('button', { class: 'btn sm', onclick: async (event) => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        button.replaceChildren(icon('refresh', 14), t('common.loading'));
+        try {
+          if (scopeKey !== footprintScopeKey()) {
+            toast(t('export.tripChanged'), 'warn');
+            return;
+          }
+          const result = await generateFootprintImage(fp);
+          if (scopeKey !== footprintScopeKey()) {
+            toast(t('export.tripChanged'), 'warn');
+            return;
+          }
+          openFootprintImagePreview(result, fp);
+        } catch (error) {
+          console.error(error);
+          toast(t('trips.footprintImageFailed'), 'err');
+        } finally {
+          button.disabled = false;
+          button.replaceChildren(icon('photo', 14), t('trips.footprintShareImage'));
+        }
+      } }, icon('photo', 14), t('trips.footprintShareImage'))
+    ];
+    if (videoSupported() && footprintYear !== 'all') {
+      shareButtons.push(el('button', { class: 'btn sm', onclick: () => openFootprintVideoPreview(fp) }, icon('play', 14), t('trips.footprintShareVideo')));
+    }
     footprintBody.innerHTML = '';
     footprintBody.append(
       el('div', { class: 'footprint-head' },
         el('div', { class: 'footprint-title' }, icon('calendar', 17), t('trips.footprintTitle')),
-        yearSel),
+        el('div', { class: 'footprint-controls' }, activitySel, yearSel, growthBtn)),
+      el('div', { class: 'footprint-map-head' },
+        el('span', {}, footprintLayer === 'heatmap' ? t('trips.heatmapTitle') : t('trips.footprintCityMap')),
+        footprintLayer === 'cities' && fp.cities.length ? el('span', { class: 'tag' }, t('trips.footprintCities', { n: fp.cities.length })) : null),
+      layerButtons,
+      el('p', { class: 'small faint footprint-map-note' }, footprintLayer === 'heatmap' ? t('trips.heatmapPrivacy') : t('trips.footprintPrivacy')),
+      footprintMapBox,
+      footprintLayer === 'cities' && fp.cities.length ? el('div', { class: 'footprint-city-list' },
+        ...fp.cities.slice(0, 12).map((city) => el('span', {
+          class: 'trip-tag', title: t('trips.footprintCityTrips', { trips: city.trips })
+        }, `${city.name}${city.countryCode ? ` · ${city.countryCode}` : ''} · ${city.trips}`))) : [],
       el('div', { class: 'footprint-kpis' },
         el('div', { class: 'fp-kpi' }, el('div', { class: 'v' }, String(fp.trips)), el('div', { class: 'k' }, t('trips.sumTrips'))),
         el('div', { class: 'fp-kpi' }, el('div', { class: 'v', html: `${d.v}<small>${d.u}</small>` }), el('div', { class: 'k' }, t('analysis.distance'))),
-        el('div', { class: 'fp-kpi' }, el('div', { class: 'v', html: `${Math.round(fp.ascent)}<small>m</small>` }), el('div', { class: 'k' }, t('analysis.ascent'))),
+        el('div', { class: 'fp-kpi' }, el('div', { class: 'v', html: `${ascent.v}<small>${ascent.u}</small>` }), el('div', { class: 'k' }, t('analysis.ascent'))),
         el('div', { class: 'fp-kpi' }, el('div', { class: 'v' }, String(fp.days)), el('div', { class: 'k' }, t('trips.sumDays')))),
-      el('div', { class: 'footprint-city-head' },
-        el('span', {}, t('trips.footprintCityMap')),
-        fp.cities.length ? el('span', { class: 'tag' }, t('trips.footprintCities', { n: fp.cities.length })) : null),
-      footprintMapBox,
-      fp.cities.length ? el('div', { class: 'footprint-city-list' },
-        ...fp.cities.slice(0, 12).map((city) => el('span', {
-          class: 'trip-tag', title: t('trips.footprintCityTrips', { trips: city.trips })
-        }, `${city.name} · ${city.trips}`))) : [],
       el('div', { class: 'footprint-bars' },
-        ...fp.months.map((m) => {
-          const md = fmtDistance(m.distance, units);
-          return el('div', { class: 'fp-col', title: `${m.month} · ${m.trips} ${t('trips.sumTrips')} · ${md.v}${md.u}` },
+        ...fp.months.map((month) => {
+          const monthDistance = fmtDistance(month.distance, units);
+          return el('div', { class: 'fp-col', title: `${month.month} · ${month.trips} ${t('trips.sumTrips')} · ${monthDistance.v}${monthDistance.u}` },
             el('div', { class: 'bar-wrap' },
-              el('div', { class: 'bar' + (m.month === new Date().getMonth() + 1 && fp.year === new Date().getFullYear() ? ' current' : ''), style: { height: `${Math.round((m.distance / max) * 100)}%` } })),
-            el('span', { class: 'm' }, String(m.month)));
+              el('div', { class: 'bar' + (month.month === new Date().getMonth() + 1 && fp.year === new Date().getFullYear() ? ' current' : ''), style: { height: `${Math.round((month.distance / max) * 100)}%` } })),
+            el('span', { class: 'm' }, String(month.month)));
         })),
-      el('div', { class: 'footprint-actions' },
-        imageBtn, videoBtn,
-        el('div', { class: 'fp-share-note small faint' }, icon('shield', 12), t('trips.footprintShareHint'))));
-    footprintCard.style.display = '';
-    renderFootprintCities(fp.year, trips, fp.cities);
-    const ids = trips.map((trip) => trip.id).sort().join(',');
-    if (hasCityConsent() && !footprintJobs.has(fp.year)
-      && (!cityState || (cityState.ids && cityState.ids !== ids))) {
-      if (navigator.onLine) void loadFootprintCities(fp.year, trips);
-      else {
-        footprintStates.set(fp.year, { status: 'offline', cities: fp.cities, ids });
-        renderFootprintCities(fp.year, trips, fp.cities);
+      shareButtons.length ? el('div', { class: 'footprint-actions' },
+        ...shareButtons,
+        el('div', { class: 'fp-share-note small faint' }, icon('shield', 12), t('trips.footprintShareHint'))) : null);
+    if (footprintLayer === 'heatmap') {
+      renderHistoryHeatmap(footprintYear, footprintActivity, trips);
+      const heatState = heatmapStates.get(scopeKey);
+      if (!heatmapJobs.has(scopeKey) && (!heatState || heatState.status === 'loading')) {
+        void loadHistoryHeatmap(footprintYear, footprintActivity, trips);
+      }
+    } else {
+      renderFootprintCities(footprintYear, footprintActivity, trips, cities);
+      if (hasCityConsent() && !footprintJobs.has(scopeKey)
+        && (!cityState || cityState.key !== scopeKey || cityState.status === 'loading')) {
+        if (navigator.onLine) void loadFootprintCities(footprintYear, footprintActivity, trips);
+        else {
+          footprintStates.set(scopeKey, {
+            key: scopeKey, version: ++footprintVersion, status: 'offline', cities, progress: 0
+          });
+          renderFootprintCities(footprintYear, footprintActivity, trips, cities);
+        }
       }
     }
   }
@@ -722,7 +1133,9 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     renderNudge();
     renderIosNudge();
     renderFootprint();
+    filterIndexes = [];
     renderList();
+    void refreshFilterIndex();
     detailTrip = appState.tripDetail.open
       ? appState.activeTripFull?.trip || allTrips.find((trip) => trip.id === appState.tripDetail.tripId) || null
       : null;
@@ -749,6 +1162,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     m = modal({
       title: t('trips.more'),
       body: el('div', { class: 'sheet-list' },
+        row('layers', t('mapTools.title'), t('mapTools.trackOverlayHint'), () => close(() => openMapTools(allTrips))),
         row('download', t('trips.batchExport'), t('trips.batchExportHint'), () => close(onBatchExport)))
     });
   }
@@ -863,11 +1277,11 @@ export function createTripsView(navigate, getRecordMap = () => null) {
         persistedActivity = patch.activity;
         // Recalculate only for a genuine activity change. Name/tag-only saves
         // keep the existing cache and reported distance intact.
-        if (!await refreshActiveTrip(trip.id, { recalc: false })) throw new Error(t('common.unavailable'));
+        if (!await refreshActiveTrip(trip.id, { recalc: false, metadataOnly: true })) throw new Error(t('common.unavailable'));
         if (activityChanged) {
           if (!await recalcNow()) throw new Error(t('common.unavailable'));
           // Publish the recalculated cache/version to analysis and export.
-          if (!await refreshActiveTrip(trip.id, { recalc: false })) throw new Error(t('common.unavailable'));
+          if (!await refreshActiveTrip(trip.id, { recalc: false, metadataOnly: true })) throw new Error(t('common.unavailable'));
         }
         await render();
         refreshDetailPanel();
@@ -879,7 +1293,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
           // The edit is durable even if recalculation or snapshot refresh failed.
           // Show that state immediately and leave the editor open for retry.
           try {
-            await refreshActiveTrip(trip.id, { recalc: false });
+            await refreshActiveTrip(trip.id, { recalc: false, metadataOnly: true });
             await render();
             refreshDetailPanel();
           } catch (refreshError) { console.error('trip snapshot refresh failed', refreshError); }
@@ -1059,10 +1473,16 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   const onTripsOnline = () => {
     if (viewDestroyed) return;
     renderList();
-    const state = footprintStates.get(footprintYear);
-    if (!hasCityConsent() || footprintJobs.has(footprintYear)) return;
+    const trips = yearTrips(footprintYear);
+    const key = footprintScopeKey(footprintYear, trips, footprintActivity);
+    const state = footprintStates.get(key);
+    if (!hasCityConsent() || footprintJobs.has(key)) return;
     if (state?.status === 'offline' || state?.status === 'error') {
-      void loadFootprintCities(footprintYear, yearTrips(footprintYear));
+      void loadFootprintCities(footprintYear, footprintActivity, trips);
+    }
+    const heatState = heatmapStates.get(key);
+    if (footprintLayer === 'heatmap' && heatState?.status === 'error' && !heatmapJobs.has(key)) {
+      void loadHistoryHeatmap(footprintYear, footprintActivity, trips, heatState.failedTripIds?.length ? heatState.failedTripIds : null);
     }
   };
   window.addEventListener('online', onTripsOnline);
@@ -1096,9 +1516,13 @@ export function createTripsView(navigate, getRecordMap = () => null) {
       analysisView.destroy();
       exportView.destroy();
       window.removeEventListener('online', onTripsOnline);
-      for (const controller of footprintAborts.values()) controller.abort();
+      cancelFootprintJobs();
+      cancelHeatmapJobs();
+      filterIndexController?.abort();
       footprintAborts.clear();
+      heatmapAborts.clear();
       footprintJobs.clear();
+      heatmapJobs.clear();
       footprintMap?.destroy();
       footprintMap = null;
     }

@@ -2,6 +2,7 @@
 import {
   ascentDescent,
   emaSeries,
+  interpolateLongitude,
   measureTrackStep,
   physicsFor,
   SPEED_TOLERANCE,
@@ -42,7 +43,27 @@ export interface DistanceSplit {
   partial: boolean;
   startDistance: number;
   endDistance: number;
+  /** Raw split endpoints; netElevation sums connected parts without bridging gaps. */
+  startAlt: number | null;
+  endAlt: number | null;
+  netElevation: number | null;
+  avgSlope: number | null;
+  /** True only when every point in every contributing part has finite altitude. */
+  elevationComplete: boolean;
+  stillMs: number;
+  breakMs: number;
+  /** Sample coefficient of variation over valid moving steps; pace is seconds/km. */
+  speedCv: number | null;
+  paceCv: number | null;
+  /** Thresholded ascent metres per moving hour. */
+  climbEfficiency: number | null;
   parts: DistanceSplitPart[];
+}
+
+interface VariationAccumulator {
+  count: number;
+  mean: number;
+  m2: number;
 }
 
 interface SplitBuilder {
@@ -54,7 +75,26 @@ interface SplitBuilder {
   maxSpeed: number;
   minT: number | null;
   maxT: number | null;
+  speedVariation: VariationAccumulator;
+  paceVariation: VariationAccumulator;
   parts: DistanceSplitPart[];
+}
+
+function emptyVariation(): VariationAccumulator {
+  return { count: 0, mean: 0, m2: 0 };
+}
+
+function addVariation(accumulator: VariationAccumulator, value: number) {
+  accumulator.count++;
+  const delta = value - accumulator.mean;
+  accumulator.mean += delta / accumulator.count;
+  accumulator.m2 += delta * (value - accumulator.mean);
+}
+
+function coefficientOfVariation(accumulator: VariationAccumulator): number | null {
+  if (accumulator.count < 2 || !(accumulator.mean > 0)) return null;
+  const variance = Math.max(0, accumulator.m2 / (accumulator.count - 1));
+  return Math.sqrt(variance) / accumulator.mean;
 }
 
 function finiteTime(point: DistanceSplitPoint): number | null {
@@ -69,27 +109,32 @@ function clonePoint(point: DistanceSplitPoint): DistanceSplitPoint {
   return { ...point };
 }
 
-/** Interpolate geometry by distance; time and altitude are linear for timed fixes. */
+/** Interpolate geometry by distance; time and altitude are independent linear fields. */
 function interpolatePoint(
   prev: DistanceSplitPoint,
   point: DistanceSplitPoint,
   fraction: number
 ): DistanceSplitPoint {
   const f = Math.max(0, Math.min(1, fraction));
+  if (f <= 0) return clonePoint(prev);
+  if (f >= 1) return clonePoint(point);
   const out = clonePoint({
     ...prev,
     ...point,
     lat: prev.lat + (point.lat - prev.lat) * f,
-    lon: prev.lon + (point.lon - prev.lon) * f
+    lon: interpolateLongitude(prev.lon, point.lon, f)
   });
+  // Never let endpoint metadata spread supply a field that cannot be interpolated.
+  delete out.t;
+  delete out.alt;
   const prevT = finiteTime(prev);
   const pointT = finiteTime(point);
   if (prevT != null && pointT != null && pointT > prevT) {
     out.t = prevT + (pointT - prevT) * f;
-    const prevAlt = finiteAlt(prev);
-    const pointAlt = finiteAlt(point);
-    if (prevAlt != null && pointAlt != null) out.alt = prevAlt + (pointAlt - prevAlt) * f;
   }
+  const prevAlt = finiteAlt(prev);
+  const pointAlt = finiteAlt(point);
+  if (prevAlt != null && pointAlt != null) out.alt = prevAlt + (pointAlt - prevAlt) * f;
   return out;
 }
 
@@ -99,7 +144,7 @@ function interpolatePoint(
  * steps longer than 60 seconds, while `avgSpeed` uses moving time only.
  */
 export function computeDistanceSplits(
-  segments: Array<{ id?: any; points?: DistanceSplitPoint[] }> = [],
+  segments: ReadonlyArray<{ id?: any; points?: readonly DistanceSplitPoint[] }> = [],
   intervalM = 1000,
   opts: any = {}
 ): DistanceSplit[] {
@@ -160,6 +205,8 @@ export function computeDistanceSplits(
       maxSpeed: 0,
       minT: null,
       maxT: null,
+      speedVariation: emptyVariation(),
+      paceVariation: emptyVariation(),
       parts: []
     };
     appendPoint(current, point, segment, segmentIndex, distance);
@@ -182,7 +229,13 @@ export function computeDistanceSplits(
     if (step.dt > 0 && step.dt <= MAX_DT) {
       const activeMs = step.dt * fraction;
       builder.activeMs += activeMs;
-      if (step.implied > MOVING_SPEED) builder.movingMs += activeMs;
+      if (step.implied > MOVING_SPEED) {
+        builder.movingMs += activeMs;
+        if (Number.isFinite(step.implied) && step.implied <= speedLimit) {
+          addVariation(builder.speedVariation, step.implied);
+          addVariation(builder.paceVariation, 1000 / step.implied);
+        }
+      }
     }
   }
 
@@ -196,16 +249,42 @@ export function computeDistanceSplits(
     let ascent = 0;
     let descent = 0;
     let pointCount = 0;
+    let netElevation = 0;
+    let elevationComplete = true;
+    let hasElevationDistance = false;
     for (const part of builder.parts) {
-      const smoothAlt = emaSeries(part.points.map(finiteAlt), 0.35);
+      const rawAlt = part.points.map(finiteAlt);
+      pointCount += part.points.length;
+      if (rawAlt.some((alt) => alt == null)) {
+        // A gap anywhere in a continuous part invalidates all derived elevation
+        // metrics for the split, rather than joining the surrounding fixes.
+        elevationComplete = false;
+        continue;
+      }
+      const smoothAlt = emaSeries(rawAlt, 0.35);
       const elevation = ascentDescent(smoothAlt, threshold);
       ascent += elevation.ascent;
       descent += elevation.descent;
-      pointCount += part.points.length;
+      if (part.endDistance - part.startDistance > DISTANCE_EPSILON) {
+        hasElevationDistance = true;
+        netElevation += rawAlt[rawAlt.length - 1]! - rawAlt[0]!;
+      }
     }
+    const connectedNetElevation = hasElevationDistance && elevationComplete ? netElevation : null;
     const duration = builder.minT != null && builder.maxT != null
       ? Math.max(0, builder.maxT - builder.minT)
       : 0;
+    const stillMs = Math.max(0, builder.activeMs - builder.movingMs);
+    // Conservative stop split: slow active time is still; uncounted gaps/jumps remain breaks.
+    const breakMs = Math.max(0, duration - builder.activeMs);
+    const firstPoint = builder.parts[0]?.points[0];
+    const lastPart = builder.parts[builder.parts.length - 1];
+    const lastPoint = lastPart?.points[lastPart.points.length - 1];
+    const startAlt = firstPoint ? finiteAlt(firstPoint) : null;
+    const endAlt = lastPoint ? finiteAlt(lastPoint) : null;
+    const climbEfficiency = connectedNetElevation != null && builder.movingMs > 0
+      ? ascent / (builder.movingMs / 3_600_000)
+      : null;
     splits.push({
       index: builder.index,
       distance,
@@ -220,6 +299,16 @@ export function computeDistanceSplits(
       partial,
       startDistance: builder.startDistance,
       endDistance: builder.endDistance,
+      startAlt,
+      endAlt,
+      netElevation: connectedNetElevation,
+      avgSlope: connectedNetElevation != null ? (connectedNetElevation / distance) * 100 : null,
+      elevationComplete: hasElevationDistance && elevationComplete,
+      stillMs,
+      breakMs,
+      speedCv: coefficientOfVariation(builder.speedVariation),
+      paceCv: coefficientOfVariation(builder.paceVariation),
+      climbEfficiency,
       parts: builder.parts
     });
   }

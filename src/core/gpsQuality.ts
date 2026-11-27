@@ -12,12 +12,35 @@ function validCoords(point) {
     && Math.abs(point.lat) <= 90 && Math.abs(point.lon) <= 180;
 }
 
-function* segmentPoints(segments) {
-  for (const segment of segments || []) yield* segment?.points || [];
-}
-
 export function assessTrackGpsQuality(segments, options = {}) {
-  return assessGpsQuality(segmentPoints(segments), options);
+  const list = Array.isArray(segments) ? segments : [];
+  if (list.length <= 1) return assessGpsQuality(list[0]?.points, options);
+
+  let accSum = 0, accN = 0, timedPairs = 0;
+  const base = {
+    fixes: 0, avgAcc: null, poorFixes: 0, poorRatio: null,
+    gaps: 0, gapMs: 0, maxGapMs: 0, altJumps: 0, reversals: 0,
+    duplicateFixes: 0, invalidTimes: 0, hasTime: false
+  };
+  for (const segment of list) {
+    const measured = measureGpsQuality(segment?.points, options);
+    accSum += measured.accSum;
+    accN += measured.accN;
+    timedPairs += measured.timedPairs;
+    base.fixes += measured.base.fixes;
+    base.poorFixes += measured.base.poorFixes;
+    base.gaps += measured.base.gaps;
+    base.gapMs += measured.base.gapMs;
+    base.maxGapMs = Math.max(base.maxGapMs, measured.base.maxGapMs);
+    base.altJumps += measured.base.altJumps;
+    base.reversals += measured.base.reversals;
+    base.duplicateFixes += measured.base.duplicateFixes;
+    base.invalidTimes += measured.base.invalidTimes;
+  }
+  base.avgAcc = accN ? accSum / accN : null;
+  base.poorRatio = accN ? base.poorFixes / accN : null;
+  base.hasTime = timedPairs > 0;
+  return scoreGpsQuality(base);
 }
 
 export interface AccuracySample {
@@ -276,7 +299,7 @@ export function assessRecordingQuality(input: RecordingQualityInput): RecordingQ
   return quality;
 }
 
-export function assessGpsQuality(points, { poorAcc = 50, activity = 'hike' } = {}) {
+function measureGpsQuality(points, { poorAcc = 50, activity = 'hike' } = {}) {
   let accSum = 0, accN = 0, poorFixes = 0;
   let timedPairs = 0, gaps = 0, gapMs = 0, maxGapMs = 0;
   let altJumps = 0, reversals = 0, duplicateFixes = 0, invalidTimes = 0, fixes = 0;
@@ -321,26 +344,33 @@ export function assessGpsQuality(points, { poorAcc = 50, activity = 'hike' } = {
   }
   const avgAcc = accN ? accSum / accN : null;
   const poorRatio = accN ? poorFixes / accN : null;
-  const hasTime = timedPairs > 0;
-  const base = { fixes, avgAcc, poorFixes, poorRatio, gaps, gapMs, maxGapMs, altJumps, reversals, duplicateFixes, invalidTimes, hasTime };
-  if (avgAcc == null && !hasTime) {
+  const base = { fixes, avgAcc, poorFixes, poorRatio, gaps, gapMs, maxGapMs, altJumps, reversals, duplicateFixes, invalidTimes, hasTime: timedPairs > 0 };
+  return { base, accSum, accN, timedPairs };
+}
+
+function scoreGpsQuality(base) {
+  if (base.avgAcc == null && !base.hasTime) {
     return { ...base, score: null };
   }
   let penalty = 0;
-  if (avgAcc != null) {
-    penalty += Math.min(45, Math.max(0, (avgAcc - 5) * 2));
-    penalty += (poorRatio || 0) * 25;
+  if (base.avgAcc != null) {
+    penalty += Math.min(45, Math.max(0, (base.avgAcc - 5) * 2));
+    penalty += (base.poorRatio || 0) * 25;
   }
-  if (hasTime) penalty += Math.min(30, gaps * 6);
-  penalty += Math.min(10, altJumps * 2);
-  penalty += Math.min(35, reversals * 4);
-  penalty += Math.min(15, invalidTimes * 3);
+  if (base.hasTime) penalty += Math.min(30, base.gaps * 6);
+  penalty += Math.min(10, base.altJumps * 2);
+  penalty += Math.min(35, base.reversals * 4);
+  penalty += Math.min(15, base.invalidTimes * 3);
   const score = Math.max(0, Math.min(100, Math.round(100 - penalty)));
   return {
-    fixes, avgAcc, poorFixes, poorRatio,
-    gaps, gapMs, maxGapMs, altJumps, reversals, duplicateFixes, invalidTimes, hasTime, score,
+    ...base,
+    score,
     rating: score >= 85 ? 'excellent' : score >= 70 ? 'good' : score >= 50 ? 'fair' : 'poor'
   };
+}
+
+export function assessGpsQuality(points, options = {}) {
+  return scoreGpsQuality(measureGpsQuality(points, options).base);
 }
 
 function scanTrackCleanup(segments, activity, confirmPoints, includeCleaned) {

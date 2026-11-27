@@ -649,6 +649,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
 
   // ---------- re-walk navigation panel ----------
   let rwFollowOn = true;
+  let rwHeadingOn = false;
   const rewalkBox = el('div', { class: 'rewalk-card', style: { display: 'none' } });
   const rwName = el('div', { class: 'rw-name' });
   const rwPhase = el('span', { class: 'rw-phase' }, t('rewalk.phaseLocating'));
@@ -656,10 +657,20 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
   const rwBarFill = el('div', { class: 'rw-fill' });
   const rwLeftK = el('span', { class: 'rw-k' }, t('rewalk.remaining'));
   const rwLeft = el('span', { class: 'mono' }, '--');
+  const rwEtaK = el('span', { class: 'rw-k' }, t('rewalk.eta'));
+  const rwEta = el('span', { class: 'mono' }, t('rewalk.etaUnknown'));
   const rwDir = el('span', { class: 'rw-dir', style: { display: 'none' } }, icon('chevronRight', 15));
   const rwOff = el('span', { class: 'rw-off' }, t('rewalk.onTrack'));
   const rwNext = el('div', { class: 'rw-next small' });
-  const rwFollow = el('button', { class: 'btn sm active', onclick: () => { rwFollowOn = !rwFollowOn; rwFollow.classList.toggle('active', rwFollowOn); } }, icon('follow', 14), t('record.follow'));
+  const rwTurn = el('div', { class: 'rw-turn small', hidden: true });
+  const rwFollow = el('button', { class: 'btn sm active', onclick: () => { rwFollowOn = !rwFollowOn; rwFollow.classList.toggle('active', rwFollowOn); map?.setFollow(rwFollowOn); } }, icon('follow', 14), t('record.follow'));
+  const rwHeading = el('button', {
+    class: 'btn sm', onclick: () => {
+      rwHeadingOn = !rwHeadingOn;
+      rwHeading.classList.toggle('active', rwHeadingOn);
+      map?.setHeadingUp(rwHeadingOn);
+    }
+  }, icon('compass', 14), t('rewalk.headingUp'));
   const rwMute = el('button', { class: 'btn sm', onclick: () => toggleMute() }, t('rewalk.mute'));
   const rwSim = el('button', { class: 'btn sm', onclick: () => (rewalk.sim ? stopSim() : startSim()) }, t('rewalk.simWalk'));
   const rwNavigate = el('button', { class: 'btn sm primary', style: { display: 'none' }, onclick: openExternalNavigation }, icon('flag', 14), t('rewalk.navigateTarget', { target: t('wp.types.start') }));
@@ -667,9 +678,10 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
   rewalkBox.append(
     el('div', { class: 'row rw-head', style: { alignItems: 'center', gap: '8px' } }, rwName, rwPhase, rwPct),
     el('div', { class: 'rw-bar' }, rwBarFill),
-    el('div', { class: 'rw-stats small' }, el('span', {}, rwLeftK, ' ', rwLeft), rwDir, rwOff),
+    el('div', { class: 'rw-stats small' }, el('span', {}, rwLeftK, ' ', rwLeft), el('span', {}, rwEtaK, ' ', rwEta), rwDir, rwOff),
     rwNext,
-    el('div', { class: 'row wrap', style: { gap: '8px', marginTop: '8px' } }, rwFollow, rwNavigate, rwMute, rwSim, rwExit)
+    rwTurn,
+    el('div', { class: 'row wrap', style: { gap: '8px', marginTop: '8px' } }, rwFollow, rwHeading, rwNavigate, rwMute, rwSim, rwExit)
   );
   function navigationPlatform(): NavigationPlatform {
     return /iPhone|iPad|iPod/i.test(navigator.userAgent) ? 'ios'
@@ -714,6 +726,10 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
   function targetLabel(type) {
     return t(type === 'start' ? 'wp.types.start' : 'wp.types.end');
   }
+  function rewalkDirectionKey(degrees) {
+    const keys = ['north', 'northEast', 'east', 'southEast', 'south', 'southWest', 'west', 'northWest'];
+    return keys[Math.round(((degrees % 360) + 360) % 360 / 45) % 8];
+  }
   function updateRewalk(f) {
     const phase = f.phase || 'follow';
     const done = phase === 'finished' || f.finished;
@@ -721,6 +737,10 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
       && (f.navDist ?? 0) >= EXTERNAL_NAV_MIN_M;
     rwNavigate.style.display = canNavigate ? '' : 'none';
     rwNavigate.replaceChildren(icon('flag', 14), t('rewalk.navigateTarget', { target: targetLabel(f.navTargetType || f.targetType) }));
+    rwEta.textContent = Number.isFinite(f.etaSeconds) ? fmtDuration(f.etaSeconds * 1000, { compact: true }) : t('rewalk.etaUnknown');
+    rwEta.title = f.etaSource ? t(`rewalk.etaSource${f.etaSource[0].toUpperCase()}${f.etaSource.slice(1)}`) : '';
+    rwTurn.hidden = true;
+    rwTurn.textContent = '';
     rwPhase.textContent = t(done ? 'rewalk.phaseDone'
       : phase === 'locating' ? 'rewalk.phaseLocating'
         : phase === 'approach' ? 'rewalk.phaseApproach'
@@ -755,10 +775,19 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     rwLeftK.textContent = t('rewalk.remaining');
     const d = fmtDistance(f.remaining, get('units'));
     rwLeft.textContent = `${d.v}${d.u}`;
-    const off = (f.offTrack || 0) > 60;
+    const off = f.offRoute || (f.offTrack || 0) > 60;
     rwOff.textContent = done ? t('rewalk.phaseDone')
-      : off ? t('rewalk.offTrack', { m: Math.round(f.offTrack) }) : t('rewalk.onTrack');
+      : f.offRoute ? `${t('rewalk.offRouteFor', { s: Math.floor((f.offRouteForMs || 0) / 1000) })} · ${t('rewalk.offTrack', { m: Math.round(f.offTrack || 0) })}`
+        : off ? t('rewalk.offTrack', { m: Math.round(f.offTrack) }) : t('rewalk.onTrack');
     rwOff.classList.toggle('bad', off && !done);
+    if (!done && f.turn) {
+      rwTurn.hidden = false;
+      const turn = fmtDistance(f.turn.distanceM, get('units'));
+      rwTurn.textContent = t('rewalk.turnPrompt', {
+        turn: t(`rewalk.turn${f.turn.direction[0].toUpperCase()}${f.turn.direction.slice(1)}`),
+        distance: `${turn.v}${turn.u}`
+      });
+    }
     rwNext.textContent = f.finished ? t('rewalk.finished')
       : f.nextWp ? `${t('rewalk.nextWp')} ${WP_ICONS[f.nextWp.type] || '📍'} ${f.nextWp.name || t(`wp.types.${f.nextWp.type}`)} · ${Math.round(f.nextWp.dist)} m`
         : t('rewalk.noWp');
@@ -773,7 +802,8 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     rwName.textContent = `${t('rewalk.title')} · ${rewalk.name}`;
     rwMute.textContent = rewalk.muted ? t('rewalk.unmute') : t('rewalk.mute');
     rwSim.textContent = rewalk.sim ? t('rewalk.simStop') : t('rewalk.simWalk');
-    const along = rewalk.cum[rewalk.maxIdx] || 0;
+    rwHeading.classList.toggle('active', rwHeadingOn);
+    const along = rewalk.along || 0;
     const span = Math.max(1e-6, rewalk.total - rewalk.entryAlong);
     const navTarget = rewalk.navTarget;
     let navDist = null;
@@ -785,19 +815,23 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     updateRewalk({
       progress: Math.max(0, Math.min(1, (along - rewalk.entryAlong) / span)),
       remaining: Math.max(0, rewalk.total - along),
-      offTrack: rewalk.offTrack, nextWp: null, finished: rewalk.finished,
+      offTrack: rewalk.offTrack, offRoute: rewalk.offRoute, offRouteForMs: rewalk.offRouteForMs,
+      nextWp: null, finished: rewalk.finished,
       phase: rewalk.phase, mode: rewalk.mode, targetType: rewalk.targetType,
       navTargetType: rewalk.navTargetType,
-      navDist, navBearing, heading: null, externalNav: rewalk.externalNav
+      navDist, navBearing, heading: rewalk.lastFix?.heading ?? null,
+      etaSeconds: rewalk.etaSeconds, etaSource: rewalk.etaSource, turn: rewalk.turn, externalNav: rewalk.externalNav
     });
   }
   on('rewalk:started', ({ segments, waypoints }) => {
     leaveEditMode();
     viewingTripEditable = false;
     viewingTrip = null;
+    rwHeadingOn = false;
     renderViewBar();
     if (map && !psActive) {
       map.clearNavGuide();
+      map.setHeadingUp(false);
       map.setTrackData(segments, waypoints);
       setTimeout(() => map.fitTrack(), 300);
     }
@@ -806,7 +840,8 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
   });
   on('rewalk:fix', (f) => {
     if (map && !psActive) {
-      map.updatePosition(f.lat, f.lon, f.acc, f.heading);
+      const heading = rwHeadingOn ? (f.heading ?? f.routeBearing) : f.heading;
+      map.updatePosition(f.lat, f.lon, f.acc, heading);
       if (f.phase === 'approach' && f.targetLat != null) {
         map.setNavGuide(f.lat, f.lon, f.targetLat, f.targetLon, targetLabel(f.navTargetType || f.targetType));
       } else {
@@ -822,6 +857,8 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     renderRewalk();
   });
   on('rewalk:stopped', () => {
+    rwHeadingOn = false;
+    rwHeading.classList.remove('active');
     renderRewalk();
     if (map && !psActive) { map.clearNavGuide(); map.setTrackData([], []); map.clearPosition(); }
     renderButtons(); renderBanners();
@@ -829,6 +866,11 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
   on('rewalk:mute', () => renderRewalk());
   on('rewalk:sim', () => renderRewalk());
   on('rewalk:navigation', () => renderRewalk());
+  on('map:headingup', ({ active }) => {
+    if (!rewalk.active) return;
+    rwHeadingOn = !!active;
+    rwHeading.classList.toggle('active', rwHeadingOn);
+  });
   on('rewalk:geoerror', ({ code }) => toast(geoErrorMsg(code), 'warn', 4500));
 
   controls.append(rewalkBox, viewBar, bannerBox, panel, actRow, btnRow);

@@ -51,6 +51,16 @@ describe('city footprint aggregation', () => {
     expect(cities[1].name).toBe('上海');
   });
 
+  it('keeps same-name cities in different countries separate', () => {
+    const cities = aggregateCityFootprints([
+      { trip: { id: 'a', createdAt: 100 }, cities: [{ name: 'Springfield', countryCode: 'US', lat: 39.8, lon: -89.6 }] },
+      { trip: { id: 'b', createdAt: 200 }, cities: [{ name: 'Springfield', countryCode: 'GB', lat: 53.1, lon: -1.2 }] }
+    ]);
+    expect(cities).toHaveLength(2);
+    expect(cities.map((city) => city.countryCode).sort()).toEqual(['GB', 'US']);
+    expect(cities.find((city) => city.countryCode === 'GB')?.lon).toBe(-1.2);
+  });
+
   it('merges repeated city names from different rounded sample points', () => {
     const cities = aggregateCityFootprints([
       { trip: { id: 'a', createdAt: 100 }, cities: [{ name: '杭州', lat: 30.27, lon: 120.15 }] },

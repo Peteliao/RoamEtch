@@ -6,7 +6,7 @@ import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&ur
 import { toDisplay, fromDisplay } from '../core/coords';
 import { getBasemap, buildRasterStyle, buildVectorStyle, availableBasemaps, defaultBasemapId, vectorBgColor } from '../core/providers';
 import { isOfflineSim, regionState } from '../core/region';
-import { simplify, haversine } from '../core/geo';
+import { simplify, haversine, wgs84TrackBounds } from '../core/geo';
 import { simplifyAsync } from '../core/workerBridge';
 import { on, emit } from '../core/events';
 import { diag } from '../core/diag';
@@ -21,6 +21,10 @@ const LIVE_FILL = 'rgba(90,167,240,0.14)';
 const LIVE_UPDATE_MS = 180;
 const LIVE_MAX_COORDS = 6000;
 const LIVE_RECENT_COORDS = 1200;
+
+function shortestLongitudeDelta(from: number, to: number) {
+  return ((to - from + 180) % 360 + 360) % 360 - 180;
+}
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl);
 
@@ -53,8 +57,11 @@ export class TrackMap {
   declare repairOverlay: RepairOverlay | null;
   declare waypoints: any[];
   declare editMode: boolean;
+  declare elevationPickMode: boolean;
   declare follow: boolean;
+  declare headingUp: boolean;
   declare liveMode: boolean;
+  declare _lastHeading: number | null;
   declare wpMarkers: Map<any, any>;
   declare cityMarkers: any[];
   declare vertexMarkers: any[];
@@ -98,6 +105,8 @@ export class TrackMap {
   declare _viewportObserver: ResizeObserver | null;
   declare _viewportFrame: number;
   declare _viewportBottom: number;
+  declare _heatmap: any;
+  declare _overlayTracks: any[];
 
   constructor(container, opts = {}) {
     this.container = container;
@@ -109,8 +118,11 @@ export class TrackMap {
     this.repairOverlay = null;
     this.waypoints = [];
     this.editMode = false;
+    this.elevationPickMode = false;
     this.follow = false;
+    this.headingUp = false;
     this.liveMode = false;
+    this._lastHeading = null;
     this.wpMarkers = new Map();
     this.cityMarkers = [];
     this.vertexMarkers = [];
@@ -145,6 +157,8 @@ export class TrackMap {
     this._viewportObserver = null;
     this._viewportFrame = 0;
     this._viewportBottom = 0;
+    this._heatmap = null;
+    this._overlayTracks = [];
   }
 
   init(center = [116.4, 39.9], zoom = 10) {
@@ -196,13 +210,13 @@ export class TrackMap {
       if (this.editMode) this._scheduleVertices();
       requestAnimationFrame(() => this._updateMeetProximity());
     });
-    this.map.on('click', (e) => {
-      if (!this.editMode) return;
-      const [lon, lat] = fromDisplay(e.lngLat.lng, e.lngLat.lat, this.coordSystem);
-      this.opts.onMapClick?.(lon, lat);
-    });
+    this.map.on('click', (e) => this._handleMapClick(e));
     this.map.on('dragstart', () => {
       this.follow = false;
+      if (this.headingUp) {
+        this.headingUp = false;
+        emit('map:headingup', { active: false });
+      }
       this._meetManualCameraUntil = Date.now() + 12000;
       this._meetLastDistance = Number.NaN;
       this._meetCameraAnimating = false;
@@ -226,6 +240,29 @@ export class TrackMap {
     window.addEventListener('online', recover);
     this._offTheme = on('theme:applied', () => this._applyTheme());
     return this;
+  }
+
+  _handleMapClick(e) {
+    const [lon, lat] = fromDisplay(e.lngLat.lng, e.lngLat.lat, this.coordSystem);
+    if (!this.editMode && this.elevationPickMode) {
+      this.opts.onElevationPick?.(lon, lat);
+      return;
+    }
+    if (!this.editMode) {
+      const heat = this.map.getLayer('personal-heatmap')
+        ? this.map.queryRenderedFeatures(e.point, { layers: ['personal-heatmap'] })[0] : null;
+      if (heat) { this.opts.onHeatmapClick?.(heat.properties, e.lngLat); return; }
+      const track = this.map.getLayer('overlay-track-line')
+        ? this.map.queryRenderedFeatures(e.point, { layers: ['overlay-track-line'] })[0] : null;
+      if (track) { this.opts.onOverlayTrackClick?.(track.properties); return; }
+      if (this.opts.onTrackClick && this.map.getLayer('track-line')) {
+        const x = e.point.x, y = e.point.y;
+        const nearby = this.map.queryRenderedFeatures([[x - 16, y - 16], [x + 16, y + 16]], { layers: ['track-line'] });
+        if (nearby.length) this.opts.onTrackClick(lon, lat);
+      }
+      return;
+    }
+    this.opts.onMapClick?.(lon, lat);
   }
 
   observeViewportInset(overlay: HTMLElement | null) {
@@ -285,6 +322,9 @@ export class TrackMap {
       set('live-line', 'line-color', accent);
       set('nav-line', 'line-color', cssVar('--warn', '#f2b14a'));
       set('meet-route-line', 'line-color', cssVar('--info', '#5aa7f0'));
+      set('personal-heatmap', 'heatmap-color', ['interpolate', ['linear'], ['heatmap-density'],
+        0, 'rgba(90,167,240,0)', 0.2, cssVar('--info', '#5aa7f0'),
+        0.5, accent, 0.8, cssVar('--warn', '#f2b14a'), 1, '#ef6b55']);
     };
     if (m.isStyleLoaded()) apply();
     else m.once('style.load', apply);
@@ -383,8 +423,48 @@ export class TrackMap {
     if (!m.getSource('meet-route')) {
       m.addSource('meet-route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     }
+    if (!m.getSource('personal-heatmap')) {
+      m.addSource('personal-heatmap', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    }
+    if (!m.getSource('overlay-tracks')) {
+      m.addSource('overlay-tracks', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    }
     const accent = cssVar('--track', '#2bcda7');
     const casing = cssVar('--track-casing', '#06251d');
+    if (!m.getLayer('personal-heatmap')) m.addLayer({
+      id: 'personal-heatmap', type: 'heatmap', source: 'personal-heatmap',
+      paint: {
+        'heatmap-radius': 24,
+        'heatmap-intensity': 1.1,
+        'heatmap-opacity': 0.78,
+        'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'],
+          0, 'rgba(90,167,240,0)', 0.2, cssVar('--info', '#5aa7f0'),
+          0.5, accent, 0.8, cssVar('--warn', '#f2b14a'), 1, '#ef6b55']
+      }
+    });
+    if (!m.getLayer('overlay-track-case')) m.addLayer({
+      id: 'overlay-track-case', type: 'line', source: 'overlay-tracks',
+      paint: {
+        'line-color': casing,
+        'line-width': 7,
+        'line-opacity': ['*', ['coalesce', ['get', 'opacity'], 0.8], 0.5]
+      },
+      layout: { 'line-cap': 'round', 'line-join': 'round' }
+    });
+    if (!m.getLayer('overlay-track-line')) m.addLayer({
+      id: 'overlay-track-line', type: 'line', source: 'overlay-tracks',
+      paint: {
+        // Slope is opt-in per edge. Features without a finite slope keep the
+        // track color, so missing altitude never becomes a fabricated grade.
+        'line-color': ['case', ['has', 'slope'],
+          ['interpolate', ['linear'], ['get', 'slope'],
+            -20, '#4f86c6', -8, '#77b7e5', 0, '#55c99c', 8, '#f2c14e', 20, '#e46f55'],
+          ['coalesce', ['get', 'color'], accent]],
+        'line-width': 3.5,
+        'line-opacity': ['coalesce', ['get', 'opacity'], 0.8]
+      },
+      layout: { 'line-cap': 'round', 'line-join': 'round' }
+    });
     if (!m.getLayer('pos-acc')) m.addLayer({ id: 'pos-acc', type: 'fill', source: 'pos', paint: { 'fill-color': cssVar('--info', '#5aa7f0'), 'fill-opacity': 0.12 } });
     if (!m.getLayer('gap-line')) m.addLayer({ id: 'gap-line', type: 'line', source: 'gaps', paint: { 'line-color': cssVar('--track-gap', '#93a1ac'), 'line-width': 1.6, 'line-dasharray': [2, 2.4], 'line-opacity': 0.65 } });
     if (!m.getLayer('track-casing')) m.addLayer({ id: 'track-casing', type: 'line', source: 'track', paint: { 'line-color': casing, 'line-width': 7, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
@@ -413,6 +493,9 @@ export class TrackMap {
     }
     if (!m.getLayer('meet-route-case')) m.addLayer({ id: 'meet-route-case', type: 'line', source: 'meet-route', paint: { 'line-color': casing, 'line-width': 8, 'line-opacity': 0.65 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('meet-route-line')) m.addLayer({ id: 'meet-route-line', type: 'line', source: 'meet-route', paint: { 'line-color': cssVar('--info', '#5aa7f0'), 'line-width': 4.5, 'line-opacity': 0.95 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    // Sources are recreated after a style switch; retain the current overlays.
+    this.setHeatmap(this._heatmap);
+    this.setOverlayTracks(this._overlayTracks);
     this._applyMeetData();
     this.setRepairPreview(this.repairOverlay);
   }
@@ -427,11 +510,6 @@ export class TrackMap {
     this.repairOverlay = null;
     this.waypoints = waypoints;
     this._indexMaps.clear();
-    for (const s of segments) {
-      const im = new Map();
-      s.points.forEach((p, i) => im.set(p, i));
-      this._indexMaps.set(s.id, im);
-    }
     this.redraw();
     this.setRepairPreview(null);
   }
@@ -453,7 +531,17 @@ export class TrackMap {
   }
 
   _displayCoords(points) {
-    return points.map((p) => toDisplay(p.lon, p.lat, this.coordSystem));
+    let previousLon = 0;
+    let unwrappedLon = 0;
+    return points.map((point, index) => {
+      if (index) {
+        const next = unwrappedLon + shortestLongitudeDelta(previousLon, point.lon);
+        unwrappedLon = Math.abs(next - point.lon) < 1e-9 ? point.lon : next;
+      } else unwrappedLon = point.lon;
+      previousLon = point.lon;
+      const [lon, lat] = toDisplay(unwrappedLon, point.lat, this.coordSystem);
+      return [Math.round(lon * 1e10) / 1e10, lat];
+    });
   }
 
   setSplitHighlight(parts, focus = false) {
@@ -501,18 +589,13 @@ export class TrackMap {
       const rendered = await renderedPromise;
       if (renderSeq !== this._trackRenderSeq || this.destroyed || !this.map.getSource('track')) return;
       const feats = [];
-      const gapFeats = [];
-      let prevEnd = null;
       for (const seg of rendered) {
         if (!seg.points.length) continue;
         const coords = this._displayCoords(seg.points);
         feats.push({ type: 'Feature', properties: { seg: seg.id }, geometry: { type: 'LineString', coordinates: coords } });
-        const first = coords[0], last = coords[coords.length - 1];
-        if (prevEnd) gapFeats.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [prevEnd, first] } });
-        prevEnd = last;
       }
       this.map.getSource('track')?.setData({ type: 'FeatureCollection', features: feats });
-      this.map.getSource('gaps')?.setData({ type: 'FeatureCollection', features: gapFeats });
+      this.map.getSource('gaps')?.setData({ type: 'FeatureCollection', features: [] });
       this._renderSplitHighlight();
       this._renderWaypoints();
       if (this.editMode) this._scheduleVertices();
@@ -531,6 +614,84 @@ export class TrackMap {
   setWaypoints(waypoints = []) {
     this.waypoints = waypoints;
     this._renderWaypoints();
+  }
+
+  setHeatmap(data, fit = false) {
+    this._heatmap = data || null;
+    const features = (data?.features || []).map((feature) => ({
+      ...feature,
+      geometry: {
+        ...feature.geometry,
+        coordinates: toDisplay(feature.geometry.coordinates[0], feature.geometry.coordinates[1], this.coordSystem)
+      }
+    }));
+    const source = this.map?.getSource('personal-heatmap');
+    if (source) source.setData({ type: 'FeatureCollection', features });
+    else if (this.map && !this.map.isStyleLoaded()) this.map.once('style.load', () => this.setHeatmap(this._heatmap));
+    if (fit && data?.bbox) this.fitWgs84Bounds(data.bbox);
+  }
+
+  showHeatmapPopup(properties, lngLat) {
+    const box = document.createElement('div');
+    box.className = 'map-feature-popup';
+    const title = document.createElement('strong');
+    title.textContent = t('trips.heatmapPopupTitle');
+    const detail = document.createElement('div');
+    detail.textContent = `${t('trips.heatmapPopupTrips', { n: properties?.trips || 0 })} · ${t('trips.heatmapPopupWeight', { n: properties?.weight || 0 })}`;
+    const note = document.createElement('div');
+    note.className = 'small faint';
+    note.textContent = t('trips.heatmapGridNote');
+    box.append(title, detail, note);
+    new maplibregl.Popup({ closeButton: true, maxWidth: '260px' }).setLngLat(lngLat).setDOMContent(box).addTo(this.map);
+  }
+
+  setOverlayTracks(tracks = []) {
+    this._overlayTracks = tracks;
+    const features = [];
+    for (const track of tracks) {
+      if (track.visible === false) continue;
+      for (const segment of track.segments || []) {
+        const points = segment.points || [];
+        if (points.length < 2) continue;
+        const coordinates = this._displayCoords(points);
+        const properties = {
+          tripId: track.id,
+          name: track.name || '',
+          color: track.color || null,
+          opacity: track.opacity ?? 0.8
+        };
+        if (track.slope === true && Array.isArray(segment.slopes)) {
+          // Paint each adjacent pair independently: slope is local to the edge,
+          // and discontinuities between recording segments remain disconnected.
+          for (let i = 1; i < points.length; i++) {
+            const slope = segment.slopes[i - 1];
+            features.push({
+              type: 'Feature',
+              properties: Number.isFinite(slope) ? { ...properties, slope } : properties,
+              geometry: { type: 'LineString', coordinates: [coordinates[i - 1], coordinates[i]] }
+            });
+          }
+        } else {
+          features.push({
+            type: 'Feature', properties,
+            geometry: { type: 'LineString', coordinates }
+          });
+        }
+      }
+    }
+    this.map?.getSource('overlay-tracks')?.setData({ type: 'FeatureCollection', features });
+  }
+
+  fitWgs84Bounds(bbox, padding = 48) {
+    if (!bbox || bbox.length !== 4 || bbox.some((value) => !Number.isFinite(value))) return;
+    const [west, south, east, north] = bbox;
+    const [minLon, minLat] = toDisplay(west, south, this.coordSystem);
+    const [maxLon, maxLat] = toDisplay(east < west ? east + 360 : east, north, this.coordSystem);
+    this.follow = false;
+    this.map?.fitBounds([[minLon, minLat], [maxLon, maxLat]], {
+      padding: { top: padding, right: padding, bottom: padding + this._viewportBottom, left: padding },
+      duration: 600, maxZoom: 17
+    });
   }
 
   setCityMarkers(cities = []) {
@@ -593,12 +754,20 @@ export class TrackMap {
 
   // ---------- live recording ----------
   startLive() {
+    // A simplification started for the previous track must never paint over the live one.
+    this._trackRenderSeq++;
+    this._trackDataVersion++;
+    this._trackRenderKey = '';
+    this._trackRenderPromise = null;
     this.liveMode = true;
     this._liveZoomed = false;
     this._clearLiveFlush();
     this._liveDirty = false;
     this.segments = [];
+    this.splitParts = [];
+    this.repairOverlay = null;
     this.waypoints = [];
+    this._indexMaps.clear();
     this.map.getSource('live')?.setData({ type: 'FeatureCollection', features: [] });
     this.map.getSource('track')?.setData({ type: 'FeatureCollection', features: [] });
     this.map.getSource('gaps')?.setData({ type: 'FeatureCollection', features: [] });
@@ -606,6 +775,8 @@ export class TrackMap {
     for (const [, mk] of this.wpMarkers) mk.remove();
     this.wpMarkers.clear();
     this._clearVertices();
+    this._renderSplitHighlight();
+    this.setRepairPreview(null);
   }
 
   appendLive(point, segmentId) {
@@ -620,11 +791,18 @@ export class TrackMap {
     this._liveDirty = true;
     this._scheduleLiveFlush();
     this.updatePosition(point.lat, point.lon, point.acc, point.heading);
-    if (this.follow) {
-      const opts: any = { center: coord, duration: 400 };
-      if (!this._liveZoomed) { opts.zoom = Math.max(this.map.getZoom(), 15); this._liveZoomed = true; }
-      this.map.easeTo(opts);
+    this._easeFollow(coord, true);
+  }
+
+  _easeFollow(center, live = false) {
+    if (!this.follow || !this.map) return;
+    const opts: any = { center, duration: 400 };
+    if (live && !this._liveZoomed) {
+      opts.zoom = Math.max(this.map.getZoom(), 15);
+      this._liveZoomed = true;
     }
+    if (this.headingUp) opts.bearing = this._lastHeading ?? this.map.getBearing?.() ?? 0;
+    this.map.easeTo(opts);
   }
 
   _appendLiveCoordinate(feat, coord) {
@@ -667,6 +845,7 @@ export class TrackMap {
 
   updatePosition(lat, lon, acc, heading) {
     const [dLon, dLat] = toDisplay(lon, lat, this.coordSystem);
+    if (Number.isFinite(heading)) this._lastHeading = ((heading % 360) + 360) % 360;
     if (!this.posMarker) {
       const node = document.createElement('div');
       node.className = 'pos-marker';
@@ -699,6 +878,8 @@ export class TrackMap {
   }
 
   clearPosition() {
+    this.headingUp = false;
+    this._lastHeading = null;
     if (this.posMarker) {
       const node = this.posMarker.getElement();
       node.classList.remove('meet-self', 'meet-self-stale', 'meet-self-weak', 'meet-self-paused');
@@ -965,11 +1146,19 @@ export class TrackMap {
 
   // ---------- editing ----------
   setEditMode(on) {
+    if (on) this.setElevationPickMode(false);
     this.editMode = on;
     this._renderWaypoints();
     if (on) this._scheduleVertices();
     else this._clearVertices();
     this.map.getCanvas().style.cursor = on ? 'crosshair' : '';
+  }
+
+  setElevationPickMode(on) {
+    this.elevationPickMode = !!on;
+    if (on && this.editMode) this.setEditMode(false);
+    const canvas = this.map?.getCanvas?.();
+    if (canvas) canvas.style.cursor = this.elevationPickMode ? 'crosshair' : '';
   }
 
   _scheduleVertices() {
@@ -989,21 +1178,28 @@ export class TrackMap {
     const zoom = this.map.getZoom();
     const tol = Math.max(2, 360 / Math.pow(2, zoom) * 111320 / 256 * 3);
     let count = 0;
+    this._indexMaps.clear();
     for (const seg of this.segments) {
       if (count > 260) break;
-      const visible = seg.points.filter((p) =>
-        p.lon >= bounds.getWest() - 0.01 && p.lon <= bounds.getEast() + 0.01 &&
-        p.lat >= bounds.getSouth() - 0.01 && p.lat <= bounds.getNorth() + 0.01);
+      const visible: Array<{ point: any; index: number }> = [];
+      for (let index = 0; index < seg.points.length; index++) {
+        const point = seg.points[index];
+        if (point.lon >= bounds.getWest() - 0.01 && point.lon <= bounds.getEast() + 0.01
+          && point.lat >= bounds.getSouth() - 0.01 && point.lat <= bounds.getNorth() + 0.01) {
+          visible.push({ point, index });
+        }
+      }
       if (!visible.length) continue;
-      const shown = visible.length > 120 ? simplify(visible, tol) : visible;
-      const idxMap = this._indexMaps.get(seg.id);
+      const idxMap = new Map(visible.map((entry) => [entry.point, entry.index]));
+      this._indexMaps.set(seg.id, idxMap);
+      const shown = visible.length > 120 ? simplify(visible.map((entry) => entry.point), tol) : visible.map((entry) => entry.point);
       shown.forEach((p, si) => {
         if (count > 260) return;
         const [lon, lat] = toDisplay(p.lon, p.lat, this.coordSystem);
         const node = document.createElement('div');
         node.className = 'edit-vertex';
         const mk = new maplibregl.Marker({ element: node, draggable: true }).setLngLat([lon, lat]).addTo(this.map);
-        const origIdx = idxMap?.get(p) ?? seg.points.indexOf(p);
+        const origIdx = idxMap.get(p) ?? seg.points.indexOf(p);
         mk.on('dragend', () => {
           const ll = mk.getLngLat();
           const [wLon, wLat] = fromDisplay(ll.lng, ll.lat, this.coordSystem);
@@ -1037,30 +1233,19 @@ export class TrackMap {
 
   // ---------- navigation ----------
   fitTrack(padding = 60) {
-    const pts = this.segments.flatMap((s) => s.points);
-    if (!pts.length) return;
-    let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
-    for (const p of pts) {
-      const [lon, lat] = toDisplay(p.lon, p.lat, this.coordSystem);
-      if (lon < minLon) minLon = lon;
-      if (lon > maxLon) maxLon = lon;
-      if (lat < minLat) minLat = lat;
-      if (lat > maxLat) maxLat = lat;
-    }
-    this.follow = false;
-    this.map.fitBounds([[minLon, minLat], [maxLon, maxLat]], {
-      padding: { top: padding, right: padding, bottom: padding + this._viewportBottom, left: padding },
-      duration: 600, maxZoom: 17
-    });
+    const bbox = wgs84TrackBounds(this.segments);
+    if (bbox) this.fitWgs84Bounds(bbox, padding);
   }
 
   setFollow(on) {
     this.follow = on;
-    if (on && this.posMarker) {
-      const opts: any = { center: this.posMarker.getLngLat(), duration: 400 };
-      if (this.liveMode) opts.zoom = Math.max(this.map.getZoom(), 15);
-      this.map.easeTo(opts);
-    }
+    if (on && this.posMarker) this._easeFollow(this.posMarker.getLngLat(), this.liveMode);
+  }
+
+  setHeadingUp(on) {
+    this.headingUp = !!on;
+    if (!this.headingUp && this.map) this.map.rotateTo(0, { duration: 300 });
+    else if (this.follow && this.posMarker) this._easeFollow(this.posMarker.getLngLat(), this.liveMode);
   }
 
   flyTo(lat, lon, zoom = 15) {

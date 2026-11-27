@@ -6,6 +6,9 @@ import { wgs84ToGcj02, gcj02ToWgs84 } from './coords';
 import { previewTrackCleanup } from './gpsQuality';
 import { buildTrackRepairPreview } from './trackRepair';
 import { buildGPX } from './gpx';
+import { buildHeatmap } from './heatmap';
+import { compareTracks } from './trackComparison';
+import { prepareWorkerPayload } from './workerPayload';
 
 let worker = null;
 let seq = 0;
@@ -91,6 +94,8 @@ function fallback(type, payload) {
     case 'cleanup-preview': return previewTrackCleanup(payload.segments, payload.activity, payload.opts);
     case 'repair-preview': return buildTrackRepairPreview(payload.segments, payload.activity, payload.opts);
     case 'gpx': return buildGPX(payload.full);
+    case 'heatmap': return buildHeatmap(payload.trips, payload.opts);
+    case 'track-comparison': return compareTracks(payload.a, payload.b, payload.opts);
     default: throw new Error('unknown task');
   }
 }
@@ -129,7 +134,9 @@ export function runTask(type, payload, { signal, timeoutMs = 15000 }: { signal?:
     signal?.addEventListener('abort', cancel, { once: true });
     if (timeoutMs > 0) task.timer = setTimeout(() => discardWorker(instance), timeoutMs);
     try {
-      instance.postMessage({ id, type, payload });
+      const { transferList, ...wire } = prepareWorkerPayload(type, payload);
+      if (transferList.length) instance.postMessage({ id, type, ...wire }, transferList);
+      else instance.postMessage({ id, type, ...wire });
     } catch {
       if (!discardWorker(instance) && pending.delete(id)) {
         settle(task);
@@ -146,10 +153,10 @@ function trackTaskTimeout(segments) {
 
 export const computeStatsAsync = (segments, opts) => runTask('stats', { segments, opts }, { timeoutMs: trackTaskTimeout(segments) });
 export const computeStatsSummaryAsync = (segments, opts = {}) => computeStatsAsync(segments, { ...opts, series: false });
-export const computeDistanceSplitsAsync = (segments, intervalM = 1000, opts = {}) =>
-  runTask('splits', { segments, intervalM, opts }, { timeoutMs: trackTaskTimeout(segments) });
-export const simplifyAsync = (points, tolerance) =>
-  runTask('simplify', { points, tolerance }, { timeoutMs: points.length > 100_000 ? 120_000 : 15_000 });
+export const computeDistanceSplitsAsync = (segments, intervalM = 1000, opts = {}, options: { signal?: AbortSignal } = {}) =>
+  runTask('splits', { segments, intervalM, opts }, { timeoutMs: trackTaskTimeout(segments), ...options });
+export const simplifyAsync = (points, tolerance, options: { signal?: AbortSignal; timeoutMs?: number } = {}) =>
+  runTask('simplify', { points, tolerance }, { timeoutMs: points.length > 100_000 ? 120_000 : 15_000, ...options });
 export const transformAsync = (points, dir) => runTask('transform', { points, dir });
 export const previewTrackCleanupAsync = (segments, activity = 'hike', opts = {}, options: { signal?: AbortSignal } = {}) =>
   runTask('cleanup-preview', { segments, activity, opts }, { timeoutMs: trackTaskTimeout(segments), ...options });
@@ -157,3 +164,10 @@ export const previewTrackRepairAsync = (segments, activity = 'hike', opts = {}, 
   runTask('repair-preview', { segments, activity, opts }, { timeoutMs: trackTaskTimeout(segments), ...options });
 export const buildGPXAsync = (full, options: { signal?: AbortSignal; timeoutMs?: number } = {}) =>
   runTask('gpx', { full }, { timeoutMs: 180_000, ...options });
+export const buildHeatmapAsync = (trips, opts = {}, options: { signal?: AbortSignal } = {}) =>
+  runTask('heatmap', { trips, opts }, { timeoutMs: 60_000, ...options });
+export const compareTracksAsync = (a, b, opts: { sampleSpacingM?: number; maxSamples?: number; signal?: AbortSignal } = {}, options: { signal?: AbortSignal } = {}) => {
+  const { signal: optionSignal, ...comparisonOpts } = opts;
+  const signal = options.signal || optionSignal;
+  return runTask('track-comparison', { a, b, opts: comparisonOpts }, { timeoutMs: 120_000, ...options, signal });
+};

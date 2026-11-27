@@ -183,7 +183,7 @@ test(`browser full chain imports ${POINTS.toLocaleString('en-US')} deterministic
       }, { timeout: MAP_BUDGET_MS, message: 'record map must retain every source point and publish a simplified line' }).not.toBeNull();
       return readRecordMapSummary(page);
     });
-    expect(mapSummary).toMatchObject({ rawPointCount: POINTS, rawSegmentCount: 1, indexEntries: POINTS, renderedFeatureCount: 1 });
+    expect(mapSummary).toMatchObject({ rawPointCount: POINTS, rawSegmentCount: 1, indexEntries: 0, renderedFeatureCount: 1 });
     expect(mapSummary.renderedCoordinateCount).toBeGreaterThan(1);
     expect(mapSummary.renderedCoordinateCount).toBeLessThanOrEqual(POINTS);
     report.map = mapSummary;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { applyPrivacy } from '../src/core/privacy';
+import { applyPrivacy, countPrivacyCrops } from '../src/core/privacy';
+import { haversine } from '../src/core/geo';
 
 function buildTrip() {
   const points = [
@@ -34,12 +35,116 @@ describe('privacy cropping', () => {
     }
   });
 
+  it('clips edges that cross a privacy circle between two retained fixes', () => {
+    const center = { lat: 30, lon: 120 };
+    const crossing = applyPrivacy({
+      trip: {}, waypoints: [],
+      segments: [{ id: 'crossing', points: [
+        { lat: 30, lon: 119.99 }, { lat: 30, lon: 120.01 }
+      ] }]
+    }, { radius: 300, start: center, end: center });
+    expect(crossing.segments).toHaveLength(2);
+    for (const segment of crossing.segments) {
+      for (const point of segment.points) {
+        expect(haversine(point.lat, point.lon, center.lat, center.lon)).toBeGreaterThanOrEqual(300);
+      }
+    }
+
+    const clipped = applyPrivacy({
+      trip: {}, waypoints: [],
+      segments: [{ id: 'clipped', points: [
+        { lat: 30, lon: 120 }, { lat: 30, lon: 120.01 }
+      ] }]
+    }, { radius: 300, start: center, end: { lat: 30, lon: 120.02 } });
+    expect(clipped.croppedPoints).toBe(1);
+    expect(clipped.segments).toHaveLength(1);
+    expect(clipped.segments[0].points[0].lon).toBeGreaterThan(120.003);
+    expect(clipped.segments[0].points[0].lon).toBeLessThan(120.0033);
+  });
+
+  it('clips long high-latitude edges that an equirectangular projection misses', () => {
+    const center = { lat: 80.19197782553502, lon: 97.9611555144727 };
+    const result = applyPrivacy({
+      trip: {}, waypoints: [],
+      segments: [{ id: 'polar', points: [
+        { lat: 77.17374670184509, lon: 69.90796461709843 },
+        { lat: 81.32148365170319, lon: 98.85706157293203 }
+      ] }]
+    }, { radius: 85_114.1537180286, start: center, end: center });
+    expect(result.segments.length).toBeGreaterThanOrEqual(2);
+    for (const segment of result.segments) {
+      expect(segment.points.length).toBeGreaterThanOrEqual(2);
+      for (const point of segment.points) {
+        expect(haversine(point.lat, point.lon, center.lat, center.lon)).toBeGreaterThanOrEqual(85_114.1537180286 - 0.01);
+      }
+    }
+  });
+
+  it('preserves an explicit end anchor instead of replacing it with the last fix', () => {
+    const start = { lat: 0, lon: 0 };
+    const end = { lat: 0, lon: 0.01 };
+    const result = applyPrivacy({
+      trip: {}, waypoints: [],
+      segments: [{ id: 'anchors', points: [0, 0.005, 0.01, 0.015, 0.02].map((lon) => ({ lat: 0, lon })) }]
+    }, { radius: 300, start, end });
+    const retained = result.segments.flatMap((segment) => segment.points);
+    expect(retained.length).toBeGreaterThanOrEqual(2);
+    expect(retained.every((point) => haversine(point.lat, point.lon, end.lat, end.lon) >= 300 - 0.01)).toBe(true);
+    expect(retained.some((point) => point.lon > 0.013)).toBe(true);
+  });
+
   it('keeps every point when the radius is zero', () => {
     const result = applyPrivacy(buildTrip(), { radius: 0, hideSensitive: false });
     expect(result.croppedPoints).toBe(0);
     expect(result.croppedWaypoints).toBe(0);
     expect(result.segments.flatMap((s) => s.points)).toHaveLength(6);
     expect(result.waypoints).toHaveLength(4);
+  });
+
+  it('disables all circle cropping at radius zero even with explicit anchors', () => {
+    const full = buildTrip();
+    const options = { radius: 0, hideSensitive: false, start: full.segments[0].points[0], end: full.segments[0].points.at(-1) };
+    const result = applyPrivacy(full, options);
+    expect(result.croppedPoints).toBe(0);
+    expect(result.croppedWaypoints).toBe(0);
+    expect(result.waypoints).toHaveLength(4);
+    expect(result.segments.flatMap((segment) => segment.points)).toHaveLength(6);
+    expect(countPrivacyCrops(full, options)).toEqual({ croppedPoints: 0, croppedWaypoints: 0 });
+  });
+
+  it('reports crop counts without constructing clipped segments', () => {
+    const full = buildTrip();
+    const result = applyPrivacy(full, { radius: 150, hideSensitive: true });
+    expect(countPrivacyCrops(full, { radius: 150, hideSensitive: true })).toEqual({
+      croppedPoints: result.croppedPoints,
+      croppedWaypoints: result.croppedWaypoints
+    });
+  });
+
+  it('fails closed when positive-radius anchors are present but invalid', () => {
+    const full = buildTrip();
+    const options = {
+      radius: 300,
+      start: { lat: Number.NaN, lon: 120 },
+      end: { lat: 30, lon: 181 }
+    };
+    const result = applyPrivacy(full, options);
+    expect(result.segments).toEqual([]);
+    expect(result.waypoints).toEqual([]);
+    expect(result.croppedPoints).toBe(6);
+    expect(result.croppedWaypoints).toBe(4);
+    expect(countPrivacyCrops(full, options)).toEqual({
+      croppedPoints: result.croppedPoints,
+      croppedWaypoints: result.croppedWaypoints
+    });
+
+    const partial = applyPrivacy(full, { radius: 300, start: options.start });
+    expect(partial.segments).toEqual([]);
+    expect(partial.waypoints).toEqual([]);
+    expect(countPrivacyCrops(full, { radius: 300, start: options.start })).toEqual({
+      croppedPoints: partial.croppedPoints,
+      croppedWaypoints: partial.croppedWaypoints
+    });
   });
 
   it('handles an empty track', () => {

@@ -127,6 +127,22 @@ describe('trip loading', () => {
     expect(mocks.db.media.where).not.toHaveBeenCalled();
   });
 
+  it('keeps transaction-scoped track reads active without cooperative timers', async () => {
+    mocks.trips.set('trip-1', { id: 'trip-1' });
+    mocks.segments.push({ id: 'seg-1', tripId: 'trip-1', index: 0 });
+    for (let seq = 0; seq < 17; seq++) {
+      mocks.chunks.push({ id: `chunk-${seq}`, tripId: 'trip-1', segmentId: 'seg-1', seq, points: [{ t: seq }] });
+    }
+    const timer = vi.spyOn(globalThis, 'setTimeout');
+    try {
+      const track = await loadTripTrack('trip-1', null, { cooperative: false });
+      expect(track?.segments[0].points).toHaveLength(17);
+      expect(timer).not.toHaveBeenCalled();
+    } finally {
+      timer.mockRestore();
+    }
+  });
+
   it('keeps full loading available for callers that need waypoints and media', async () => {
     mocks.trips.set('trip-1', { id: 'trip-1' });
 
@@ -148,6 +164,34 @@ describe('trip loading', () => {
     expect(full?.waypoints).toEqual([{ id: 'wp-1', tripId: 'trip-1' }]);
     expect(full?.media).toEqual([{ id: 'media-1', tripId: 'trip-1' }]);
     expect(mocks.db.trackChunks.where).not.toHaveBeenCalled();
+  });
+
+  it('reuses a track snapshot after metadata-only changes when explicitly confirmed', async () => {
+    mocks.trips.set('trip-1', { id: 'trip-1', updatedAt: 6, name: 'Renamed' });
+    const segments = [{ id: 'seg-1', tripId: 'trip-1', index: 0, points: [{ lat: 30, lon: 120 }] }];
+    const trackSnapshot = { trip: { id: 'trip-1', updatedAt: 5 }, segments };
+
+    const full = await loadTripFull('trip-1', { trackSnapshot, trackUnchanged: true });
+
+    expect(full?.trip.name).toBe('Renamed');
+    expect(full?.segments).toBe(segments);
+    expect(mocks.db.trackChunks.where).not.toHaveBeenCalled();
+  });
+
+  it('reloads recording geometry even when a metadata-only refresh is requested', async () => {
+    mocks.trips.set('trip-1', { id: 'trip-1', status: 'recording', updatedAt: 6, name: 'Renamed while recording' });
+    mocks.segments.push({ id: 'seg-1', tripId: 'trip-1', index: 0 });
+    mocks.chunks.push({ id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0, points: [{ lat: 31, lon: 121 }] });
+    const trackSnapshot = {
+      trip: { id: 'trip-1', status: 'recording', updatedAt: 5 },
+      segments: [{ id: 'seg-1', tripId: 'trip-1', index: 0, points: [{ lat: 30, lon: 120 }] }]
+    };
+
+    const full = await loadTripFull('trip-1', { trackSnapshot, trackUnchanged: true });
+
+    expect(full?.trip.name).toBe('Renamed while recording');
+    expect(full?.segments[0].points).toEqual([{ lat: 31, lon: 121 }]);
+    expect(mocks.db.trackChunks.where).toHaveBeenCalledWith('[segmentId+seq]');
   });
 
   it('reloads track chunks when the cached snapshot version is stale', async () => {

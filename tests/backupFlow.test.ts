@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { version as appVersion } from '../package.json';
 
 const mocks = vi.hoisted(() => ({
   exportBackup: vi.fn(),
@@ -66,7 +67,7 @@ describe('backup flow history', () => {
     expect(mocks.appendBackupHistory).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'export', status: 'exported', createdAt: Date.parse('2026-11-26T10:00:00.000Z'),
       filename: 'roametch-backup-20261126.trip', bytes: 6, encrypted: false,
-      backupFormat: 'localtrace-backup', tripSchema: 7, appVersion: '3.6.0',
+      backupFormat: 'localtrace-backup', tripSchema: 7, appVersion,
       trips: 2, segments: 3, chunks: 4, waypoints: 5, media: 6, source: 'manual'
     }));
     expect(mocks.set).toHaveBeenCalledWith('lastBackupAt', Date.parse('2026-11-26T10:00:00.000Z'));

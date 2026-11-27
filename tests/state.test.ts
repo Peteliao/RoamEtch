@@ -172,6 +172,22 @@ describe('active trip snapshots', () => {
     expect(mocks.emit).toHaveBeenCalledWith('trip:active', expect.objectContaining({ trip: expect.objectContaining({ name: 'After' }) }));
   });
 
+  it('reuses the active track for a metadata-only refresh', async () => {
+    appState.activeTripId = 'a';
+    const previous = full('a', 'Before');
+    appState.activeTripFull = previous;
+    const next = full('a', 'After');
+    next.trip.updatedAt = 2;
+    mocks.loadTripFull.mockResolvedValueOnce(next);
+
+    await refreshActiveTrip('a', { recalc: false, metadataOnly: true });
+
+    expect(mocks.loadTripFull).toHaveBeenCalledWith('a', {
+      trackSnapshot: previous,
+      trackUnchanged: true
+    });
+  });
+
   it('drops stale in-memory statistics before publishing a changed activity', async () => {
     appState.activeTripId = 'a';
     appState.activeTripFull = full('a', 'Before', 'drive');

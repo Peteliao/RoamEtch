@@ -151,9 +151,13 @@ export async function bridgeTrackGapsForExport(full: any, cropped: any, privacy:
     const to = full.segments[i + 1]?.points?.[0];
     if (from && to) boundaries.push({ from, to });
   }
+  const sameEndpoint = (a, b) => a === b || (!!a && !!b
+    && Math.abs(a.lat - b.lat) < 1e-12
+    && Math.abs(((a.lon - b.lon + 540) % 360 + 360) % 360 - 180) < 1e-12
+    && (a.t == null || b.t == null || a.t === b.t));
   const segments = cropped.segments.map((seg) => ({ ...seg, points: [...seg.points] }));
   const gaps = findTrackGaps(segments).filter((gap) =>
-    boundaries.some(({ from, to }) => gap.from === from && gap.to === to)
+    boundaries.some(({ from, to }) => sameEndpoint(gap.from, from) && sameEndpoint(gap.to, to))
   );
   let bridged = 0, failed = 0, points = 0;
   for (const gap of gaps) {
@@ -233,7 +237,7 @@ export async function repairTrackGaps(tripId: string, {
         const trip = await db.trips.get(tripId);
         throwIfAborted(operationSignal);
         if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
-        const current = await loadTripTrack(tripId);
+        const current = await loadTripTrack(tripId, null, { cooperative: false });
         throwIfAborted(operationSignal);
         if (!trackMatches(current, guard.segments, guard.allowAdditional)) throw new Error('track-changed');
         for (const edit of edits) {

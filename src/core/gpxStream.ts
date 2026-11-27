@@ -25,7 +25,7 @@ export type GPXStreamEvent =
   | { type: 'points'; index: number; points: GPXStreamPoint[]; source: GPXSegmentSource }
   | { type: 'segment-end'; index: number; source: GPXSegmentSource }
   | { type: 'waypoints'; waypoints: GPXStreamWaypoint[] }
-  | { type: 'done'; name: string; hasTime: boolean; segments: number; waypoints: number };
+  | { type: 'done'; name: string; hasTime: boolean; startTime: number | null; segments: number; waypoints: number };
 
 export type GPXStreamInput = Blob | AsyncIterable<Uint8Array>;
 
@@ -132,6 +132,7 @@ async function* xmlTokens(input: GPXStreamInput, onRead?: (loaded: number) => vo
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
   let final = false;
+  let tokenCount = 0;
   const readMore = async () => {
     const next = await chunks.next();
     if (next.done) {
@@ -143,6 +144,7 @@ async function* xmlTokens(input: GPXStreamInput, onRead?: (loaded: number) => vo
   };
   try {
     while (true) {
+      if ((++tokenCount & 0x1fff) === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
       if (!buffer) {
         if (final) break;
         await readMore();
@@ -338,6 +340,8 @@ export async function streamGPX(
   let trackName = '';
   let routeName = '';
   let hasTime = false;
+  let startTime: number | null = null;
+  let trackStarted = false;
   let segmentCount = 0;
   let waypointCount = 0;
   let activeSegment: { index: number; batch: GPXStreamPoint[]; source: GPXSegmentSource } | null = null;
@@ -350,12 +354,20 @@ export async function streamGPX(
     await onEvent(event);
   };
   const beginSegment = async (source: GPXSegmentSource) => {
+    if (source === 'track' && !trackStarted) {
+      trackStarted = true;
+      hasTime = false;
+      startTime = null;
+    }
     activeSegment = { index: segmentCount++, batch: [], source };
     await emit({ type: 'segment-start', index: activeSegment.index, source });
   };
   const queuePoint = async (value: GPXStreamPoint | null) => {
     if (!value || !activeSegment) return;
-    if (value.t != null) hasTime = true;
+    if (value.t != null) {
+      hasTime = true;
+      startTime = startTime == null ? value.t : Math.min(startTime, value.t);
+    }
     activeSegment.batch.push(value);
     if (activeSegment.batch.length >= BATCH_SIZE) {
       await emit({ type: 'points', index: activeSegment.index, points: activeSegment.batch, source: activeSegment.source });
@@ -512,7 +524,7 @@ export async function streamGPX(
   if (waypointBatch.length) await emit({ type: 'waypoints', waypoints: waypointBatch });
   if (!segmentCount && !waypointCount) throw new Error('no track data');
   const name = metadataName || trackName || routeName;
-  await emit({ type: 'done', name, hasTime, segments: segmentCount, waypoints: waypointCount });
+  await emit({ type: 'done', name, hasTime, startTime, segments: segmentCount, waypoints: waypointCount });
   onProgress?.(total, total);
-  return { name, hasTime, segments: segmentCount, waypoints: waypointCount, loaded: total };
+  return { name, hasTime, startTime, segments: segmentCount, waypoints: waypointCount, loaded: total };
 }

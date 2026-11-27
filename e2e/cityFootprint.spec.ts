@@ -48,6 +48,7 @@ test('city footprint asks for consent, lights the map and reaches the share imag
   await expect(card.locator('.footprint-map')).toBeVisible();
   await expect(card.locator('.city-footprint-marker')).toHaveCount(0);
   await expect(card).not.toContainText('null');
+  await card.getByRole('button', { name: '城市足迹', exact: true }).click();
   const beforeConsent = geocodeRequests;
 
   await card.getByRole('button', { name: '点亮城市', exact: true }).click();

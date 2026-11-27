@@ -57,6 +57,14 @@ describe('streaming GPX parser', () => {
     expect(points.points[0]).toMatchObject({ lat: 1, lon: 2, alt: 0 });
   });
 
+  it('reports the earliest valid track timestamp across out-of-order segments', async () => {
+    const { summary } = await collect(`<gpx><trk>
+      <trkseg><trkpt lat="1" lon="2"><time>2024-01-01T00:10:00Z</time></trkpt></trkseg>
+      <trkseg><trkpt lat="2" lon="3"><time>invalid</time></trkpt><trkpt lat="3" lon="4"><time>2023-12-31T23:55:00Z</time></trkpt></trkseg>
+    </trk></gpx>`);
+    expect(summary.startTime).toBe(Date.parse('2023-12-31T23:55:00Z'));
+  });
+
   it('imports route-only documents and implicit track points', async () => {
     const route = await collect('<gpx><rte><name>R</name><rtept lat="1" lon="2"/><rtept lat="2" lon="3"/></rte></gpx>');
     expect(route.summary).toMatchObject({ name: 'R', segments: 1, hasTime: false });
@@ -114,6 +122,18 @@ describe('streaming GPX parser', () => {
     expect(batches.map((event) => event.source)).toEqual(['route', 'track']);
     expect(batches.flatMap((event) => event.points)).toHaveLength(2);
     await expect(streamGPX((async function* () { yield bytes; })(), () => {})).rejects.toThrow('single-pass');
+  });
+
+  it('resets route timestamps when a later track takes precedence', async () => {
+    const bytes = new TextEncoder().encode(`<gpx>
+      <rte><rtept lat="1" lon="2"><time>2020-01-01T00:00:00Z</time></rtept></rte>
+      <trk><trkpt lat="3" lon="4"><time>2024-01-01T00:00:00Z</time></trkpt><trkpt lat="3.1" lon="4.1"><time>2023-12-31T23:00:00Z</time></trkpt></trk>
+    </gpx>`);
+    const input = (async function* () {
+      for (let offset = 0; offset < bytes.length; offset += 5) yield bytes.subarray(offset, offset + 5);
+    })();
+    const summary = await streamGPX(input, () => {}, { singlePass: true });
+    expect(summary.startTime).toBe(Date.parse('2023-12-31T23:00:00Z'));
   });
 
   it('bounds oversized XML tokens and total streamed input', async () => {

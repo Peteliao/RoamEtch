@@ -46,7 +46,11 @@ describe('city footprint resolution', () => {
     }
     const cached = JSON.parse(localStorage.getItem('roametch.cities.v1') || '{}');
     for (const entry of Object.values(cached) as any[]) {
-      expect(Object.keys(entry).sort()).toEqual(['lat', 'lon', 'name', 'ts']);
+      expect(Object.keys(entry).sort()).toEqual(['admin', 'countryCode', 'lat', 'lon', 'name', 'ts']);
+      expect(entry.lat).toBeCloseTo(Math.round(entry.lat * 100) / 100);
+      expect(entry.lon).toBeCloseTo(Math.round(entry.lon * 100) / 100);
+      expect(entry.name).toBe('杭州');
+      expect(entry.ts).toEqual(expect.any(Number));
     }
   });
 

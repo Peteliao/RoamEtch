@@ -37,7 +37,7 @@ export async function cleanGpsTrack(tripId, { activity, preview = null, expected
         const trip = await db.trips.get(tripId);
         throwIfAborted(operationSignal);
         if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
-        if (!trackMatches(await loadTripTrack(tripId), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
+        if (!trackMatches(await loadTripTrack(tripId, null, { cooperative: false }), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
         throwIfAborted(operationSignal);
         if (useAfter) await saveTrackSnapshotInTx(tripId, full.segments);
         for (const edit of edits) {
@@ -100,7 +100,7 @@ export async function applyTrackRepair(tripId, { activity, preview, expectedUpda
         const trip = await db.trips.get(tripId);
         throwIfAborted(operationSignal);
         if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
-        if (!trackMatches(await loadTripTrack(tripId), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
+        if (!trackMatches(await loadTripTrack(tripId, null, { cooperative: false }), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
         throwIfAborted(operationSignal);
         if (useAfter && edits.length) await saveTrackSnapshotInTx(tripId, full.segments);
         for (const edit of edits) {
@@ -174,7 +174,7 @@ export async function restoreTrackRepairVersion(tripId, versionId, { expectedUpd
         const trip = await db.trips.get(tripId);
         throwIfAborted(operationSignal);
         if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
-        if (!trackMatches(await loadTripTrack(tripId), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
+        if (!trackMatches(await loadTripTrack(tripId, null, { cooperative: false }), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
         for (const edit of edits) {
           throwIfAborted(operationSignal);
           await replaceSegmentPointsInTx(edit.segmentId, tripId, useVersion ? edit.after : edit.before);
@@ -262,7 +262,7 @@ export async function restoreGpsTrack(tripId, { expectedUpdatedAt = null, signal
         const trip = await db.trips.get(tripId);
         throwIfAborted(operationSignal);
         if (!trip || (guard.expectedUpdatedAt != null && trip.updatedAt !== guard.expectedUpdatedAt)) throw new Error('track-changed');
-        if (!trackMatches(await loadTripTrack(tripId), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
+        if (!trackMatches(await loadTripTrack(tripId, null, { cooperative: false }), guard.segments, guard.allowAdditional)) throw new Error('track-changed');
         if (!sameSnapshots(snapshot, await loadTrackSnapshot(tripId))) throw new Error('track-changed');
         throwIfAborted(operationSignal);
         for (const edit of edits) {

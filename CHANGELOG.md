@@ -4,6 +4,75 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.7.0] - 2026-11-27
+
+### Added
+
+- Added combined advanced trip filters for inclusive local dates, distance and
+  ascent ranges in the selected unit, photo presence, point count, recording-time
+  completeness, place, and country. The cancellable IndexedDB index reads waypoint
+  summaries without loading photo blobs.
+- Added all-history and per-year activity heatmaps with distance-weighted sampling,
+  global privacy circles applied before aggregation, Worker calculation, and explicit
+  recording-segment boundaries. City identities now retain country code and
+  administrative area to avoid merging same-named cities across countries.
+- Added an annual activity report with monthly distance, activity trip share, active
+  days, current/longest streaks, weekly highlights, and personal 5 km / 10 km records
+  ranked separately by activity and moving time. Record details expose elapsed and
+  moving time, cumulative source range, split/part provenance, and boundary
+  interpolation without stitching across trips or recording gaps.
+- Added professional split metrics: endpoint altitude, continuous net elevation,
+  average slope, stopped and break time, speed/pace variation, and thresholded climb
+  efficiency. Split rows, charts, and the analysis map share one guarded selection.
+- Added local two-track comparison with Worker calculation, forward/reverse geometric
+  alignment, mean/P95 deviation, matched coverage, distance ratio, GPS quality,
+  sampling limits, and clickable worst-deviation locations.
+- Added multi-track map tools with on-demand loading, visibility/color/opacity controls,
+  measured-slope coloring, fit-all, WGS-84/GCJ-02 coordinate lookup, and explicit
+  single-point elevation-service disclosure. Layer preferences are stored locally
+  without retaining track geometry.
+- Enhanced rewalk navigation with remaining-time estimates and speed sources,
+  lookahead turn prompts, persistent off-route timing, segment-safe projection, and
+  optional heading-up following that stops when the map is manually moved.
+- Added complete Simplified Chinese and English copy for the new workflows.
+
+### Changed
+
+- Large-track Worker messages now use transferable columnar typed arrays instead of
+  cloning object graphs. GPX streaming yields cooperatively, IndexedDB track reads
+  page through chunks, and geometry-only views no longer load photo blobs.
+- Export summaries, thumbnail hydration, map warming, and HTML size estimates use
+  bounded preview samples; formal exports retain complete track precision and privacy
+  clipping. Map edit indexes are built only for visible vertices.
+- The million-point Chromium import → storage → Worker → map → edit → export → cold
+  start regression now meets its original 10 s long-task and 12 s frame-gap budgets.
+  This remains synthetic desktop-browser evidence, not physical-device soak evidence.
+
+### Fixed
+
+- Annual reports now attribute a cross-year personal record to the local year in
+  which the effort actually starts, and keep successful records when one track fails
+  or is missing so the affected year/activity can be retried later. The report no
+  longer renders a literal `null` placeholder or collapses monthly bars.
+- Privacy clipping treats a zero radius as “no circle cropping” even when explicit
+  start/end anchors are supplied, and fails closed when a positive-radius anchor is
+  invalid so uncropped geometry can never leak through an export.
+- Map tools restore and persist the chosen overlay order, and support picking a
+  WGS-84 coordinate directly on the map without automatically sending it to an
+  elevation service.
+- Re-walk turn and waypoint announcements, annual report/share, comparison, filter,
+  and map-tool copy now use complete Simplified Chinese and English keys with filled
+  placeholders instead of raw key names or empty `{{...}}` tokens.
+- Longitude interpolation in distance splits and personal records is antimeridian
+  aware, so efforts crossing ±180° no longer gain false distance or false records.
+
+### Not included
+
+- Managed offline map packages, a dedicated persisted Route domain/library, and
+  road-network route planning remain planned work. Cached PWA tiles are not presented
+  as offline map packages. No contour, hillshade, or offline terrain layer is claimed
+  without an authorized data source.
+
 ## [3.6.0] - 2026-11-27
 
 ### Added

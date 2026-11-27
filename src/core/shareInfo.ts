@@ -4,6 +4,9 @@ import { haversine, fmtDuration } from './geo';
 import { currentLang } from './i18n';
 import { applyPrivacy } from './privacy';
 import { migrateLegacyKey } from './storageKeys';
+import { cityFootprintKey, normalizeCityFootprint, type CityFootprint } from './footprint';
+
+export type { CityFootprint } from './footprint';
 
 const CACHE_KEY = 'roametch.places.v1';
 const CACHE_TTL = 30 * 24 * 3600 * 1000;
@@ -20,7 +23,6 @@ migrateLegacyKey('trackmint.places.v1', CACHE_KEY);
 migrateLegacyKey('trackmint.cities.v1', CITY_CACHE_KEY);
 
 type Entry = { name: string; ts: number };
-export type CityFootprint = { name: string; lat: number; lon: number };
 type CityEntry = CityFootprint & { ts: number };
 
 function loadCache(): Record<string, Entry> {
@@ -35,12 +37,38 @@ function loadCache(): Record<string, Entry> {
 let cache = loadCache();
 let lastRequestAt = 0;
 const inflight = new Map<string, Promise<string>>();
-let cityCache: Record<string, CityEntry> = {};
-try { cityCache = JSON.parse(localStorage.getItem(CITY_CACHE_KEY) || '{}') || {}; } catch { cityCache = {}; }
+
+function validCityCacheEntry(key: string, entry: any): entry is CityEntry {
+  if (!entry || !Number.isFinite(entry.ts)) return false;
+  if (!/^[A-Z]{2}$/.test(String(entry.countryCode || '').trim().toUpperCase())) return false;
+  const normalized = normalizeCityFootprint(entry);
+  const parts = key.split(',').map(Number);
+  return !!normalized && parts.length === 2 && parts.every(Number.isFinite)
+    && normalized.lat === parts[0] && normalized.lon === parts[1];
+}
+
+function loadCityCache(): Record<string, CityEntry> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CITY_CACHE_KEY) || '{}');
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const clean: Record<string, CityEntry> = {};
+    for (const [key, entry] of Object.entries(parsed)) {
+      if (validCityCacheEntry(key, entry)) clean[key] = entry;
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
+let cityCache: Record<string, CityEntry> = loadCityCache();
 const cityInflight = new Map<string, Promise<CityFootprint | null>>();
 
 function persistCities() {
   try {
+    for (const key of Object.keys(cityCache)) {
+      if (!validCityCacheEntry(key, cityCache[key])) delete cityCache[key];
+    }
     const keys = Object.keys(cityCache);
     if (keys.length > 600) {
       keys.sort((a, b) => cityCache[a].ts - cityCache[b].ts).slice(0, keys.length - 600).forEach((k) => delete cityCache[k]);
@@ -48,6 +76,10 @@ function persistCities() {
     localStorage.setItem(CITY_CACHE_KEY, JSON.stringify(cityCache));
   } catch { /* cache is best-effort */ }
 }
+
+// Persist the sanitized view so legacy entries without country metadata cannot
+// be reused by this or a later session.
+persistCities();
 
 function persist() {
   try {
@@ -171,8 +203,13 @@ async function reverseCity(lat: number, lon: number, signal?: AbortSignal): Prom
   const roundedLon = Math.round(lon * 100) / 100;
   const key = `${roundedLat.toFixed(2)},${roundedLon.toFixed(2)}`;
   const hit = cityCache[key];
-  if (hit && Date.now() - hit.ts < CITY_CACHE_TTL) {
-    return hit.name ? { name: hit.name, lat: roundedLat, lon: roundedLon } : null;
+  if (hit) {
+    if (!validCityCacheEntry(key, hit) || Date.now() - hit.ts >= CITY_CACHE_TTL) {
+      delete cityCache[key];
+      persistCities();
+    } else {
+      return normalizeCityFootprint(hit);
+    }
   }
   if (!navigator.onLine) return null;
   const running = cityInflight.get(key);
@@ -183,7 +220,10 @@ async function reverseCity(lat: number, lon: number, signal?: AbortSignal): Prom
     lastRequestAt = Date.now();
     const lang = currentLang() === 'zh' ? 'zh' : 'en';
     const photon = await fetchJson(`https://photon.komoot.io/reverse?lat=${roundedLat}&lon=${roundedLon}&lang=${lang}`, signal);
-    let name = photonCity(photon?.features?.[0]?.properties);
+    const props = photon?.features?.[0]?.properties;
+    let name = photonCity(props);
+    let countryCode = String(props?.country_code || '').trim().toUpperCase();
+    let admin = String(props?.state || props?.county || '').trim();
     if (!name && !signal?.aborted) {
       const gap = Math.max(0, NOMINATIM_GAP - (Date.now() - lastRequestAt));
       if (gap) await new Promise((r) => setTimeout(r, gap));
@@ -194,11 +234,16 @@ async function reverseCity(lat: number, lon: number, signal?: AbortSignal): Prom
         signal
       );
       name = nominatimCity(nomi);
+      countryCode ||= String(nomi?.address?.country_code || '').trim().toUpperCase();
+      admin ||= String(nomi?.address?.state || nomi?.address?.county || '').trim();
     }
     if (signal?.aborted) return null;
-    cityCache[key] = { name: String(name || ''), lat: roundedLat, lon: roundedLon, ts: Date.now() };
-    persistCities();
-    return name ? { name: String(name), lat: roundedLat, lon: roundedLon } : null;
+    const city = normalizeCityFootprint({ name, countryCode, admin, lat: roundedLat, lon: roundedLon });
+    if (city) {
+      cityCache[key] = { ...city, ts: Date.now() };
+      persistCities();
+    }
+    return city;
   })();
   cityInflight.set(key, task);
   try { return await task; } finally { cityInflight.delete(key); }
@@ -304,7 +349,8 @@ export async function routeCities(
         continue;
       }
       const city = await reverseCity(targets[i].lat, targets[i].lon, budget.signal);
-      if (city) cities.set(String(city.name).trim().replace(/\s+/g, ' ').toLocaleLowerCase(), city);
+      const normalized = normalizeCityFootprint(city);
+      if (normalized) cities.set(cityFootprintKey(normalized), normalized);
       onProgress?.((i + 1) / targets.length);
     }
   } finally {
@@ -316,7 +362,7 @@ export async function routeCities(
 }
 
 export async function resolveTripCities(full: any, privacy: any = {}, options: any = {}) {
-  const cropped = applyPrivacy(full, privacy);
+  const cropped = applyPrivacy({ ...full, waypoints: [] }, privacy);
   const points = full?.segments?.flatMap((segment: any) => segment.points || []) || [];
   return routeCities(cropped.segments, {
     ...options,

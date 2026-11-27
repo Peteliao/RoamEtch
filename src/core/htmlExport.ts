@@ -2,7 +2,7 @@
 // - warm offline layout, optional online CN/Global basemap
 // - full stats, elevation profile, waypoint timeline + embedded thumbs
 // - interactive pan/zoom, replay, theme switch, branded footer
-import { simplify, fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, haversine } from './geo';
+import { simplify, fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, haversine, sampleTrackSegments } from './geo';
 import { applyPrivacy } from './privacy';
 import { computeStats } from './stats';
 import { get } from './settings';
@@ -178,7 +178,8 @@ type BuildOpts = {
 
 export function estimateHTMLSize(full, { tier = 'clear', privacy = {}, includePhotos = true }: BuildOpts = {}) {
   const cfg = htmlTierConfig(tier);
-  const cropped = applyPrivacy(full, privacy);
+  const preview = { ...full, segments: sampleTrackSegments(full.segments || [], 4000) };
+  const cropped = applyPrivacy(preview, privacy);
   const pts = simplify(cropped.segments.flatMap((s) => s.points || []), cfg.tol).slice(0, cfg.points);
   const nodeCount = Math.min(cropped.waypoints.length, cfg.waypoints);
   const photoCount = includePhotos && cfg.photos ? Math.min(cfg.photos, full.media?.length || 0) : 0;

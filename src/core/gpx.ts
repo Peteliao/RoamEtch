@@ -3,6 +3,21 @@ import { createTrip, addSegment, appendPoints, addWaypoint, updateTrip, deleteTr
 import { uuid } from './geo';
 import { streamGPX, type GPXStreamInput } from './gpxStream';
 
+function validTimestamp(value: number | null | undefined) {
+  return Number.isFinite(value) && !Number.isNaN(new Date(value).getTime()) ? value : null;
+}
+
+function earliestTrackTime(segments) {
+  let earliest: number | null = null;
+  for (const points of segments) {
+    for (const point of points) {
+      const time = validTimestamp(point.t);
+      if (time != null && (earliest == null || time < earliest)) earliest = time;
+    }
+  }
+  return earliest;
+}
+
 export function parseGPX(text) {
   const doc = new DOMParser().parseFromString(text, 'application/xml');
   if (doc.querySelector('parsererror')) throw new Error('XML parse error');
@@ -20,7 +35,7 @@ export function parseGPX(text) {
       lat, lon,
       alt: ele != null && isFinite(parseFloat(ele)) ? parseFloat(ele) : null,
       altSrc: ele != null ? 'svc' : null,
-      t: time ? Date.parse(time) : null,
+      t: time ? validTimestamp(Date.parse(time)) : null,
       acc: null, speed: null
     });
   };
@@ -53,14 +68,19 @@ export function parseGPX(text) {
   });
   if (!segments.length && !waypoints.length) throw new Error('no track data');
   const hasTime = segments.some((s) => s.some((p) => p.t != null));
-  return { name, segments, waypoints, hasTime };
+  const startTime = earliestTrackTime(segments);
+  return { name, segments, waypoints, hasTime, startTime };
 }
 
 export async function importGPX(text, fallbackName = 'GPX import') {
   const parsed = parseGPX(text);
-  const trip = await createTrip({ name: parsed.name || fallbackName, status: 'finished' });
+  const trip = await createTrip({
+    name: parsed.name || fallbackName,
+    status: 'finished',
+    createdAt: parsed.startTime ?? Date.now()
+  });
   for (const pts of parsed.segments) {
-    const seg = await addSegment(trip.id, pts[0]?.t || Date.now());
+    const seg = await addSegment(trip.id, earliestTrackTime([pts]) ?? Date.now());
     await appendPoints(seg.id, trip.id, pts);
   }
   if (!parsed.segments.length) await addSegment(trip.id);
@@ -107,6 +127,7 @@ export async function importGPXFile(
       name: summary.name || fallbackName,
       status: 'finished',
       hasTime: summary.hasTime,
+      createdAt: summary.startTime ?? Date.now(),
       publish: false
     });
     await db.trips.add(trip);

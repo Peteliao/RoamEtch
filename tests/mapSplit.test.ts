@@ -4,6 +4,7 @@ vi.mock('maplibre-gl', () => ({ setWorkerUrl: vi.fn() }));
 vi.mock('../src/core/diag', () => ({ diag: vi.fn() }));
 
 import { TrackMap } from '../src/ui/map';
+import { toDisplay } from '../src/core/coords';
 
 describe('split map highlight', () => {
   it('keeps recording gaps as separate line features and clears the highlight', () => {
@@ -28,6 +29,43 @@ describe('split map highlight', () => {
 
     trackMap.setSplitHighlight([]);
     expect(setData.mock.calls[1][0].features).toEqual([]);
+  });
+});
+
+describe('history map layers', () => {
+  it('renders heatmap points in the active display coordinate system', () => {
+    const setData = vi.fn();
+    const trackMap = new TrackMap({} as any);
+    (trackMap as any).coordSystem = 'GCJ02';
+    (trackMap as any).map = { getSource: vi.fn(() => ({ setData })) };
+    const data = {
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', geometry: { type: 'Point', coordinates: [116.4, 39.9] }, properties: { weight: 3, trips: 1 } }],
+      bbox: null, stats: {}
+    };
+
+    trackMap.setHeatmap(data);
+
+    const coordinates = setData.mock.calls[0][0].features[0].geometry.coordinates;
+    expect(coordinates).not.toEqual([116.4, 39.9]);
+    expect(coordinates).toEqual(toDisplay(116.4, 39.9, 'GCJ02'));
+  });
+
+  it('keeps overlay tracks separate and honors visibility and opacity', () => {
+    const setData = vi.fn();
+    const trackMap = new TrackMap({} as any);
+    (trackMap as any).coordSystem = 'WGS84';
+    (trackMap as any).map = { getSource: vi.fn(() => ({ setData })) };
+
+    trackMap.setOverlayTracks([
+      { id: 'a', name: 'A', color: '#ff0000', opacity: 0.4, segments: [{ points: [{ lon: 120, lat: 30 }, { lon: 121, lat: 31 }] }] },
+      { id: 'b', visible: false, segments: [{ points: [{ lon: 0, lat: 0 }, { lon: 1, lat: 1 }] }] }
+    ]);
+
+    const collection = setData.mock.calls[0][0];
+    expect(collection.features).toHaveLength(1);
+    expect(collection.features[0].properties).toEqual({ tripId: 'a', name: 'A', color: '#ff0000', opacity: 0.4 });
+    expect(collection.features[0].geometry.coordinates).toEqual([[120, 30], [121, 31]]);
   });
 });
 

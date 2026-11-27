@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeDistanceSplits } from '../src/core/distanceSplits';
 import { previewTrackCleanup } from '../src/core/gpsQuality';
+import { compareTracks } from '../src/core/trackComparison';
+import { decodeWorkerPayload, prepareWorkerPayload } from '../src/core/workerPayload';
 
 const EARTH_RADIUS = 6371008.8;
 const segments = [{
@@ -18,7 +20,7 @@ class MockWorker {
   onmessage: ((event: any) => void) | null = null;
   onerror: ((event: any) => void) | null = null;
   onmessageerror: (() => void) | null = null;
-  postMessage = vi.fn(() => {
+  postMessage = vi.fn((_message: any, _transferList?: Transferable[]) => {
     if (MockWorker.postError) throw new Error('post failed');
   });
   terminate = vi.fn();
@@ -40,6 +42,30 @@ afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe('worker payload codec', () => {
+  it('round-trips nullable fields and excludes media from large GPX payloads', () => {
+    const first = { lat: 30, lon: 120, alt: null, altSrc: null, acc: null, speed: null, synth: false, custom: 'kept' };
+    const typical = { lat: 30.001, lon: 120.001, alt: 100, t: 123, altSrc: 'svc', acc: 5, speed: 1.2 };
+    const points = Array.from({ length: 100_001 }, (_, index) => index === 0 ? first : typical);
+    const full = {
+      trip: { id: 'trip', name: 'Large' },
+      segments: [{ id: 'segment', index: 0, points }],
+      waypoints: [],
+      media: [{ blob: new Blob(['not sent to the worker']) }]
+    };
+
+    const wire = prepareWorkerPayload('gpx', { full });
+    const decoded = decodeWorkerPayload(wire.payload);
+
+    expect(wire.pointCount).toBe(points.length);
+    expect(wire.payload.full).not.toHaveProperty('media');
+    expect(decoded.full.segments[0].points).toHaveLength(points.length);
+    expect(decoded.full.segments[0].points[0]).toEqual(first);
+    expect(decoded.full.segments[0].points[1]).toEqual(typical);
+    expect(decoded.full.segments[0].points.at(-1)).toEqual(typical);
+  });
 });
 
 describe('compute worker resilience', () => {
@@ -120,6 +146,28 @@ describe('compute worker resilience', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('transfers large worker payloads as columnar typed arrays', async () => {
+    const { simplifyAsync } = await import('../src/core/workerBridge');
+    const { decodeWorkerPayload } = await import('../src/core/workerPayload');
+    const points = Array.from({ length: 100_001 }, (_, index) => ({ lat: 30, lon: 120 + index / 1_000_000, t: index }));
+    const pending = simplifyAsync(points, 5);
+    const instance = MockWorker.instances[0];
+    const [message, transferList] = instance.postMessage.mock.calls[0];
+
+    expect(message.pointCount).toBe(points.length);
+    expect(message.payload.points.columns).toHaveLength(11);
+    expect(message.payload.codec).toBe('columns-v1');
+    expect(transferList.length).toBeGreaterThan(0);
+    expect(transferList.every((value: any) => value instanceof ArrayBuffer)).toBe(true);
+    const decoded = decodeWorkerPayload(message.payload);
+    expect(decoded.points).toHaveLength(points.length);
+    expect(decoded.points[0]).toEqual(points[0]);
+    expect(decoded.points.at(-1)).toEqual(points.at(-1));
+
+    instance.onmessage?.({ data: { id: 1, ok: true, result: [points[0], points.at(-1)] } });
+    await expect(pending).resolves.toEqual([points[0], points.at(-1)]);
+  });
+
   it('serializes GPX in the worker and returns the complete document', async () => {
     const { buildGPXAsync } = await import('../src/core/workerBridge');
     const full = { trip: { name: 'Worker GPX', createdAt: 0 }, segments: [], waypoints: [] };
@@ -131,6 +179,45 @@ describe('compute worker resilience', () => {
 
     await expect(pending).resolves.toBe('<gpx>complete</gpx>');
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('builds a heatmap in the worker and falls back with matching semantics', async () => {
+    const { buildHeatmapAsync } = await import('../src/core/workerBridge');
+    const { buildHeatmap } = await import('../src/core/heatmap');
+    const trips = [{ trip: { id: 'heat', privacy: { radius: 0 } }, segments }];
+    const result = buildHeatmap(trips, { maxPoints: 21 });
+    const pending = buildHeatmapAsync(trips, { maxPoints: 21 });
+    const instance = MockWorker.instances[0];
+
+    expect(instance.postMessage).toHaveBeenCalledWith({ id: 1, type: 'heatmap', payload: { trips, opts: { maxPoints: 21 } } });
+    instance.onmessage?.({ data: { id: 1, ok: true, result } });
+    await expect(pending).resolves.toEqual(result);
+    expect(instance.terminate).not.toHaveBeenCalled();
+
+    instance.onerror?.({ preventDefault: vi.fn() });
+    vi.stubGlobal('Worker', class { constructor() { throw new Error('workers unavailable'); } });
+    await expect(buildHeatmapAsync(trips, { maxPoints: 21 })).resolves.toEqual(result);
+  });
+
+  it('compares full tracks in an isolated worker and falls back with matching semantics', async () => {
+    const { compareTracksAsync } = await import('../src/core/workerBridge');
+    const a = { id: 'a', name: 'A', segments };
+    const b = { id: 'b', name: 'B', segments };
+    const expected = compareTracks(a, b, { sampleSpacingM: 25, maxSamples: 100 });
+    const controller = new AbortController();
+    const pending = compareTracksAsync(a, b, { sampleSpacingM: 25, maxSamples: 100, signal: controller.signal });
+    const instance = MockWorker.instances[0];
+
+    expect(instance.postMessage).toHaveBeenCalledWith({
+      id: 1, type: 'track-comparison',
+      payload: { a, b, opts: { sampleSpacingM: 25, maxSamples: 100 } }
+    });
+    instance.onmessage?.({ data: { id: 1, ok: true, result: expected } });
+    await expect(pending).resolves.toEqual(expected);
+    expect(instance.terminate).toHaveBeenCalledTimes(1);
+
+    vi.stubGlobal('Worker', class { constructor() { throw new Error('workers unavailable'); } });
+    await expect(compareTracksAsync(a, b, { sampleSpacingM: 25, maxSamples: 100 })).resolves.toEqual(expected);
   });
 
   it('falls back when posting a task fails', async () => {

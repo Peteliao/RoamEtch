@@ -68,6 +68,7 @@ export function icon(name, size = 20) {
     more: '<circle cx="5" cy="12" r="1.7" fill="currentColor"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><circle cx="19" cy="12" r="1.7" fill="currentColor"/>',
     refresh: '<path d="M20 11a8 8 0 1 0-2.3 6M20 4v7h-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
     search: '<circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" fill="none"/><path d="m16.5 16.5 4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    filter: '<path d="M4 6h16M7 12h10M10 18h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="9" cy="6" r="2" fill="var(--bg-elev)" stroke="currentColor" stroke-width="2"/><circle cx="15" cy="12" r="2" fill="var(--bg-elev)" stroke="currentColor" stroke-width="2"/>',
     map: '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Zm6-3v15m6-12v15" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',
     mountain: '<path d="m3 20 6.5-12 3.6 6 2.2-3.5L21 20H3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/>',
     shield: '<path d="M12 3 4.5 6v6c0 4.5 3.2 7.8 7.5 9 4.3-1.2 7.5-4.5 7.5-9V6L12 3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><path d="m8.8 12 2.2 2.2 4.2-4.4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',

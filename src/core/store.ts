@@ -139,29 +139,39 @@ export async function appendPoints(segmentId, tripId, points, { allowUnpublished
   });
 }
 
-export async function loadTripTrack(tripId, knownTrip = null) {
+export async function loadTripTrack(tripId, knownTrip = null, { cooperative = true }: { cooperative?: boolean } = {}) {
   const trip = knownTrip || await db.trips.get(tripId);
   if (!trip) return null;
   const segments = await listSegments(tripId);
   const segData = await Promise.all(segments.map(async (segment) => {
     const points = [];
-    await segmentChunkRange(segment.id).each((chunk) => {
-      for (const point of chunk.points || []) points.push(point);
-    });
+    const batchSize = 8;
+    for (let offset = 0; ; offset += batchSize) {
+      const chunks = await segmentChunkRange(segment.id).offset(offset).limit(batchSize).toArray();
+      for (const chunk of chunks) {
+        for (const point of chunk.points || []) points.push(point);
+      }
+      if (chunks.length < batchSize) break;
+      if (!cooperative) continue;
+      // Bound IndexedDB delivery and array growth so million-point reads stay cooperative.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
     return { ...segment, points };
   }));
   return { trip, segments: segData };
 }
 
-export async function loadTripFull(tripId, { trackSnapshot = null }: { trackSnapshot?: any } = {}) {
+export async function loadTripFull(tripId, { trackSnapshot = null, trackUnchanged = false }: { trackSnapshot?: any; trackUnchanged?: boolean } = {}) {
   const [trip, waypoints, media] = await Promise.all([
     db.trips.get(tripId),
     db.waypoints.where('tripId').equals(tripId).toArray(),
     db.media.where('tripId').equals(tripId).toArray()
   ]);
   if (!trip) return null;
+  const metadataOnlyTrackReusable = trackUnchanged
+    && trip.status !== 'recording' && trip.status !== 'paused';
   const reuseTrack = trackSnapshot?.trip.id === tripId
-    && (trackSnapshot.trip.updatedAt || 0) === (trip.updatedAt || 0)
+    && (metadataOnlyTrackReusable || (trackSnapshot.trip.updatedAt || 0) === (trip.updatedAt || 0))
     && Array.isArray(trackSnapshot.segments);
   const track = reuseTrack
     ? { trip, segments: trackSnapshot.segments }

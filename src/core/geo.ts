@@ -64,6 +64,90 @@ export function haversine(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
 }
 
+/** Interpolate along the shorter longitude arc, including tracks crossing the dateline. */
+export function interpolateLongitude(from: number, to: number, fraction: number) {
+  const f = Number.isFinite(fraction) ? Math.max(0, Math.min(1, fraction)) : 0;
+  const delta = ((to - from + 180) % 360 + 360) % 360 - 180;
+  const lon = from + delta * f;
+  return lon > 180 ? lon - 360 : lon < -180 ? lon + 360 : lon;
+}
+
+export type Wgs84Bounds = [number, number, number, number];
+
+function wrapLongitude(lon: number) {
+  return lon - Math.floor((lon + 180) / 360) * 360;
+}
+
+export function mergeWgs84Bounds(
+  bounds: readonly (readonly [number, number, number, number] | null | undefined)[]
+): Wgs84Bounds | null {
+  const valid: Wgs84Bounds[] = [];
+  for (const bbox of bounds) {
+    if (!bbox || bbox.length !== 4 || bbox.some((value) => !Number.isFinite(value))) continue;
+    if (Math.abs(bbox[1]) > 90 || Math.abs(bbox[3]) > 90) continue;
+    valid.push([bbox[0], bbox[1], bbox[2], bbox[3]]);
+  }
+  if (!valid.length) return null;
+  if (valid.length === 1) return valid[0];
+  const intervals = valid.map(([rawWest, south, rawEast, north]) => {
+    const start = wrapLongitude(rawWest);
+    const directWidth = rawEast - start;
+    const width = rawWest === -180 && rawEast === 180
+      ? 360
+      : directWidth >= 0 && directWidth <= 360
+        ? directWidth
+        : ((directWidth % 360) + 360) % 360;
+    return { start, end: start + width, south, north };
+  });
+
+  let best: { min: number; max: number; south: number; north: number } | null = null;
+  const cuts = intervals.flatMap(({ start, end }) => [wrapLongitude(start), wrapLongitude(end)]);
+  for (const cut of cuts) {
+    let min = Infinity, max = -Infinity, south = Infinity, north = -Infinity;
+    for (const interval of intervals) {
+      const start = interval.start + Math.round((cut - interval.start) / 360) * 360;
+      const end = start + (interval.end - interval.start);
+      min = Math.min(min, start);
+      max = Math.max(max, end);
+      south = Math.min(south, interval.south);
+      north = Math.max(north, interval.north);
+    }
+    if (!best || max - min < best.max - best.min) best = { min, max, south, north };
+  }
+  if (best.max - best.min >= 360 - 1e-9) return [-180, best.south, 180, best.north];
+  return [wrapLongitude(best.min), best.south, wrapLongitude(best.max), best.north];
+}
+
+export function wgs84TrackBounds(
+  segments: readonly { points?: readonly { lat: number; lon: number }[] }[]
+): Wgs84Bounds | null {
+  const bounds: Wgs84Bounds[] = [];
+  for (const segment of segments) {
+    let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
+    let minUnwrapped = Infinity, maxUnwrapped = -Infinity, previousLon: number | null = null;
+    let minLon = 0, maxLon = 0;
+    for (const point of segment?.points || []) {
+      if (!point || !Number.isFinite(point.lat) || Math.abs(point.lat) > 90
+        || !Number.isFinite(point.lon) || Math.abs(point.lon) > 180) continue;
+      const lon = previousLon == null ? point.lon : previousLon + wrapLongitude(point.lon - previousLon);
+      previousLon = lon;
+      west = Math.min(west, point.lon);
+      east = Math.max(east, point.lon);
+      south = Math.min(south, point.lat);
+      north = Math.max(north, point.lat);
+      minUnwrapped = Math.min(minUnwrapped, lon);
+      maxUnwrapped = Math.max(maxUnwrapped, lon);
+      if (lon <= minUnwrapped) minLon = point.lon;
+      if (lon >= maxUnwrapped) maxLon = point.lon;
+    }
+    if (previousLon == null) continue;
+    bounds.push(maxUnwrapped - minUnwrapped <= 180 && east - west > 180
+      ? [minLon, south, maxLon, north]
+      : [west, south, east, north]);
+  }
+  return mergeWgs84Bounds(bounds);
+}
+
 export function bearing(lat1, lon1, lat2, lon2) {
   const y = Math.sin(rad(lon2 - lon1)) * Math.cos(rad(lat2));
   const x = Math.cos(rad(lat1)) * Math.sin(rad(lat2)) - Math.sin(rad(lat1)) * Math.cos(rad(lat2)) * Math.cos(rad(lon2 - lon1));
@@ -106,6 +190,49 @@ export function simplify(points, toleranceM = 5) {
   }
   void tolLat; void tolLon;
   return points.filter((_, i) => keep[i]);
+}
+
+export function sampleTrackSegments<T extends { points: any[] }>(segments: readonly T[], maxPoints = 4000): T[] {
+  const list = Array.isArray(segments) ? segments : [];
+  const lengths = list.map((segment) => segment.points?.length || 0);
+  const total = lengths.reduce((sum, length) => sum + length, 0);
+  const limit = Math.max(2, Math.floor(maxPoints));
+  if (total <= limit) return [...list];
+  const active = list.map((_, index) => index).filter((index) => lengths[index] > 0);
+  const maxSegments = Math.max(1, Math.floor(limit / 2));
+  const selected = new Set(active.length > maxSegments
+    ? Array.from({ length: maxSegments }, (_, index) => active[maxSegments === 1 ? 0 : Math.round(index * (active.length - 1) / (maxSegments - 1))])
+    : active);
+  const selectedTotal = [...selected].reduce((sum, index) => sum + lengths[index], 0);
+  const counts = new Map<number, number>();
+  for (const index of selected) counts.set(index, Math.max(2, Math.floor(limit * lengths[index] / selectedTotal)));
+  let allocated = [...counts.values()].reduce((sum, count) => sum + count, 0);
+  while (allocated > limit) {
+    let candidate = -1;
+    for (const [index, count] of counts) {
+      if (count > 2 && (candidate < 0 || count > counts.get(candidate)!)) candidate = index;
+    }
+    if (candidate < 0) break;
+    counts.set(candidate, counts.get(candidate)! - 1);
+    allocated--;
+  }
+  while (allocated < limit) {
+    let candidate = -1;
+    for (const [index, count] of counts) {
+      if (candidate < 0 || lengths[index] / count > lengths[candidate] / counts.get(candidate)!) candidate = index;
+    }
+    counts.set(candidate, counts.get(candidate)! + 1);
+    allocated++;
+  }
+  return list.map((segment, index) => {
+    const count = counts.get(index) || 0;
+    if (!count) return { ...segment, points: [] };
+    if (count >= lengths[index]) return { ...segment, points: segment.points.slice() };
+    const points = [];
+    const step = (lengths[index] - 1) / (count - 1);
+    for (let sample = 0; sample < count; sample++) points.push(segment.points[Math.round(sample * step)]);
+    return { ...segment, points };
+  });
 }
 
 /** EMA smoothing of a numeric series (null-aware). */
