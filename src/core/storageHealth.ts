@@ -95,6 +95,7 @@ interface CleanupTokenRecord {
   ids: RecordId[];
   bytes: number;
   createdAt: number;
+  versions: Map<RecordId, string>;
 }
 
 const cleanupTokens = new Map<string, CleanupTokenRecord>();
@@ -710,7 +711,7 @@ function newCleanupToken() {
 }
 
 export async function previewMediaCleanup(): Promise<MediaCleanupPreview> {
-  const candidates = new Map<RecordId, number>();
+  const candidates = new Map<RecordId, Record<string, any>>();
   await db.transaction('r', [db.waypoints, db.media], async () => {
     const referenced = new Set<RecordId>();
     await db.waypoints.each((waypoint) => {
@@ -721,18 +722,36 @@ export async function previewMediaCleanup(): Promise<MediaCleanupPreview> {
       const row = asRecord(item);
       const id = row?.id;
       if (!isRecordId(id) || referenced.has(id) || candidates.has(id)) return;
-      candidates.set(id, (blobSize(row?.blob) ?? 0) + (blobSize(row?.thumb) ?? 0));
+      candidates.set(id, row);
     });
   });
 
+  const versions = new Map<RecordId, string>();
+  const blobRevisions: BlobRevisions = new WeakMap();
+  for (const [id, row] of candidates) {
+    await prepareBlobRevisions(row, blobRevisions);
+    versions.set(id, stableStringify(revisionValue(row, blobRevisions)) || '');
+  }
   const now = Date.now();
   for (const [token, record] of cleanupTokens) if (now - record.createdAt > CLEANUP_TOKEN_TTL) cleanupTokens.delete(token);
   while (cleanupTokens.size >= MAX_CLEANUP_TOKENS) cleanupTokens.delete(cleanupTokens.keys().next().value!);
   const ids = [...candidates.keys()];
-  const bytes = ids.reduce<number>((sum, id) => sum + candidates.get(id)!, 0);
+  const bytes = ids.reduce<number>((sum, id) => {
+    const row = candidates.get(id)!;
+    return sum + (blobSize(row.blob) ?? 0) + (blobSize(row.thumb) ?? 0);
+  }, 0);
   const token = newCleanupToken();
-  cleanupTokens.set(token, { ids, bytes, createdAt: now });
+  cleanupTokens.set(token, { ids, bytes, createdAt: now, versions });
   return { token, count: ids.length, bytes, sampleIds: ids.slice(0, 5).map(String) };
+}
+
+function currentCleanupToken(token: string): CleanupTokenRecord {
+  const record = cleanupTokens.get(token);
+  if (!record || Date.now() - record.createdAt > CLEANUP_TOKEN_TTL) {
+    cleanupTokens.delete(token);
+    throw new MediaCleanupTokenError();
+  }
+  return record;
 }
 
 async function withCleanupLock<T>(task: () => Promise<T>): Promise<T> {
@@ -741,26 +760,42 @@ async function withCleanupLock<T>(task: () => Promise<T>): Promise<T> {
 }
 
 export async function executeMediaCleanup(token: string): Promise<MediaCleanupResult> {
-  const record = cleanupTokens.get(token);
-  if (!record) throw new MediaCleanupTokenError();
-  const result = await withCleanupLock(() => db.transaction('rw', [db.media, db.waypoints], async () => {
-    const referenced = new Set<RecordId>();
-    await db.waypoints.each((waypoint) => {
-      const ids = asRecord(waypoint)?.mediaIds;
-      if (Array.isArray(ids)) for (const id of ids) if (isRecordId(id)) referenced.add(id);
+  const record = currentCleanupToken(token);
+  try {
+    const result = await withCleanupLock(async () => {
+      currentCleanupToken(token);
+      return db.transaction('rw', [db.media, db.waypoints], async () => {
+        currentCleanupToken(token);
+        const referenced = new Set<RecordId>();
+        await db.waypoints.each((waypoint) => {
+          const ids = asRecord(waypoint)?.mediaIds;
+          if (Array.isArray(ids)) for (const id of ids) if (isRecordId(id)) referenced.add(id);
+        });
+        const ids: RecordId[] = [];
+        let bytes = 0;
+        const blobRevisions: BlobRevisions = new WeakMap();
+        for (const id of record.ids) {
+          if (referenced.has(id)) continue;
+          const row = asRecord(await db.media.get(id));
+          if (!row) continue;
+          let version: string;
+          await Dexie.waitFor(async () => {
+            await prepareBlobRevisions(row, blobRevisions);
+            version = stableStringify(revisionValue(row, blobRevisions)) || '';
+          });
+          if (version! !== record.versions.get(id)) throw new MediaCleanupTokenError();
+          ids.push(id);
+          bytes += (blobSize(row.blob) ?? 0) + (blobSize(row.thumb) ?? 0);
+        }
+        currentCleanupToken(token);
+        if (ids.length) await db.media.bulkDelete(ids);
+        return { deleted: ids.length, bytes, skipped: record.ids.length - ids.length };
+      });
     });
-    const ids: RecordId[] = [];
-    let bytes = 0;
-    for (const id of record.ids) {
-      if (referenced.has(id)) continue;
-      const row = asRecord(await db.media.get(id));
-      if (!row) continue;
-      ids.push(id);
-      bytes += (blobSize(row.blob) ?? 0) + (blobSize(row.thumb) ?? 0);
-    }
-    if (ids.length) await db.media.bulkDelete(ids);
-    return { deleted: ids.length, bytes, skipped: record.ids.length - ids.length };
-  }));
-  cleanupTokens.delete(token);
-  return result;
+    cleanupTokens.delete(token);
+    return result;
+  } catch (error) {
+    if (error instanceof MediaCleanupTokenError) cleanupTokens.delete(token);
+    throw error;
+  }
 }

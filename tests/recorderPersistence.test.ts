@@ -46,7 +46,6 @@ vi.mock('../src/core/locks', () => ({
 }));
 vi.mock('../src/core/wakelock', () => ({ requestWakeLock: vi.fn(), releaseWakeLock: vi.fn() }));
 vi.mock('../src/core/keepalive', () => ({ armKeepAlive: vi.fn(), disarmKeepAlive: vi.fn() }));
-vi.mock('../src/core/activity', () => ({ classifyActivity: vi.fn(() => 'hike') }));
 vi.mock('../src/core/storageKeys', () => ({ migrateLegacyKey: vi.fn() }));
 vi.mock('../src/core/workerBridge', () => ({ computeStatsSummaryAsync: vi.fn() }));
 
@@ -164,6 +163,9 @@ describe('recorder persistence bounds', () => {
       error: 'capacity',
       degraded: true
     });
+    expect(recorder.rec.quality?.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'storage-capacity', action: 'retry-save' })
+    ]));
     expect(mocks.emit).toHaveBeenCalledWith('recorder:saveerror', {
       error: 'capacity',
       pending: MAX_PENDING_POINTS

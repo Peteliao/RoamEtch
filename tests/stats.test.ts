@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeStats } from '../src/core/stats';
+import { slopeAt, usableTrackPoints } from '../src/core/geo';
 import { computeDistanceSplits } from '../src/core/distanceSplits';
 
 function track(points) {
@@ -78,6 +79,8 @@ describe('trip statistics', () => {
     expect(empty.distance).toBe(0);
     expect(empty.pointCount).toBe(0);
     expect(empty.calories).toBeNull();
+    expect(computeStats(track([])).series.slope).toEqual([]);
+    expect(computeStats(track([{ lat: 30, lon: 120, alt: 100, t: 0 }])).series.slope).toEqual([null]);
   });
 
   it('keeps a pause between segments out of moving and still time', () => {
@@ -214,6 +217,24 @@ describe('trip statistics', () => {
     expect(series).toBeDefined();
     expect(summary).toEqual(expectedSummary);
     expect(summary.series).toBeUndefined();
+  });
+
+  it('preserves sliding-window slopes while reusing measured step distances', () => {
+    const points = Array.from({ length: 120 }, (_, index) => ({
+      lat: 30,
+      lon: 120 + index * 0.00009,
+      alt: index === 47 ? null : 100 + Math.sin(index / 8) * 12,
+      t: index * 10_000
+    }));
+    const usable = usableTrackPoints(points);
+    const stats = computeStats(track(points));
+
+    const expected = usable.map((_point, index) => slopeAt(usable, index));
+    expect(stats.series.slope).toHaveLength(expected.length);
+    stats.series.slope.forEach((value, index) => {
+      if (value == null || expected[index] == null) expect(value).toBe(expected[index]);
+      else expect(value).toBeCloseTo(expected[index], 8);
+    });
   });
 
   it('summarizes a 100k-point track without building per-point series', () => {

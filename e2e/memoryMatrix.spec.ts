@@ -280,42 +280,55 @@ test('storage health scans 20k points and remains read-only', async ({ page }, t
   await session.detach();
 });
 
-test('GPS preview, cleaning, and restore preserve exact large-track counts', async ({ page }, testInfo) => {
+test('GPS repair preview, versioned apply, and restore preserve exact large-track counts', async ({ page }, testInfo) => {
   const failures = await setup(page);
   const { ids } = await seedTracks(page, { gps: true });
   await page.evaluate((tripId) => {
     (window as any).__lt.shell.navigate('trips', { detail: true, tripId, section: 'data' });
   }, ids[0]);
   const quality = page.locator('#view-analysis .quality-card');
-  await expect(quality).toContainText('发现 3 个可清理的异常点');
+  const repair = quality.locator('.gps-repair');
+  await expect(quality).toContainText('可解释轨迹修复');
+  const speed = repair.locator('.repair-category').filter({ hasText: '速度跳变' });
+  await expect(speed).toContainText('3 项');
+  await expect(speed.getByRole('checkbox')).toBeChecked();
+  await expect(repair.locator('.repair-metrics').getByRole('row', { name: new RegExp(`轨迹点\\s+${POINTS}\\s+${POINTS - 3}`) })).toBeVisible();
   const session = await cdp(page);
-  await measure(page, session, testInfo, 'gps-preview-clean-restore', GPS, async () => {
-    await quality.locator('.gps-issue').click();
+  await measure(page, session, testInfo, 'gps-preview-repair-restore', GPS, async () => {
+    await speed.locator('.repair-reasons summary').click();
+    await expect(speed.locator('.repair-reason')).toHaveCount(3);
+    await speed.locator('.repair-reason').first().click();
     await expect(page.locator('.analysis-map canvas').first()).toBeVisible();
     await expect(page.locator('.analysis-map .chart-hover-dot')).toBeVisible();
     await page.locator('#trip-detail button[data-section="data"]').click();
-    await quality.getByRole('button', { name: '清洗异常定位', exact: true }).click();
-    const cleanDialog = page.getByRole('dialog', { name: '清洗异常定位' });
-    await expect(cleanDialog).toContainText('独立快照');
-    await cleanDialog.getByRole('button', { name: '清洗异常定位', exact: true }).click();
+    await repair.getByRole('button', { name: '应用选中修复', exact: true }).click();
+    const repairDialog = page.getByRole('dialog', { name: '确认轨迹修复' });
+    await expect(repairDialog).toContainText('独立快照');
+    await repairDialog.getByRole('button', { name: '应用选中修复', exact: true }).click();
     await expect(quality).toContainText('已保留清洗前快照');
-    const cleaned = await page.evaluate(async (tripId) => {
+    await expect(quality).toContainText('修复版本对比');
+    const repaired = await page.evaluate(async (tripId) => {
       const store = (window as any).__lt.store;
       const full = await store.loadTripFull(tripId);
       const snapshot = await store.getTrackSnapshotSummary(tripId);
-      return { points: full.segments[0].points.length, snapshotPoints: snapshot?.points };
+      const versions = await store.listTrackRepairVersions(tripId);
+      return { points: full.segments[0].points.length, snapshotPoints: snapshot?.points, versions: versions.length };
     }, ids[0]);
-    expect(cleaned).toEqual({ points: POINTS - 3, snapshotPoints: POINTS });
+    expect(repaired).toEqual({ points: POINTS - 3, snapshotPoints: POINTS, versions: 1 });
     await quality.getByRole('button', { name: '恢复原始轨迹', exact: true }).click();
     const restoreDialog = page.getByRole('dialog', { name: '恢复清洗前轨迹' });
     await restoreDialog.getByRole('button', { name: '恢复原始轨迹', exact: true }).click();
     await expect(quality).toContainText('已保留清洗前快照');
+    await expect.poll(() => page.evaluate(async (tripId) => {
+      const full = await (window as any).__lt.store.loadTripFull(tripId);
+      return full.segments[0].points.length;
+    }, ids[0])).toBe(POINTS);
     const restored = await page.evaluate(async (tripId) => {
       const full = await (window as any).__lt.store.loadTripFull(tripId);
       return full.segments[0].points.length;
     }, ids[0]);
     expect(restored).toBe(POINTS);
-    return { inputPoints: POINTS, anomalies: 3, cleaned, restored };
+    return { inputPoints: POINTS, anomalies: 3, repaired, restored };
   });
   failures.assert();
   await session.detach();

@@ -136,6 +136,32 @@ describe('trip loading', () => {
     expect(full?.media).toEqual([{ id: 'media-1', tripId: 'trip-1' }]);
   });
 
+  it('reuses an unchanged track snapshot while reloading trip metadata, waypoints, and media', async () => {
+    mocks.trips.set('trip-1', { id: 'trip-1', updatedAt: 5, name: 'Current name' });
+    const segments = [{ id: 'seg-1', tripId: 'trip-1', index: 0, points: [{ lat: 30, lon: 120 }] }];
+    const trackSnapshot = { trip: { id: 'trip-1', updatedAt: 5 }, segments };
+
+    const full = await loadTripFull('trip-1', { trackSnapshot });
+
+    expect(full?.trip.name).toBe('Current name');
+    expect(full?.segments).toBe(segments);
+    expect(full?.waypoints).toEqual([{ id: 'wp-1', tripId: 'trip-1' }]);
+    expect(full?.media).toEqual([{ id: 'media-1', tripId: 'trip-1' }]);
+    expect(mocks.db.trackChunks.where).not.toHaveBeenCalled();
+  });
+
+  it('reloads track chunks when the cached snapshot version is stale', async () => {
+    mocks.trips.set('trip-1', { id: 'trip-1', updatedAt: 6 });
+    mocks.segments.push({ id: 'seg-1', tripId: 'trip-1', index: 0 });
+    mocks.chunks.push({ id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0, points: [{ lat: 31, lon: 121 }] });
+    const trackSnapshot = { trip: { id: 'trip-1', updatedAt: 5 }, segments: [] };
+
+    const full = await loadTripFull('trip-1', { trackSnapshot });
+
+    expect(full?.segments[0].points).toEqual([{ lat: 31, lon: 121 }]);
+    expect(mocks.db.trackChunks.where).toHaveBeenCalledWith('[segmentId+seq]');
+  });
+
   it('finds the first valid point without materializing the track', async () => {
     mocks.segments.push(
       { id: 'empty', tripId: 'trip-1', index: 0 },

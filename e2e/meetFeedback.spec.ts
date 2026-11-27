@@ -56,7 +56,7 @@ test('remote chat feedback and proximity map visuals work in the browser', async
       const view = window.__lt.shell.getViews().meet;
       const track = view.getMap();
       track.setMeetData({
-        self: { id: 'host', name: '发起人', isHost: true, color: '#f5b942', hasFix: true, lat: 31, lon: 121 },
+        self: { id: 'host', name: '发起人', isHost: true, color: '#f5b942', hasFix: true, lat: 31, lon: 121, networkStatus: 'online', positionStatus: 'fresh', lastFixAt: Date.now(), stale: false },
         peers: []
       });
       const fitted = new Promise<void>((resolve) => track.map.once('moveend', resolve));
@@ -84,8 +84,8 @@ test('remote chat feedback and proximity map visuals work in the browser', async
     await map.evaluate(() => {
       const track = window.__lt.shell.getViews().meet.getMap();
       track.setMeetData({
-        self: { id: 'host', name: '发起人', isHost: true, color: '#f5b942', hasFix: true, lat: 31, lon: 121 },
-        peers: [{ id: 'member', name: '队员', isHost: false, color: '#2bcda7', hasFix: true, lat: 31, lon: 121.05, stale: false }]
+        self: { id: 'host', name: '发起人', isHost: true, color: '#f5b942', hasFix: true, lat: 31, lon: 121, networkStatus: 'online', positionStatus: 'fresh', lastFixAt: Date.now(), stale: false },
+        peers: [{ id: 'member', name: '队员', isHost: false, color: '#2bcda7', hasFix: true, lat: 31, lon: 121.05, networkStatus: 'online', positionStatus: 'fresh', lastFixAt: Date.now(), stale: false }]
       });
     });
     await expect.poll(() => map.evaluate(() => Number.isFinite(window.__lt.shell.getViews().meet.getMap()._meetLastDistance))).toBe(true);
@@ -117,8 +117,8 @@ test('remote chat feedback and proximity map visuals work in the browser', async
     await map.evaluate(() => {
       const track = window.__lt.shell.getViews().meet.getMap();
       track.setMeetData({
-        self: { id: 'host', name: '发起人', isHost: true, color: '#f5b942', hasFix: true, lat: 31, lon: 121 },
-        peers: [{ id: 'member', name: '队员', isHost: false, color: '#2bcda7', hasFix: true, lat: 31.005, lon: 121, stale: false }]
+        self: { id: 'host', name: '发起人', isHost: true, color: '#f5b942', hasFix: true, lat: 31, lon: 121, networkStatus: 'online', positionStatus: 'fresh', lastFixAt: Date.now(), stale: false },
+        peers: [{ id: 'member', name: '队员', isHost: false, color: '#2bcda7', hasFix: true, lat: 31.005, lon: 121, networkStatus: 'online', positionStatus: 'fresh', lastFixAt: Date.now(), stale: false }]
       });
     });
     await expect.poll(() => map.evaluate(() => window.__lt.shell.getViews().meet.getMap().map.getZoom())).toBeGreaterThan(farZoom);

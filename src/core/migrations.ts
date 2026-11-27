@@ -1,6 +1,6 @@
 export const DATABASE_NAME = 'localtrace';
 export const TRIP_SCHEMA_VERSION = 1;
-export const DATABASE_SCHEMA_VERSION = 3;
+export const DATABASE_SCHEMA_VERSION = 4;
 export const DEXIE_NATIVE_VERSION_SCALE = 10;
 
 export function logicalDatabaseVersion(nativeVersion: number) {
@@ -13,7 +13,47 @@ export function logicalDatabaseVersion(nativeVersion: number) {
     : Math.max(1, Math.floor(nativeVersion / DEXIE_NATIVE_VERSION_SCALE));
 }
 
-export type DatabaseTable = 'trips' | 'segments' | 'trackChunks' | 'trackSnapshots' | 'waypoints' | 'media' | 'elevCache' | 'shareImports';
+export type DatabaseTable = 'trips' | 'segments' | 'trackChunks' | 'trackSnapshots' | 'waypoints' | 'media' | 'elevCache' | 'shareImports' | 'quarantine';
+
+export interface TripSchemaMigration {
+  version: number;
+  name: string;
+  upgrade: (trip: any) => void;
+}
+
+export const TRIP_SCHEMA_MIGRATIONS: readonly TripSchemaMigration[] = [
+  {
+    version: 1,
+    name: 'initial-trip-schema',
+    upgrade: (trip) => { if (trip.schemaVersion == null) trip.schemaVersion = 1; }
+  }
+];
+
+export function validateTripSchemaRegistry(migrations = TRIP_SCHEMA_MIGRATIONS) {
+  const names = new Set<string>();
+  migrations.forEach((migration, index) => {
+    if (migration.version !== index + 1 || names.has(migration.name)) {
+      throw new DatabaseMigrationError('invalid-trip-migration-registry');
+    }
+    names.add(migration.name);
+  });
+  if (migrations[migrations.length - 1]?.version !== TRIP_SCHEMA_VERSION) {
+    throw new DatabaseMigrationError('invalid-trip-migration-registry');
+  }
+  return true;
+}
+
+export function migrateTripRecord(trip: any) {
+  assertTripSchemaVersion(trip?.schemaVersion);
+  const from = trip?.schemaVersion == null ? 0 : trip.schemaVersion;
+  for (const migration of TRIP_SCHEMA_MIGRATIONS) {
+    if (migration.version > from) migration.upgrade(trip);
+  }
+  assertTripSchemaVersion(trip.schemaVersion);
+  if (trip.schemaVersion !== TRIP_SCHEMA_VERSION) {
+    throw new DatabaseMigrationError('trip-migration-verification-failed');
+  }
+}
 
 export interface DatabaseMigration {
   version: number;
@@ -60,7 +100,7 @@ async function migrateTripSchema(tx: any) {
   if (validationError) throw validationError;
 
   await trips.toCollection().modify((trip) => {
-    if (trip.schemaVersion == null) trip.schemaVersion = TRIP_SCHEMA_VERSION;
+    migrateTripRecord(trip);
   });
 
   let verificationError: unknown;
@@ -97,6 +137,11 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
     name: 'original-track-snapshots',
     stores: { trackSnapshots: 'id, tripId, segmentId, [tripId+segmentId], [segmentId+seq]' },
     upgrade: migrateTripSchema
+  },
+  {
+    version: 4,
+    name: 'recoverable-integrity-quarantine',
+    stores: { quarantine: 'id, batchId, createdAt, sourceTable, rowId, tripId' }
   }
 ];
 
@@ -117,6 +162,7 @@ export function validateMigrationRegistry(migrations = DATABASE_MIGRATIONS) {
 }
 
 validateMigrationRegistry();
+validateTripSchemaRegistry();
 
 export type DatabasePreflightIssueType =
   | 'invalid-trip-schema-version' | 'future-trip-schema-version'
@@ -163,7 +209,7 @@ export interface DatabaseMigrationResult {
 function emptyCounts(): DatabasePreflightCounts {
   return {
     trips: 0, segments: 0, trackChunks: 0, trackSnapshots: 0,
-    waypoints: 0, media: 0, elevCache: 0, shareImports: 0,
+    waypoints: 0, media: 0, elevCache: 0, shareImports: 0, quarantine: 0,
     points: 0, snapshotPoints: 0
   };
 }
@@ -352,7 +398,7 @@ async function inspectSource(raw: IDBDatabase, stores: string[]): Promise<Pick<D
     trackSnapshots: inspectSnapshot, waypoints: inspectWaypoint,
     media: inspectMedia, shareImports: inspectShareImport
   };
-  const order: DatabaseTable[] = ['trips', 'segments', 'waypoints', 'media', 'shareImports', 'trackChunks', 'trackSnapshots', 'elevCache'];
+  const order: DatabaseTable[] = ['trips', 'segments', 'waypoints', 'media', 'shareImports', 'trackChunks', 'trackSnapshots', 'elevCache', 'quarantine'];
   for (const table of order) {
     if (!stores.includes(table)) continue;
     await scanStore(tx, table, (row) => {
@@ -402,7 +448,7 @@ export async function preflightDatabase(name = DATABASE_NAME): Promise<DatabaseP
     const stores = [...raw.objectStoreNames];
     const result = emptyPreflight(fromVersion);
     result.stores = stores;
-    Object.assign(result, await inspectSource(raw, result.needsUpgrade ? stores : ['trips']));
+    Object.assign(result, await inspectSource(raw, stores));
     return result;
   } finally {
     raw.close();

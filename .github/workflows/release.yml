@@ -25,6 +25,11 @@ jobs:
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:offline
       - run: npm run test:memory
+      - name: Verify iOS real-device evidence
+        env:
+          IOS_EVIDENCE_TRUSTED_PUBLIC_KEY: ${{ vars.IOS_EVIDENCE_TRUSTED_PUBLIC_KEY }}
+          IOS_EVIDENCE_MAX_AGE_DAYS: ${{ vars.IOS_EVIDENCE_MAX_AGE_DAYS || '30' }}
+        run: npm run verify:ios-evidence -- --evidence docs/qa/ios-evidence.json --evidence-root docs/qa/evidence
       - name: Package static build
         run: cd dist && zip -qr ../roametch-dist.zip .
       - uses: actions/upload-artifact@v4

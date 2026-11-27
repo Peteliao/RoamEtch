@@ -2,8 +2,19 @@
 import { emit } from './events';
 
 const CAP = 50;
-let undoStack = [];
-let redoStack = [];
+export interface EditScope {
+  tripId: string;
+  session: number;
+}
+type HistoryAction = {
+  label: string;
+  tripId?: string;
+  session?: number;
+  undo: () => unknown | Promise<unknown>;
+  redo: () => unknown | Promise<unknown>;
+};
+let undoStack: HistoryAction[] = [];
+let redoStack: HistoryAction[] = [];
 let pendingTasks = 0;
 let taskTail = Promise.resolve();
 
@@ -35,16 +46,38 @@ function enqueueOperation<T>(operation: () => T | Promise<T>) {
   return enqueueTask(operation);
 }
 
+function matchesScope(action: HistoryAction, scope?: EditScope) {
+  return !scope || (action.tripId === scope.tripId
+    && (action.session == null || action.session === scope.session));
+}
+
+function popForScope(stack: HistoryAction[], scope?: EditScope) {
+  let discarded = false;
+  while (stack.length) {
+    const action = stack[stack.length - 1];
+    if (matchesScope(action, scope)) {
+      stack.pop();
+      return { action, discarded };
+    }
+    stack.pop();
+    discarded = true;
+  }
+  return { action: null, discarded };
+}
+
 /** action: { label, undo: async fn, redo: async fn } */
-export function pushAction(action) {
+export function pushAction(action: HistoryAction) {
   if (pendingTasks) enqueueTask(() => applyPush(action));
   else applyPush(action);
 }
 
-export async function undo() {
+export async function undo(scope?: EditScope) {
   return enqueueOperation(async () => {
-    const a = undoStack.pop();
-    if (!a) return false;
+    const { action: a, discarded } = popForScope(undoStack, scope);
+    if (!a) {
+      if (discarded) emit('history:changed', state());
+      return false;
+    }
     try {
       await a.undo();
     } catch (error) {
@@ -58,10 +91,13 @@ export async function undo() {
   });
 }
 
-export async function redo() {
+export async function redo(scope?: EditScope) {
   return enqueueOperation(async () => {
-    const a = redoStack.pop();
-    if (!a) return false;
+    const { action: a, discarded } = popForScope(redoStack, scope);
+    if (!a) {
+      if (discarded) emit('history:changed', state());
+      return false;
+    }
     try {
       await a.redo();
     } catch (error) {

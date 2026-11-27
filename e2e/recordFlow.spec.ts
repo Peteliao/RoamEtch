@@ -323,7 +323,13 @@ test('record map centers the fix above the live metrics panel', async ({ page })
   await openRecording(page);
   await expect.poll(() => page.evaluate(() => {
     const track = window.__lt.shell.getViews().record.getMap();
-    return !!track.posMarker && !track.map.isMoving() && track.map.getPadding().bottom > 200;
+    const mapRect = track.container.getBoundingClientRect();
+    const controlsRect = document.querySelector('.rec-controls').getBoundingClientRect();
+    const padding = track.map.getPadding().bottom;
+    const visibleCenterY = (mapRect.height - padding) / 2;
+    return !!track.posMarker && !track.map.isMoving() && padding > 200
+      && Math.abs(mapRect.bottom - controlsRect.top - padding) < 2
+      && Math.abs(track.map.project(track.posMarker.getLngLat()).y - visibleCenterY) < 3;
   })).toBe(true);
   const layout = await page.evaluate(() => {
     const track = window.__lt.shell.getViews().record.getMap();
@@ -334,10 +340,14 @@ test('record map centers the fix above the live metrics panel', async ({ page })
       markerY: point.y,
       visibleCenterY: (mapRect.height - track.map.getPadding().bottom) / 2,
       measuredInset: mapRect.bottom - controlsRect.top,
-      padding: track.map.getPadding().bottom
+      padding: track.map.getPadding().bottom,
+      mapHeight: mapRect.height,
+      center: track.map.getCenter(),
+      marker: track.posMarker.getLngLat(),
+      follow: track.follow
     };
   });
-  expect(Math.abs(layout.markerY - layout.visibleCenterY)).toBeLessThan(3);
+  expect(Math.abs(layout.markerY - layout.visibleCenterY), JSON.stringify(layout)).toBeLessThan(3);
   expect(Math.abs(layout.measuredInset - layout.padding)).toBeLessThan(2);
   await page.locator('.lp-head').click();
   await expect.poll(() => page.evaluate(() => {

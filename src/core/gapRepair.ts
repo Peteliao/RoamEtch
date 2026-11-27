@@ -252,6 +252,7 @@ export async function repairTrackGaps(tripId: string, {
   await write(true, { segments: full.segments, expectedUpdatedAt, allowAdditional: false }, signal);
   pushAction({
     label: 'gap-repair',
+    tripId,
     undo: async () => {
       await write(false, { segments: edits.map((edit) => ({ id: edit.segmentId, points: edit.after })), allowAdditional: true });
       emit('gap:changed', { tripId });

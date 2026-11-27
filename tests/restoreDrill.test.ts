@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
-  const tableNames = ['trips', 'segments', 'trackChunks', 'trackSnapshots', 'waypoints', 'media', 'elevCache', 'shareImports'] as const;
+  const tableNames = ['trips', 'segments', 'trackChunks', 'trackSnapshots', 'waypoints', 'media', 'elevCache', 'shareImports', 'quarantine'] as const;
   const instances = new Map<string, any>();
   const failOpen = new Set<any>();
   const blockedDeletes = new Map<any, Array<() => void>>();
@@ -194,7 +194,7 @@ afterEach(() => {
 });
 
 describe('isolated restore drill', () => {
-  it('runs the production v3 ZIP pipeline in two temporary databases without touching the main database', async () => {
+  it('runs the production v4 ZIP pipeline in two temporary databases without touching the main database', async () => {
     const mainBefore = mocks.mainSnapshot();
     const result = await runRestoreDrill();
 
@@ -208,7 +208,7 @@ describe('isolated restore drill', () => {
       const database = mocks.byRole(role)!;
       expect(database.name).toMatch(/^localtrace-restore-drill-.*-(source|target)$/);
       expect(database.name).not.toBe('localtrace');
-      expect(database.schemas).toEqual([1, 2, 3]);
+      expect(database.schemas).toEqual([1, 2, 3, 4]);
       expect(database.closed).toBe(true);
       expect(database.deleted).toBe(true);
     }

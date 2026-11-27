@@ -6,7 +6,7 @@ import * as store from '../core/store';
 import { processPhoto } from '../core/photos';
 import { readLocalImageHeader } from '../core/chatImage';
 import { resolveAltitude } from '../core/elevation';
-import { pushAction, undo, redo, state as histState } from '../core/history';
+import { pushAction, undo, redo, state as histState, type EditScope } from '../core/history';
 import { appState, refreshActiveTrip, scheduleAltBackfill } from './state';
 import { el, icon, modal, toast, confirmModal, filePickerMulti } from './helpers';
 import { openCamera } from './camera';
@@ -18,8 +18,37 @@ function segById(id) {
   return appState.activeTripFull?.segments.find((s) => s.id === id);
 }
 
-async function afterEdit(tripId = appState.activeTripId) {
-  return refreshActiveTrip(tripId);
+type EditContext = EditScope & { view: string; scopeCurrent?: () => boolean };
+
+function captureEdit(tripId = appState.activeTripId, scopeCurrent?: () => boolean): EditContext | null {
+  return tripId ? { tripId, session: appState.tripSession, view: appState.view, scopeCurrent } : null;
+}
+
+function isCurrentEdit(context: EditContext | null) {
+  return !!context && context.session === appState.tripSession && context.view === appState.view
+    && (context.scopeCurrent ? context.scopeCurrent() : context.tripId === appState.activeTripId);
+}
+
+async function afterEdit(context: EditContext | null) {
+  if (!isCurrentEdit(context)) return null;
+  const full = await refreshActiveTrip(context.tripId, { session: context.session, view: context.view });
+  return isCurrentEdit(context) ? full : null;
+}
+
+function pushEditAction(context: EditContext, action: { label: string; undo: () => unknown; redo: () => unknown }) {
+  pushAction({ ...context, ...action });
+}
+
+async function replaceSegmentPointsEdit(context: EditContext, segmentId: string, points: any[], expectedPoints: any[]) {
+  try {
+    await store.replaceSegmentPoints(segmentId, context.tripId, points, expectedPoints);
+    return true;
+  } catch (error) {
+    if (error?.message !== 'track-changed') throw error;
+    await afterEdit(context);
+    if (isCurrentEdit(context)) toast(t('analysis.qualityChanged'), 'warn');
+    return false;
+  }
 }
 
 // ---------------- waypoints ----------------
@@ -27,6 +56,7 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
   const isNew = !wpOrPos.id;
   const tripId = opts.tripId || appState.activeTripId;
   if (!tripId) { toast(t('analysis.noTrip'), 'warn'); return; }
+  const context = captureEdit(tripId, opts.scopeCurrent);
   const wp = isNew
     ? { lat: wpOrPos.lat, lon: wpOrPos.lon, name: '', desc: '', type: 'custom', time: Date.now(), hidden: false, mediaIds: [], alt: null }
     : { ...wpOrPos };
@@ -177,7 +207,7 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
     title: isNew ? t('wp.add') : t('wp.edit'),
     body,
     footer: [
-      !isNew ? el('button', { class: 'btn danger', onclick: async () => { m.close(); const full = await deleteWaypointAction(wp); await opts.onSaved?.(full); } }, icon('trash', 15), t('common.delete')) : null,
+      !isNew ? el('button', { class: 'btn danger', onclick: async () => { m.close(); const full = await deleteWaypointAction(wp, opts); await opts.onSaved?.(full); } }, icon('trash', 15), t('common.delete')) : null,
       el('button', { class: 'btn ghost', onclick: () => m.close() }, t('common.cancel')),
       el('button', { class: 'btn primary', onclick: save }, t('common.save'))
     ],
@@ -192,151 +222,203 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
     wp.desc = descInput.value.trim();
     wp.time = timeInput.value ? new Date(timeInput.value).getTime() : Date.now();
     wp.hidden = hiddenCb.checked;
+    if (!isCurrentEdit(context)) { m.close(); return; }
     if (wp.alt == null) {
       const r = await resolveAltitude(wp.lat, wp.lon, null, null);
       wp.alt = r.alt;
     }
+    if (!isCurrentEdit(context)) { m.close(); return; }
     const prev = isNew ? null : await store.getWaypoint(wp.id);
+    if (!isCurrentEdit(context)) { m.close(); return; }
     const saved = await store.saveWaypointWithMedia({
       waypoint: wp, tripId, photos: pendingPhotos, removedMediaIds: removedMedia, isNew
     });
+    if (!isCurrentEdit(context)) { m.close(); return; }
     if (isNew) {
-      pushAction({
+      pushEditAction(context, {
         label: 'wp-add',
-        undo: async () => { await store.deleteWaypoint(saved.id); await afterEdit(tripId); },
-        redo: async () => { await store.db.waypoints.put(saved); await afterEdit(tripId); }
+        undo: async () => { await store.deleteWaypoint(saved.id); await afterEdit(context); },
+        redo: async () => { await store.db.waypoints.put(saved); await afterEdit(context); }
       });
     } else {
-      pushAction({
+      pushEditAction(context, {
         label: 'wp-edit',
-        undo: async () => { await store.db.waypoints.put(prev); await afterEdit(tripId); },
-        redo: async () => { await store.db.waypoints.put(saved); await afterEdit(tripId); }
+        undo: async () => { await store.db.waypoints.put(prev); await afterEdit(context); },
+        redo: async () => { await store.db.waypoints.put(saved); await afterEdit(context); }
       });
     }
     m.close();
     toast(t('wp.saved'), 'ok');
-    const full = await afterEdit(tripId);
+    const full = await afterEdit(context);
     await opts.onSaved?.(full);
   }
 }
 
-export async function moveWaypoint(wp, lon, lat) {
-  const tripId = wp.tripId || appState.activeTripId;
+export async function moveWaypoint(wp, lon, lat, opts: any = {}) {
+  const tripId = wp.tripId || opts.tripId || appState.activeTripId;
+  const context = captureEdit(tripId, opts.scopeCurrent);
+  if (!isCurrentEdit(context)) return;
   const prev = { lon: wp.lon, lat: wp.lat, alt: wp.alt };
   await store.updateWaypoint(wp.id, { lon, lat, alt: null });
-  pushAction({
+  if (!isCurrentEdit(context)) return;
+  pushEditAction(context, {
     label: 'wp-move',
-    undo: async () => { await store.updateWaypoint(wp.id, prev); await afterEdit(tripId); },
-    redo: async () => { await store.updateWaypoint(wp.id, { lon, lat, alt: null }); await afterEdit(tripId); }
+    undo: async () => { await store.updateWaypoint(wp.id, prev); await afterEdit(context); },
+    redo: async () => { await store.updateWaypoint(wp.id, { lon, lat, alt: null }); await afterEdit(context); }
   });
   toast(t('wp.dragHint'), 'info', 1500);
-  await afterEdit(tripId);
-  scheduleAltBackfill();
+  await afterEdit(context);
+  scheduleAltBackfill(tripId);
 }
 
-export async function deleteWaypointAction(wp) {
+export async function deleteWaypointAction(wp, opts: any = {}) {
+  const tripId = wp.tripId || opts.tripId || appState.activeTripId;
+  const context = captureEdit(tripId, opts.scopeCurrent);
   const ok = await confirmModal({ title: t('common.delete'), message: t('wp.deleteConfirm'), danger: true, confirmText: t('common.delete') });
-  if (!ok) return null;
+  if (!ok || !context) return null;
   const waypoint = await store.getWaypoint(wp.id);
-  const tripId = waypoint.tripId;
+  if (!waypoint || waypoint.tripId !== tripId || !isCurrentEdit(context)) return null;
   await store.deleteWaypoint(wp.id);
-  pushAction({
+  if (!isCurrentEdit(context)) return null;
+  pushEditAction(context, {
     label: 'wp-del',
-    undo: async () => { await store.db.waypoints.put(waypoint); await afterEdit(tripId); },
-    redo: async () => { await store.deleteWaypoint(wp.id); await afterEdit(tripId); }
+    undo: async () => { await store.db.waypoints.put(waypoint); await afterEdit(context); },
+    redo: async () => { await store.deleteWaypoint(wp.id); await afterEdit(context); }
   });
   toast(t('wp.deleted'), 'ok');
-  return afterEdit(tripId);
+  return afterEdit(context);
 }
 
 // ---------------- track vertices ----------------
 export async function moveVertex(segId, idx, lon, lat) {
+  const tripId = appState.activeTripId;
+  const context = captureEdit(tripId);
   const seg = segById(segId);
-  if (!seg || !seg.points[idx]) return;
+  if (!context || !seg || !seg.points[idx]) return;
   const before = seg.points.map((p) => ({ ...p }));
   const pts = seg.points.map((p, i) => (i === idx ? { ...p, lon, lat, alt: null, altSrc: null } : p));
-  await store.replaceSegmentPoints(segId, appState.activeTripId, pts);
-  pushAction({
+  if (!await replaceSegmentPointsEdit(context, segId, pts, before)) return;
+  if (!isCurrentEdit(context)) return;
+  pushEditAction(context, {
     label: 'v-move',
-    undo: async () => { await store.replaceSegmentPoints(segId, appState.activeTripId, before); await afterEdit(); },
-    redo: async () => { await store.replaceSegmentPoints(segId, appState.activeTripId, pts); await afterEdit(); }
+    undo: async () => {
+      if (!isCurrentEdit(context)) return;
+      await store.replaceSegmentPoints(segId, context.tripId, before, pts);
+      await afterEdit(context);
+    },
+    redo: async () => {
+      if (!isCurrentEdit(context)) return;
+      await store.replaceSegmentPoints(segId, context.tripId, pts, before);
+      await afterEdit(context);
+    }
   });
   toast(t('wp.pointMoved'), 'info', 2000);
-  await afterEdit();
-  scheduleAltBackfill();
+  await afterEdit(context);
+  scheduleAltBackfill(tripId);
 }
 
 export async function insertVertex(segId, afterIdx, lon, lat) {
+  const tripId = appState.activeTripId;
+  const context = captureEdit(tripId);
   const seg = segById(segId);
-  if (!seg) return;
+  if (!context || !seg) return;
   const before = seg.points.map((p) => ({ ...p }));
   const a = seg.points[afterIdx], b = seg.points[afterIdx + 1];
   const t = a?.t && b?.t ? Math.round((a.t + b.t) / 2) : (a?.t || Date.now());
   const np = { lat, lon, t, alt: null, altSrc: null, acc: null, speed: null };
   const pts = [...seg.points.slice(0, afterIdx + 1), np, ...seg.points.slice(afterIdx + 1)];
-  await store.replaceSegmentPoints(segId, appState.activeTripId, pts);
-  pushAction({
+  if (!await replaceSegmentPointsEdit(context, segId, pts, before)) return;
+  if (!isCurrentEdit(context)) return;
+  pushEditAction(context, {
     label: 'v-insert',
-    undo: async () => { await store.replaceSegmentPoints(segId, appState.activeTripId, before); await afterEdit(); },
-    redo: async () => { await store.replaceSegmentPoints(segId, appState.activeTripId, pts); await afterEdit(); }
+    undo: async () => {
+      if (!isCurrentEdit(context)) return;
+      await store.replaceSegmentPoints(segId, context.tripId, before, pts);
+      await afterEdit(context);
+    },
+    redo: async () => {
+      if (!isCurrentEdit(context)) return;
+      await store.replaceSegmentPoints(segId, context.tripId, pts, before);
+      await afterEdit(context);
+    }
   });
-  await afterEdit();
-  scheduleAltBackfill();
+  await afterEdit(context);
+  scheduleAltBackfill(tripId);
 }
 
 export async function deleteVertex(segId, idx) {
+  const tripId = appState.activeTripId;
+  const context = captureEdit(tripId);
   const seg = segById(segId);
-  if (!seg || seg.points.length <= 2) return;
+  if (!context || !seg || seg.points.length <= 2) return;
   const before = seg.points.map((p) => ({ ...p }));
   const pts = seg.points.filter((_, i) => i !== idx);
-  await store.replaceSegmentPoints(segId, appState.activeTripId, pts);
-  pushAction({
+  if (!await replaceSegmentPointsEdit(context, segId, pts, before)) return;
+  if (!isCurrentEdit(context)) return;
+  pushEditAction(context, {
     label: 'v-del',
-    undo: async () => { await store.replaceSegmentPoints(segId, appState.activeTripId, before); await afterEdit(); },
-    redo: async () => { await store.replaceSegmentPoints(segId, appState.activeTripId, pts); await afterEdit(); }
+    undo: async () => {
+      if (!isCurrentEdit(context)) return;
+      await store.replaceSegmentPoints(segId, context.tripId, before, pts);
+      await afterEdit(context);
+    },
+    redo: async () => {
+      if (!isCurrentEdit(context)) return;
+      await store.replaceSegmentPoints(segId, context.tripId, pts, before);
+      await afterEdit(context);
+    }
   });
-  await afterEdit();
+  await afterEdit(context);
 }
 
 export async function splitSegmentAt(segId, idx) {
-  const seg = segById(segId);
-  if (!seg || idx <= 0 || idx >= seg.points.length - 1) return;
   const tripId = appState.activeTripId;
+  const context = captureEdit(tripId);
+  const seg = segById(segId);
+  if (!context || !seg || idx <= 0 || idx >= seg.points.length - 1) return;
   const before = seg.points.map((p) => ({ ...p }));
   const left = seg.points.slice(0, idx + 1);
   const right = seg.points.slice(idx + 1);
   const newSeg = await store.addSegment(tripId, right[0]?.t);
-  await store.replaceSegmentPoints(segId, tripId, left);
-  await store.replaceSegmentPoints(newSeg.id, tripId, right);
-  pushAction({
+  if (!await replaceSegmentPointsEdit(context, segId, left, before)) return;
+  if (!await replaceSegmentPointsEdit(context, newSeg.id, right, [])) return;
+  if (!isCurrentEdit(context)) return;
+  pushEditAction(context, {
     label: 'seg-split',
     undo: async () => {
-      await store.replaceSegmentPoints(segId, tripId, before);
+      if (!isCurrentEdit(context)) return;
+      await store.replaceSegmentPoints(segId, context.tripId, before, left);
       await store.db.trackChunks.where('segmentId').equals(newSeg.id).delete();
       await store.db.segments.delete(newSeg.id);
-      await afterEdit();
+      await afterEdit(context);
     },
     redo: async () => {
-      await store.replaceSegmentPoints(segId, tripId, left);
+      if (!isCurrentEdit(context)) return;
+      await store.replaceSegmentPoints(segId, context.tripId, left, before);
       await store.db.segments.put(newSeg);
-      await store.replaceSegmentPoints(newSeg.id, tripId, right);
-      await afterEdit();
+      await store.replaceSegmentPoints(newSeg.id, context.tripId, right, []);
+      await afterEdit(context);
     }
   });
   toast(t('wp.segSplit'), 'ok');
-  await afterEdit();
+  await afterEdit(context);
 }
 
 // ---------------- undo / redo ----------------
-export async function undoEdit() {
-  if (!(await undo())) { toast(t('edit.nothingUndo'), 'info', 1500); return; }
+export async function undoEdit(opts: any = {}) {
+  const context = captureEdit(opts.tripId || appState.activeTripId, opts.scopeCurrent);
+  if (!context) return;
+  const changed = await undo(context);
+  if (!isCurrentEdit(context)) return;
+  if (!changed) { toast(t('edit.nothingUndo'), 'info', 1500); return; }
   toast(t('edit.undone'), 'ok', 1400);
-  await afterEdit();
 }
-export async function redoEdit() {
-  if (!(await redo())) return;
+export async function redoEdit(opts: any = {}) {
+  const context = captureEdit(opts.tripId || appState.activeTripId, opts.scopeCurrent);
+  if (!context) return;
+  const changed = await redo(context);
+  if (!changed || !isCurrentEdit(context)) return;
   toast(t('edit.redone'), 'ok', 1400);
-  await afterEdit();
 }
 export { histState };
 

@@ -106,6 +106,33 @@ describe('compute worker resilience', () => {
     await expect(next).resolves.toEqual(expected);
   });
 
+  it('keeps a large statistics task alive past the small-task timeout', async () => {
+    const { computeStatsAsync } = await import('../src/core/workerBridge');
+    const largeSegments = [{ points: { length: 100_001 } }];
+    const pending = computeStatsAsync(largeSegments as any, {});
+    const instance = MockWorker.instances[0];
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(instance.terminate).not.toHaveBeenCalled();
+    instance.onmessage?.({ data: { id: 1, ok: true, result: { pointCount: 100_001 } } });
+    await expect(pending).resolves.toEqual({ pointCount: 100_001 });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('serializes GPX in the worker and returns the complete document', async () => {
+    const { buildGPXAsync } = await import('../src/core/workerBridge');
+    const full = { trip: { name: 'Worker GPX', createdAt: 0 }, segments: [], waypoints: [] };
+    const pending = buildGPXAsync(full);
+    const instance = MockWorker.instances[0];
+
+    expect(instance.postMessage).toHaveBeenCalledWith({ id: 1, type: 'gpx', payload: { full } });
+    instance.onmessage?.({ data: { id: 1, ok: true, result: '<gpx>complete</gpx>' } });
+
+    await expect(pending).resolves.toBe('<gpx>complete</gpx>');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('falls back when posting a task fails', async () => {
     const { computeDistanceSplitsAsync } = await import('../src/core/workerBridge');
     MockWorker.postError = true;
@@ -136,6 +163,19 @@ describe('compute worker resilience', () => {
     expect(MockWorker.instances).toHaveLength(0);
   });
 
+  it('releases an isolated cancellable worker after a successful response', async () => {
+    const { previewTrackCleanupAsync } = await import('../src/core/workerBridge');
+    const controller = new AbortController();
+    const pending = previewTrackCleanupAsync(segments, 'hike', {}, { signal: controller.signal });
+    const instance = MockWorker.instances[0];
+
+    instance.onmessage?.({ data: { id: 1, ok: true, result: { removed: 0 } } });
+
+    await expect(pending).resolves.toEqual({ removed: 0 });
+    expect(instance.terminate).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('terminates a blocked worker on cancellation and ignores its late response', async () => {
     const { previewTrackCleanupAsync } = await import('../src/core/workerBridge');
     const controller = new AbortController();
@@ -157,18 +197,22 @@ describe('compute worker resilience', () => {
     await expect(next).resolves.toEqual({ removed: 0 });
   });
 
-  it('recovers other pending tasks when one cancellation terminates their worker', async () => {
+  it('keeps unrelated tasks in their worker when another task is cancelled', async () => {
     const { computeDistanceSplitsAsync, previewTrackCleanupAsync } = await import('../src/core/workerBridge');
     const controller = new AbortController();
     const cancelled = previewTrackCleanupAsync(segments, 'hike', {}, { signal: controller.signal });
     const other = computeDistanceSplitsAsync(segments, 500, { activity: 'hike' });
-    const instance = MockWorker.instances[0];
+    const cancelledWorker = MockWorker.instances[0];
+    const otherWorker = MockWorker.instances[1];
 
     controller.abort();
 
     await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' });
+    expect(cancelledWorker.terminate).toHaveBeenCalledTimes(1);
+    expect(otherWorker.terminate).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
+    otherWorker.onmessage?.({ data: { id: 2, ok: true, result: computeDistanceSplits(segments, 500, { activity: 'hike' }) } });
     await expect(other).resolves.toEqual(computeDistanceSplits(segments, 500, { activity: 'hike' }));
-    expect(instance.terminate).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 

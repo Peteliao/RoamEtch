@@ -821,7 +821,8 @@ export function createTripsView(navigate, getRecordMap = () => null) {
   }
 
   async function openOnMap(trip) {
-    await setActiveTrip(trip.id, { fit: true });
+    const full = await setActiveTrip(trip.id, { fit: true });
+    if (!full || appState.activeTripId !== trip.id) return;
     navigate('record', { tripId: trip.id, fit: true });
   }
 
@@ -985,6 +986,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     const res = await startRewalk(trip.id, mode);
     if (res === 'busy') { toast(t('rewalk.busy'), 'warn'); return; }
     if (res === 'empty') { toast(t('rewalk.empty'), 'warn'); return; }
+    if (res !== true) return;
     navigate('record');
   }
 

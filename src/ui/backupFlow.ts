@@ -58,6 +58,12 @@ function formatDate(iso) {
   return isNaN(d.getTime()) ? '—' : d.toLocaleString();
 }
 
+function restoreErrorMessage(error) {
+  return error?.code === 'backup-limit-exceeded'
+    ? error.message
+    : t(error?.code === 'backup-encrypted-unsupported' ? 'backup.unsupported' : 'trips.restoreErr');
+}
+
 function askExportPassword() {
   return new Promise<{ password: string } | null>((resolve) => {
     let settled = false;
@@ -228,7 +234,7 @@ export async function restoreBackupFlow(file, { onRestored = null } = {}) {
         continue;
       }
       console.error(e);
-      toast(t(e?.code === 'backup-encrypted-unsupported' ? 'backup.unsupported' : 'trips.restoreErr'), 'err');
+      toast(restoreErrorMessage(e), 'err', e?.code === 'backup-limit-exceeded' ? 7000 : 3200);
       return false;
     }
   }
@@ -321,7 +327,7 @@ export async function restoreBackupFlow(file, { onRestored = null } = {}) {
       bytes: file?.size || 0, encrypted, manifest,
       mediaChecked: integrity.checked || 0, mediaFailed: integrity.failed?.length || 0
     });
-    toast(t('trips.restoreErr'), 'err');
+    toast(restoreErrorMessage(e), 'err', e?.code === 'backup-limit-exceeded' ? 7000 : 3200);
     return false;
   }
   await historyRecord({

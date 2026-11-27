@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
   const db: any = {
-    trackSnapshots: { where: vi.fn() },
+    trackSnapshots: { where: vi.fn(), add: vi.fn() },
     segments: { where: vi.fn(), update: vi.fn() },
     trackChunks: { where: vi.fn(), add: vi.fn() },
     trips: { update: vi.fn() },
@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => {
   db.version.mockReturnValue(db);
   db.stores.mockReturnValue(db);
   db.upgrade.mockReturnValue(db);
-  return { db, rows: [] as any[], segments: [] as any[], snapshotQuery: { toArray: vi.fn(), each: vi.fn() } };
+  return { db, rows: [] as any[], segments: [] as any[], snapshotQuery: {} as any };
 });
 
 vi.mock('dexie', () => ({
@@ -23,7 +23,10 @@ vi.mock('dexie', () => ({
   }
 }));
 
-import { getTrackSnapshotSummary, loadTrackSnapshot, restoreTrackSnapshot } from '../src/core/store';
+import {
+  getTrackSnapshotSummary, listTrackRepairVersions, loadTrackRepairVersion,
+  loadTrackSnapshot, restoreTrackSnapshot, saveTrackRepairVersion
+} from '../src/core/store';
 
 const segment = { id: 'seg-1', tripId: 'trip-1', index: 0 };
 const snapshot = (seq: number, overrides: any = {}) => ({
@@ -45,10 +48,16 @@ beforeEach(() => {
   mocks.db.trackSnapshots.where.mockReturnValue({
     equals: () => mocks.snapshotQuery
   });
-  mocks.snapshotQuery.toArray.mockImplementation(async () => mocks.rows);
-  mocks.snapshotQuery.each.mockImplementation(async (callback: (row: any) => void) => {
-    for (const row of mocks.rows) callback(row);
+  const query = (predicate: (row: any) => boolean): any => ({
+    toArray: vi.fn(async () => mocks.rows.filter(predicate)),
+    each: vi.fn(async (callback: (row: any) => void) => {
+      for (const row of mocks.rows.filter(predicate)) callback(row);
+    }),
+    filter: (next: (row: any) => boolean) => query((row) => predicate(row) && next(row)),
+    count: vi.fn(async () => mocks.rows.filter(predicate).length)
   });
+  mocks.snapshotQuery = query(() => true);
+  mocks.db.trackSnapshots.add.mockImplementation(async (row: any) => { mocks.rows.push(row); });
   mocks.db.segments.where.mockReturnValue({
     equals: () => ({ toArray: async () => mocks.segments })
   });
@@ -69,7 +78,7 @@ describe('local original-track snapshots', () => {
     expect(mocks.snapshotQuery.toArray).not.toHaveBeenCalled();
   });
 
-  it('orders valid chunks by segment and sequence', async () => {
+it('orders valid chunks by segment and sequence', async () => {
     mocks.rows = [
       snapshot(1, { points: [{ lat: 30, lon: 120.002, t: 2 }] }),
       snapshot(0, { points: [{ lat: 30, lon: 120.001, t: 1 }] })
@@ -85,6 +94,56 @@ describe('local original-track snapshots', () => {
       ]
     }]);
   });
+
+describe('versioned track repairs', () => {
+  const metadata = {
+    sourceUpdatedAt: 10,
+    sourceFingerprint: 'source-fingerprint',
+    previewId: 'preview-id',
+    selectedCategories: ['duplicate-fix'],
+    summary: { removed: 1, altitudeCleared: 0 },
+    metrics: { distance: 12, duration: 1000, pointCount: 1 },
+    semantics: { basis: 'repaired-points', gaps: 'classified-only-never-interpolated' }
+  };
+
+  it('keeps raw snapshots separate from multiple repair versions', async () => {
+    mocks.rows = [snapshot(0, { points: [{ lat: 30, lon: 120, t: 1 }, { lat: 30, lon: 120, t: 1 }] })];
+    const first = await saveTrackRepairVersion('trip-1', [{ id: 'seg-1', index: 0, points: [{ lat: 30, lon: 120, t: 1 }] }], metadata);
+    const second = await saveTrackRepairVersion('trip-1', [{ id: 'seg-1', index: 0, points: [] }], {
+      ...metadata, previewId: 'preview-2', selectedCategories: ['stationary-walk']
+    });
+
+    expect(first.version).toBe(1);
+    expect(second.version).toBe(2);
+    expect(first.versionId).not.toBe(second.versionId);
+    await expect(getTrackSnapshotSummary('trip-1')).resolves.toEqual({ segments: 1, points: 2, createdAt: 1 });
+    await expect(loadTrackSnapshot('trip-1')).resolves.toEqual([{
+      id: 'seg-1', index: 0, createdAt: 1,
+      points: [{ lat: 30, lon: 120, t: 1 }, { lat: 30, lon: 120, t: 1 }]
+    }]);
+    const versions = await listTrackRepairVersions('trip-1');
+    expect(versions.map((version) => version.version)).toEqual([2, 1]);
+    expect(versions[0]).toMatchObject({ versionId: second.versionId, points: 0, selectedCategories: ['stationary-walk'] });
+    await expect(loadTrackRepairVersion('trip-1', first.versionId)).resolves.toMatchObject({
+      versionId: first.versionId, version: 1, previewId: 'preview-id',
+      segments: [{ id: 'seg-1', points: [{ lat: 30, lon: 120, t: 1 }] }]
+    });
+    await expect(loadTrackRepairVersion('trip-1', second.versionId)).resolves.toMatchObject({
+      versionId: second.versionId, version: 2, segments: [{ id: 'seg-1', points: [] }]
+    });
+  });
+
+  it('rejects missing and internally inconsistent repair versions', async () => {
+    await expect(loadTrackRepairVersion('trip-1', 'missing')).rejects.toThrow('track-repair-version-not-found');
+    const saved = await saveTrackRepairVersion('trip-1', [{
+      id: 'seg-1', index: 0,
+      points: Array.from({ length: 401 }, (_, index) => ({ lat: 30, lon: 120, t: index }))
+    }], metadata);
+    mocks.rows.filter((row) => row.snapshotId === saved.versionId).at(-1)!.previewId = 'tampered';
+
+    await expect(listTrackRepairVersions('trip-1')).rejects.toThrow('inconsistent-track-repair-version');
+  });
+});
 
   it.each([
     ['a missing sequence', [snapshot(1)]],

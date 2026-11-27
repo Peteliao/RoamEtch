@@ -7,9 +7,10 @@ const mocks = vi.hoisted(() => ({
     transaction: vi.fn()
   },
   loadTripTrack: vi.fn(), loadTrackSnapshot: vi.fn(), saveTrackSnapshotInTx: vi.fn(),
+  saveTrackRepairVersionInTx: vi.fn(), loadTrackRepairVersion: vi.fn(),
   replaceSegmentPointsInTx: vi.fn(), updateTripInTx: vi.fn(), abortTransactionOnSignal: vi.fn(),
   pushAction: vi.fn(), emit: vi.fn(),
-  previewTrackCleanupAsync: vi.fn()
+  previewTrackCleanupAsync: vi.fn(), previewTrackRepairAsync: vi.fn()
 }));
 
 vi.mock('../src/core/store', () => ({
@@ -17,15 +18,21 @@ vi.mock('../src/core/store', () => ({
   loadTripTrack: mocks.loadTripTrack,
   loadTrackSnapshot: mocks.loadTrackSnapshot,
   saveTrackSnapshotInTx: mocks.saveTrackSnapshotInTx,
+  saveTrackRepairVersionInTx: mocks.saveTrackRepairVersionInTx,
+  loadTrackRepairVersion: mocks.loadTrackRepairVersion,
   replaceSegmentPointsInTx: mocks.replaceSegmentPointsInTx,
   updateTripInTx: mocks.updateTripInTx,
   abortTransactionOnSignal: mocks.abortTransactionOnSignal
 }));
-vi.mock('../src/core/workerBridge', () => ({ previewTrackCleanupAsync: mocks.previewTrackCleanupAsync }));
+vi.mock('../src/core/workerBridge', () => ({
+  previewTrackCleanupAsync: mocks.previewTrackCleanupAsync,
+  previewTrackRepairAsync: mocks.previewTrackRepairAsync
+}));
 vi.mock('../src/core/history', () => ({ pushAction: mocks.pushAction }));
 vi.mock('../src/core/events', () => ({ emit: mocks.emit }));
 
-import { cleanGpsTrack, restoreGpsTrack } from '../src/core/trackCleanup';
+import { cleanGpsTrack, restoreGpsTrack, applyTrackRepair, restoreTrackRepairVersion } from '../src/core/trackCleanup';
+import { buildTrackRepairPreview } from '../src/core/trackRepair';
 
 const point = (lon, t) => ({ lat: 30, lon: 120 + lon / 95_600, t, acc: 5, alt: 100 });
 const forward = [0, -100, -200, -300, -400].map((lon, i) => point(lon, i * 5_000));
@@ -52,8 +59,10 @@ beforeEach(() => {
     segments: [{ id: 'seg-1', index: 0, points: originalPoints }]
   });
   mocks.previewTrackCleanupAsync.mockImplementation(async (segments, activity, opts) => previewTrackCleanup(segments, activity, opts));
+  mocks.previewTrackRepairAsync.mockImplementation(async (segments, activity, opts) => buildTrackRepairPreview(segments, activity, opts));
   mocks.loadTrackSnapshot.mockResolvedValue([{ id: 'seg-1', index: 0, points: originalPoints }]);
   mocks.saveTrackSnapshotInTx.mockResolvedValue(true);
+  mocks.saveTrackRepairVersionInTx.mockResolvedValue({ versionId: 'repair-v1', version: 1, createdAt: 20 });
   mocks.replaceSegmentPointsInTx.mockResolvedValue(undefined);
   mocks.updateTripInTx.mockResolvedValue(1);
 });
@@ -229,6 +238,115 @@ describe('persistent GPS cleanup', () => {
     await expect(action.undo()).rejects.toThrow('track-changed');
     await expect(action.redo()).rejects.toThrow('track-changed');
     expect(mocks.replaceSegmentPointsInTx).toHaveBeenCalledTimes(writes);
+  });
+});
+
+describe('classified repair versions', () => {
+  const repairPoints: any[] = [
+    point(0, 0), point(0, 0), { ...point(2, 5_000), alt: 240 }
+  ];
+  const repairedPoints = [point(0, 0), { lat: 30, lon: 120 + 2 / 95_600, t: 5_000, acc: 5 }];
+  const repairFull = (points = repairPoints) => ({
+    trip: { id: 'trip-1', activity: 'hike', updatedAt: 10 },
+    segments: [{ id: 'seg-1', index: 0, points }]
+  });
+
+  it('applies selected categories, retains the raw snapshot and creates one repairable version', async () => {
+    mocks.loadTripTrack.mockResolvedValue(repairFull());
+    const preview = buildTrackRepairPreview(repairFull().segments, 'hike', { selected: ['duplicate-fix', 'altitude-jump'] });
+
+    expect(preview.summary.altitudeCleared).toBe(1);
+    const result = await applyTrackRepair('trip-1', { preview, expectedUpdatedAt: 10 });
+
+    expect(result).toMatchObject({ removed: 1, altitudeCleared: 1, version: { versionId: 'repair-v1', version: 1 } });
+    expect(mocks.saveTrackSnapshotInTx).toHaveBeenCalledWith('trip-1', expect.any(Array));
+    expect(mocks.replaceSegmentPointsInTx).toHaveBeenCalledWith('seg-1', 'trip-1', repairedPoints);
+    expect(mocks.saveTrackRepairVersionInTx).toHaveBeenCalledWith('trip-1', [
+      { id: 'seg-1', index: 0, points: repairedPoints }
+    ], expect.objectContaining({
+      sourceUpdatedAt: 10, previewId: preview.previewId,
+      selectedCategories: ['altitude-jump', 'duplicate-fix'],
+      summary: expect.objectContaining({ removed: 1, altitudeCleared: 1 })
+    }));
+    const action = mocks.pushAction.mock.calls[0][0];
+    mocks.loadTripTrack.mockResolvedValue(repairFull(repairedPoints));
+    await action.undo();
+    expect(mocks.replaceSegmentPointsInTx).toHaveBeenLastCalledWith('seg-1', 'trip-1', repairPoints);
+    mocks.loadTripTrack.mockResolvedValue(repairFull(repairPoints));
+    await action.redo();
+    expect(mocks.replaceSegmentPointsInTx).toHaveBeenLastCalledWith('seg-1', 'trip-1', repairedPoints);
+    expect(mocks.saveTrackRepairVersionInTx).toHaveBeenCalledTimes(1);
+  });
+
+  it('records classify-only selections without creating a raw restore snapshot or edit history', async () => {
+    const gapPoints = [point(0, 0), point(0, 120_000)];
+    mocks.loadTripTrack.mockResolvedValue(repairFull(gapPoints));
+    const preview = buildTrackRepairPreview(repairFull(gapPoints).segments, 'hike', { selected: ['gap-pause'] });
+
+    expect(preview.summary).toMatchObject({ removed: 0, altitudeCleared: 0, classifiedGaps: 1 });
+    const result = await applyTrackRepair('trip-1', { preview, expectedUpdatedAt: 10 });
+
+    expect(result).toMatchObject({ removed: 0, altitudeCleared: 0, version: { versionId: 'repair-v1', version: 1 } });
+    expect(mocks.saveTrackSnapshotInTx).not.toHaveBeenCalled();
+    expect(mocks.replaceSegmentPointsInTx).not.toHaveBeenCalled();
+    expect(mocks.pushAction).not.toHaveBeenCalled();
+    expect(mocks.saveTrackRepairVersionInTx).toHaveBeenCalledWith('trip-1', repairFull(gapPoints).segments, expect.objectContaining({
+      selectedCategories: ['gap-pause']
+    }));
+  });
+
+  it('rejects a preview whose category selection changed before any write', async () => {
+    mocks.loadTripTrack.mockResolvedValue(repairFull());
+    const preview = buildTrackRepairPreview(repairFull().segments, 'hike');
+    const altered = { ...preview, selected: ['invalid-time'] };
+
+    await expect(applyTrackRepair('trip-1', { preview: altered, expectedUpdatedAt: 10 })).rejects.toThrow('track-changed');
+    expect(mocks.db.transaction).not.toHaveBeenCalled();
+    expect(mocks.saveTrackRepairVersionInTx).not.toHaveBeenCalled();
+  });
+
+  it('does not publish history or a repair version when cancellation aborts the write', async () => {
+    mocks.loadTripTrack.mockResolvedValue(repairFull());
+    const preview = buildTrackRepairPreview(repairFull().segments, 'hike');
+    const controller = new AbortController();
+    mocks.replaceSegmentPointsInTx.mockImplementation(async () => { controller.abort(); });
+
+    await expect(applyTrackRepair('trip-1', {
+      preview, expectedUpdatedAt: 10, signal: controller.signal
+    })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(mocks.saveTrackRepairVersionInTx).not.toHaveBeenCalled();
+    expect(mocks.pushAction).not.toHaveBeenCalled();
+    expect(mocks.emit).not.toHaveBeenCalled();
+  });
+
+  it('restores a chosen version without touching segments added later and supports undo/redo', async () => {
+    const added = { id: 'seg-2', index: 1, points: [point(3, 6_000)] };
+    mocks.loadTripTrack.mockResolvedValue({
+      trip: { id: 'trip-1', activity: 'hike', updatedAt: 10 },
+      segments: [{ id: 'seg-1', index: 0, points: repairPoints }, added]
+    });
+    mocks.loadTrackRepairVersion.mockResolvedValue({
+      versionId: 'repair-v1', version: 1, segments: [{ id: 'seg-1', index: 0, points: repairedPoints }]
+    });
+
+    const result = await restoreTrackRepairVersion('trip-1', 'repair-v1', { expectedUpdatedAt: 10 });
+
+    expect(result.restored).toBe(2);
+    expect(mocks.replaceSegmentPointsInTx).toHaveBeenCalledTimes(1);
+    expect(mocks.replaceSegmentPointsInTx).toHaveBeenCalledWith('seg-1', 'trip-1', repairedPoints);
+    const action = mocks.pushAction.mock.calls[0][0];
+    mocks.loadTripTrack.mockResolvedValue({
+      trip: { id: 'trip-1', activity: 'hike', updatedAt: 11 },
+      segments: [{ id: 'seg-1', index: 0, points: repairedPoints }, added]
+    });
+    await action.undo();
+    expect(mocks.replaceSegmentPointsInTx).toHaveBeenLastCalledWith('seg-1', 'trip-1', repairPoints);
+    mocks.loadTripTrack.mockResolvedValue({
+      trip: { id: 'trip-1', activity: 'hike', updatedAt: 12 },
+      segments: [{ id: 'seg-1', index: 0, points: repairPoints }, added]
+    });
+    await action.redo();
+    expect(mocks.replaceSegmentPointsInTx).toHaveBeenLastCalledWith('seg-1', 'trip-1', repairedPoints);
   });
 });
 

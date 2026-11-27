@@ -5,7 +5,7 @@ import { regionState, regionLabel, setRegionMode } from '../core/region';
 import { get } from '../core/settings';
 import { rec } from '../core/recorder';
 import { getMeetSnapshot } from '../core/meet';
-import { appState } from './state';
+import { appState, cancelAltBackfill } from './state';
 import { el, icon, modal, toast } from './helpers';
 import { createRecordView } from './record';
 import { createMeetView } from './meet';
@@ -181,6 +181,7 @@ export function createShell(root) {
 
   function applyNavigation(target, intent) {
     if (!views[target]) return;
+    if (target !== current) cancelAltBackfill();
     current = target;
     appState.view = target;
     for (const [n, v] of Object.entries(views)) v.view.classList.toggle('active', n === target);

@@ -18,11 +18,11 @@ function tripTransaction(trips: any[]) {
 
 function preflight(overrides: Partial<DatabasePreflight> = {}): DatabasePreflight {
   return {
-    fromVersion: 2, toVersion: 3, needsUpgrade: true, skipped: false,
+    fromVersion: 2, toVersion: 4, needsUpgrade: true, skipped: false,
     blocking: false, ok: true, stores: DATABASE_TABLES,
     counts: {
       trips: 1, segments: 0, trackChunks: 0, trackSnapshots: 0,
-      waypoints: 0, media: 0, elevCache: 0, shareImports: 0,
+      waypoints: 0, media: 0, elevCache: 0, shareImports: 0, quarantine: 0,
       points: 0, snapshotPoints: 0
     },
     issues: [], ...overrides
@@ -43,9 +43,9 @@ function migratedDatabase(counts = preflight().counts, trips = [{ id: 'trip-1', 
 describe('database migration registry', () => {
   it('declares contiguous, independently named schema upgrades', () => {
     expect(validateMigrationRegistry()).toBe(true);
-    expect(DATABASE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3]);
+    expect(DATABASE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4]);
     expect(DATABASE_MIGRATIONS.map((migration) => migration.name)).toEqual([
-      'initial-trip-storage', 'durable-share-imports', 'original-track-snapshots'
+      'initial-trip-storage', 'durable-share-imports', 'original-track-snapshots', 'recoverable-integrity-quarantine'
     ]);
     expect(DATABASE_MIGRATIONS[1].upgrade).toEqual(expect.any(Function));
     expect(DATABASE_MIGRATIONS[2].upgrade).toEqual(expect.any(Function));
@@ -61,7 +61,7 @@ describe('database migration registry', () => {
   });
 
   it('maps Dexie native versions back to logical schema versions', () => {
-    expect([0, 10, 20, 30, 31].map(logicalDatabaseVersion)).toEqual([0, 1, 2, 3, 3]);
+    expect([0, 10, 20, 30, 31, 40].map(logicalDatabaseVersion)).toEqual([0, 1, 2, 3, 3, 4]);
     expect(() => logicalDatabaseVersion(-1)).toThrow(/invalid-database-version/);
   });
 
@@ -95,7 +95,7 @@ describe('database migration registry', () => {
 describe('post-migration verification', () => {
   it('verifies schema, required stores, row counts and trip versions', async () => {
     await expect(verifyDatabaseMigration(migratedDatabase(), preflight())).resolves.toMatchObject({
-      fromVersion: 2, toVersion: 3, needsUpgrade: true, verified: true
+      fromVersion: 2, toVersion: 4, needsUpgrade: true, verified: true
     });
   });
 
@@ -118,14 +118,14 @@ describe('post-migration verification', () => {
   });
 
   it('verifies current and skipped databases without comparing row counts', async () => {
-    const current = preflight({ fromVersion: 3, needsUpgrade: false });
+    const current = preflight({ fromVersion: 4, needsUpgrade: false });
     await expect(verifyDatabaseMigration(migratedDatabase(undefined, []), current)).resolves.toMatchObject({ verified: true, needsUpgrade: false });
     const skipped = preflight({ skipped: true });
     await expect(verifyDatabaseMigration(migratedDatabase(undefined, []), skipped)).resolves.toMatchObject({ verified: true, skipped: true });
   });
 
   it('rejects unsupported trip schemas even when the database schema is current', async () => {
-    const current = preflight({ fromVersion: 3, needsUpgrade: false });
+    const current = preflight({ fromVersion: 4, needsUpgrade: false });
     await expect(verifyDatabaseMigration(
       migratedDatabase(undefined, [{ id: 'trip-1', schemaVersion: 2 }]),
       current

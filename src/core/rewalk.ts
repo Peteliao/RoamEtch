@@ -34,7 +34,7 @@ export const rewalk = {
   idx: 0, maxIdx: 0, entryIdx: 0, entryAlong: 0, offTrack: 0,
   phase: 'locating' as RewalkPhase,
   targetType: 'end' as 'start' | 'end',
-  navTarget: null as null | { lat: number; lon: number },
+  navTarget: null as null | { id?: string; lat: number; lon: number },
   navTargetType: null as null | 'start' | 'end',
   lastFix: null as null | { lat: number; lon: number; acc: any; heading: any },
   finished: false, departed: false, muted: false, sim: false, wps: [],
@@ -45,6 +45,7 @@ export const rewalk = {
 };
 
 let speechPrimed = false;
+let rewalkRequest = 0;
 
 // iOS only allows speechSynthesis.speak inside a user gesture. startRewalk runs
 // synchronously up to its first await, so the tap that starts the walk can unlock
@@ -107,8 +108,10 @@ export async function startRewalk(tripId, mode: RewalkMode = 'full-fwd') {
   primeSpeech();
   if (rec.status === 'recording' || rec.status === 'paused') return 'busy';
   if (rewalk.active) stopRewalk();
+  const request = ++rewalkRequest;
   if (!MODE_KEYS[mode]) mode = 'full-fwd';
   const full = await loadTripFull(tripId);
+  if (request !== rewalkRequest || rec.status === 'recording' || rec.status === 'paused') return 'cancelled';
   const orig = full?.segments.flatMap((s) => s.points) || [];
   if (orig.length < 2) return 'empty';
 
@@ -339,6 +342,7 @@ export function markExternalNavigation() {
 }
 
 export function stopRewalk() {
+  rewalkRequest++;
   if (!rewalk.active) return;
   stopWatch();
   stopSim();

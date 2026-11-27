@@ -6,6 +6,7 @@ import { on } from '../core/events';
 import { applyPrivacy } from '../core/privacy';
 import { generatePoster } from '../core/poster';
 import { buildGPX, buildGeoJSON, buildKML } from '../core/gpx';
+import { buildGPXAsync } from '../core/workerBridge';
 import { buildSelfContainedHTML, estimateHTMLSize } from '../core/htmlExport';
 import { buildShareLink } from '../core/shareLink';
 import { generateTrackVideo, videoSupported } from '../core/trackVideo';
@@ -420,7 +421,10 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       const result = await croppedFull();
       if (!result || !requireCurrentSnapshot(result.snapshot)) return;
       const f = result.full;
-      exportFile(new Blob([buildGPX(f)], { type: 'application/gpx+xml' }), `${f.trip.name || 'trip'}.gpx`);
+      const pointCount = f.segments.reduce((sum, segment) => sum + segment.points.length, 0);
+      const text = pointCount > 100_000 ? await buildGPXAsync(f) : buildGPX(f);
+      if (!requireCurrentSnapshot(result.snapshot)) return;
+      exportFile(new Blob([text], { type: 'application/gpx+xml' }), `${f.trip.name || 'trip'}.gpx`);
       toast(t('export.exported'), 'ok');
     }),
     fileBtn(t('export.geojson'), t('export.geojsonHint'), async () => {
@@ -531,24 +535,45 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
   const linkInput = el('input', { type: 'text', readonly: true, class: 'link-input' });
   const copyBtn = el('button', { class: 'btn sm' }, t('common.copy'));
   const linkNote = el('div', { class: 'small faint', style: { marginTop: '6px' } });
+  let linkCacheKey = '';
+  let linkCache = null;
   function updateLink(quiet = true) {
     const full = curFull;
     linkInput.value = '';
     linkNote.textContent = '';
-    if (!full || full.trip.id !== appState.activeTripId) return false;
+    if (!full || full.trip.id !== appState.activeTripId) {
+      linkCacheKey = '';
+      linkCache = null;
+      return false;
+    }
+    const privacy = privacyOpts();
+    const key = JSON.stringify([full.trip.id, full.trip.updatedAt || 0, privacy.radius, privacy.hideSensitive]);
+    if (key === linkCacheKey && linkCache) {
+      if (linkCache.ok) {
+        linkInput.value = linkCache.url;
+        linkNote.textContent = t('export.linkNote', { size: linkCache.size });
+        return true;
+      }
+      linkNote.textContent = linkCache.message;
+      if (!quiet && linkCache.tooBig) toast(t('export.linkTooBig'), 'warn', 5000);
+      else if (!quiet && !linkCache.tooBig) toast(linkCache.message, 'err');
+      return false;
+    }
+    linkCacheKey = key;
+    linkCache = null;
     try {
-      const { url, size } = buildShareLink(full, privacyOpts());
+      const { url, size } = buildShareLink(full, privacy);
+      linkCache = { ok: true, url, size };
       linkInput.value = url;
       linkNote.textContent = t('export.linkNote', { size });
       return true;
     } catch (e) {
-      if (e?.message === 'too-big') {
-        linkNote.textContent = t('export.linkTooBig');
-        if (!quiet) toast(t('export.linkTooBig'), 'warn', 5000);
-      } else {
-        linkNote.textContent = String(e?.message || e);
-        if (!quiet) toast(linkNote.textContent, 'err');
-      }
+      const tooBig = e?.message === 'too-big';
+      const message = tooBig ? t('export.linkTooBig') : String(e?.message || e);
+      linkCache = { ok: false, tooBig, message };
+      linkNote.textContent = message;
+      if (!quiet && tooBig) toast(t('export.linkTooBig'), 'warn', 5000);
+      else if (!quiet) toast(message, 'err');
       return false;
     }
   }
@@ -630,6 +655,8 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     vNote.textContent = '';
     linkInput.value = '';
     linkNote.textContent = '';
+    linkCacheKey = '';
+    linkCache = null;
   }
   function currentTripId() {
     return appState.activeTripId || '';
@@ -676,7 +703,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     if (!id) return null;
     const request = ++snapshotRequest;
     const version = outputVersion;
-    const full = await loadTripFull(id);
+    const full = await loadTripFull(id, { trackSnapshot: appState.activeTripFull });
     if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     if (destroyed) return null;
     if (appState.activeTripId !== id || version !== outputVersion) { notifyStale(); return null; }
@@ -687,6 +714,8 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     }
     if (full.trip.id !== id) { notifyStale(); return null; }
     if (curFull?.trip.id === id && (curFull.trip.updatedAt || 0) > (full.trip.updatedAt || 0)) { notifyStale(); return null; }
+    linkCacheKey = '';
+    linkCache = null;
     // Only the newest response may replace the cache. A same-identity event or
     // action must not invalidate this generation, however.
     if (request === snapshotRequest) adoptSnapshot(full, signal);

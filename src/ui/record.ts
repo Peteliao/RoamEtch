@@ -24,7 +24,7 @@ import { el, icon, toast, modal, hasOpenOverlay } from './helpers';
 import { openCamera } from './camera';
 import { backFromUIState, currentUIState, pushUIState, pushOverlayState, removeOverlayState } from './history';
 
-export function createRecordView(navigate: (name: 'analysis' | 'export') => void | Promise<void> = () => {}) {
+export function createRecordView(navigate: (name: 'analysis' | 'export' | 'settings', intent?: any) => void | Promise<void> = () => {}) {
   const view = el('div', { class: 'view', id: 'view-record' });
   const mapContainer = el('div', { id: 'map-container' });
   const layerPill = el('button', { class: 'map-layer-pill', onclick: openLayerSheet });
@@ -90,7 +90,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
         }
         openWaypointModal(wp, recEditOpts());
       },
-      onWaypointMove: (wp, lon, lat) => moveWaypoint(wp, lon, lat),
+      onWaypointMove: (wp, lon, lat) => moveWaypoint(wp, lon, lat, recEditOpts()),
       onMapClick: (lon, lat) => { if (appState.editMode && canEditMap() && appState.activeTripId) openWaypointModal({ lat, lon }); },
       onVertexMove: (segId, idx, lon, lat) => moveVertex(segId, idx, lon, lat),
       onVertexInsert: (segId, idx, lon, lat) => insertVertex(segId, idx, lon, lat),
@@ -170,8 +170,8 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     }
   }, icon('follow'));
   const fitBtn = el('button', { class: 'iconbtn', title: t('record.fit'), onclick: () => map.fitTrack() }, icon('fit'));
-  const undoBtn = el('button', { type: 'button', class: 'iconbtn', title: t('edit.undo'), 'aria-label': t('edit.undo'), onclick: undoEdit, style: { display: 'none' } }, icon('undo'));
-  const redoBtn = el('button', { type: 'button', class: 'iconbtn', title: t('edit.redo'), 'aria-label': t('edit.redo'), onclick: redoEdit, style: { display: 'none' } }, icon('redo'));
+  const undoBtn = el('button', { type: 'button', class: 'iconbtn', title: t('edit.undo'), 'aria-label': t('edit.undo'), onclick: () => undoEdit(recEditOpts()), style: { display: 'none' } }, icon('undo'));
+  const redoBtn = el('button', { type: 'button', class: 'iconbtn', title: t('edit.redo'), 'aria-label': t('edit.redo'), onclick: () => redoEdit(recEditOpts()), style: { display: 'none' } }, icon('redo'));
   const editBtn = el('button', {
     type: 'button', class: 'iconbtn', title: t('record.editMode'), 'aria-label': t('record.editMode'),
     'aria-pressed': 'false', disabled: true, onclick: toggleEdit
@@ -299,7 +299,32 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   const detail = el('div', { class: 'lp-detail' });
   const detailSlots = Array.from({ length: 7 }, () => el('span', {}));
   detail.append(...detailSlots);
-  panel.append(pHead, compact, moreGrid, detail);
+  const qualityStatus = el('span', { class: 'lp-quality-status' }, '--');
+  const qualityAccuracyValue = el('strong', { class: 'mono' }, '--');
+  const qualityAccuracyTrend = el('span', { class: 'small faint' }, t('record.qualityTrendUnknown'));
+  const qualityTrendGraph = el('div', { class: 'lp-accuracy-graph', 'aria-label': t('record.qualityAccuracy') });
+  const qualityLastFix = el('strong', { class: 'mono' }, '--');
+  const qualitySampleRate = el('strong', { class: 'mono' }, '--');
+  const qualityCompleteness = el('strong', { class: 'mono' }, '--');
+  const qualityMeta = el('div', { class: 'lp-quality-meta' });
+  const qualityPanel = el('div', { class: 'lp-quality', hidden: true },
+    el('div', { class: 'lp-quality-head' },
+      el('strong', {}, t('record.qualityTitle')),
+      qualityStatus),
+    el('div', { class: 'lp-quality-main' },
+      el('div', { class: 'lp-accuracy' },
+        el('div', { class: 'lp-accuracy-label' },
+          el('span', { class: 'small faint' }, t('record.qualityAccuracy')),
+          qualityAccuracyValue,
+          qualityAccuracyTrend),
+        qualityTrendGraph),
+      el('div', { class: 'lp-quality-metrics' },
+        el('div', {}, el('span', { class: 'small faint' }, t('record.qualityLastFix')), qualityLastFix),
+        el('div', {}, el('span', { class: 'small faint' }, t('record.qualitySampleRate')), qualitySampleRate),
+        el('div', {}, el('span', { class: 'small faint' }, t('record.qualityCompleteness')), qualityCompleteness))),
+    qualityMeta);
+  let qualityWarningKey = '';
+  panel.append(pHead, compact, moreGrid, qualityPanel, detail);
 
   const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
   function createSignal(host) {
@@ -315,6 +340,81 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     output.text.textContent = lv ? t(`panel.sig${SIG_KEYS[lv]}`) : '--';
   }
   const panelSignal = createSignal(cSig.v);
+
+  function percent(value: number | null | undefined): string {
+    return Number.isFinite(value) ? `${Math.round(value! * 100)}%` : '--';
+  }
+  function spanText(value: number | null | undefined): string {
+    return Number.isFinite(value) ? fmtDuration(value!, { compact: true }) : '--';
+  }
+  function renderAccuracyTrend(samples: { acc: number }[]) {
+    const recent = samples.slice(-24);
+    if (recent.length < 2) {
+      qualityTrendGraph.replaceChildren(el('span', { class: 'small faint' }, t('record.qualityTrendUnknown')));
+      return;
+    }
+    const width = 156, height = 34, pad = 3;
+    const values = recent.map((sample) => Math.max(0, sample.acc));
+    const max = Math.max(1, ...values);
+    const points = values.map((value, index) => [
+      pad + index * (width - pad * 2) / (values.length - 1),
+      height - pad - value / max * (height - pad * 2)
+    ]);
+    const path = points.map(([x, y], index) => `${index ? 'L' : 'M'}${x.toFixed(1)} ${y.toFixed(1)}`).join(' ');
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    svg.setAttribute('role', 'img');
+    svg.setAttribute('aria-label', t('record.qualityAccuracy'));
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    line.setAttribute('d', path);
+    line.setAttribute('class', 'lp-accuracy-line');
+    svg.append(line);
+    const last = points[points.length - 1];
+    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    dot.setAttribute('cx', String(last[0]));
+    dot.setAttribute('cy', String(last[1]));
+    dot.setAttribute('r', '2.5');
+    dot.setAttribute('class', 'lp-accuracy-dot');
+    svg.append(dot);
+    qualityTrendGraph.replaceChildren(svg);
+  }
+  function renderQualityPanel() {
+    const active = rec.status === 'recording' || rec.status === 'paused';
+    qualityPanel.hidden = !active || !rec.quality;
+    if (!active || !rec.quality) return;
+    const quality = rec.quality;
+    const warnings = quality.warnings || [];
+    const severe = warnings.some((warning) => warning.severity === 'critical');
+    const attention = warnings.length > 0;
+    qualityStatus.textContent = t(severe ? 'record.qualityCritical' : attention ? 'record.qualityAttention' : 'record.qualityGood');
+    qualityStatus.className = `lp-quality-status ${severe ? 'bad' : attention ? 'warn' : 'good'}`;
+    const latest = quality.accuracySamples?.at(-1);
+    qualityAccuracyValue.textContent = latest ? `±${Math.round(latest.acc)}m` : '--';
+    const trend = quality.accuracyTrend?.trend;
+    qualityAccuracyTrend.textContent = t(`record.qualityTrend${trend ? trend[0].toUpperCase() + trend.slice(1) : 'Unknown'}`);
+    qualityAccuracyTrend.className = `small ${trend === 'worsening' ? 'bad' : trend === 'improving' ? 'good' : 'faint'}`;
+    renderAccuracyTrend(quality.accuracySamples || []);
+    qualityLastFix.textContent = quality.lastValidFixAgeMs == null
+      ? t('record.qualityNoFix') : spanText(quality.lastValidFixAgeMs);
+    qualitySampleRate.textContent = quality.validSampleRatePerMin == null
+      ? '--' : `${quality.validSampleRatePerMin.toFixed(1)}/min`;
+    qualityCompleteness.textContent = percent(quality.trackCompleteness ?? quality.completeness);
+    const meta = [
+      t('record.qualityMetaDuration', { duration: spanText(quality.activeDurationMs) }),
+      t('record.qualityMetaValidSpan', { duration: spanText(quality.validSpanMs) }),
+      t('record.qualityMetaTrackSpan', { duration: spanText(quality.trackSpanMs) })
+    ];
+    if (quality.storage.supported && quality.storage.usageRatio != null) {
+      meta.push(t('record.qualityMetaStorage', { pct: Math.round(quality.storage.usageRatio * 100) }));
+    }
+    if (quality.battery.supported && quality.battery.level != null) {
+      meta.push(t('record.qualityMetaBattery', {
+        pct: Math.round(quality.battery.level * 100),
+        state: quality.battery.charging ? ` · ${t('record.qualityCharging')}` : ''
+      }));
+    }
+    qualityMeta.replaceChildren(...meta.map((text) => el('span', {}, text)));
+  }
 
   let liveActivity = 'auto';
   function currentActivity() {
@@ -347,6 +447,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       slot.hidden = true;
       slot.classList.remove('lp-coords');
     });
+    renderQualityPanel();
   }
   function renderPanel(L) {
     if (!L || rec.live !== L || (rec.status !== 'recording' && rec.status !== 'paused')) {
@@ -407,6 +508,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       slot.hidden = !values[index];
       slot.classList.toggle('lp-coords', index === 6);
     });
+    renderQualityPanel();
   }
 
   function renderSaveChip() {
@@ -460,7 +562,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   }
   activitySel.value = get('activity');
   activitySel.onchange = () => set('activity', activitySel.value);
-  const autoTag = el('span', { class: 'live-auto-tag' });
+  const autoTag = el('button', { type: 'button', class: 'live-auto-tag', disabled: true });
   const liveActSel = el('select', { class: 'live-act-select' });
   for (const a of ['auto', 'hike', 'drive', 'bike', 'run', 'travel']) {
     liveActSel.append(el('option', { value: a }, a === 'auto' ? t('record.activityAuto') : t(`record.activities.${a}`)));
@@ -479,15 +581,65 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
   const autoTagIcon = icon('sparkles', 12);
   const autoTagPulse = el('span', { class: 'la-pulse' });
   const autoTagText = el('span', {});
+  function activityReasonText(reason: any): string {
+    const params = reason?.params || {};
+    const values = {
+      speed: Number(params.speed).toFixed(1),
+      accel: Number(params.accel).toFixed(2),
+      grade: Number(params.grade).toFixed(1),
+      pct: Math.round(Number(params.pct) || 0),
+      distance: Math.round(Number(params.distance) || 0),
+      interval: Math.round(Number(params.interval) || 0),
+      samples: Math.round(Number(params.samples) || 0),
+      margin: Math.round(Number(params.margin) || 0)
+    };
+    const key = `record.activityReason${reason?.code ? reason.code[0].toUpperCase() + reason.code.slice(1) : 'Evidence'}`;
+    return t(key, values);
+  }
+  function showActivityClassification() {
+    const classification = rec.activityClassification;
+    if (!classification) return;
+    const confidence = Math.round((classification.confidence || 0) * 100);
+    const body = el('div', { class: 'activity-classification' },
+      el('div', { class: 'activity-classification-summary' },
+        el('strong', {}, classification.activity ? t(`record.activities.${classification.activity}`) : t('record.activityAuto')),
+        el('span', { class: `chip ${classification.lowConfidence ? 'warn' : 'good'}` }, t('record.activityConfidence', { pct: confidence }))));
+    if (classification.lowConfidence) body.append(el('p', { class: 'small warn' }, t('record.activityLowConfidence')));
+    body.append(el('h4', {}, t('record.activityEvidence')));
+    body.append(el('ul', { class: 'activity-evidence-list' },
+      ...(classification.reasons || []).map((reason: any) => el('li', {}, activityReasonText(reason)))));
+    const candidates = classification.candidates || [];
+    if (candidates.length) {
+      body.append(el('h4', {}, t('record.activityCandidates')));
+      body.append(el('div', { class: 'activity-candidates' },
+        ...candidates.slice(0, 3).map((candidate: any) => el('div', { class: 'activity-candidate' },
+          el('span', {}, t(`record.activities.${candidate.activity}`)),
+          el('span', { class: 'mono' }, t('record.activityConfidence', { pct: Math.round((candidate.confidence || 0) * 100) })),
+          el('small', { class: 'faint' }, (candidate.reasons || []).slice(0, 2).map(activityReasonText).join(' · '))))));
+    }
+    const dialog = modal({
+      title: t('record.activityEvidence'),
+      body,
+      footer: [el('button', { class: 'btn primary', onclick: () => dialog.close() }, t('common.close'))]
+    });
+  }
+  autoTag.onclick = (event) => { event.stopPropagation(); showActivityClassification(); };
   function renderAutoTag() {
     const mode = (rec.status === 'recording' || rec.status === 'paused') ? liveActivity : get('activity');
+    const classification = rec.activityClassification;
     autoTag.hidden = mode !== 'auto';
     autoTag.style.display = '';
     autoTag.classList.toggle('detected', !!rec.activityGuess);
     autoTag.replaceChildren(rec.activityGuess ? autoTagIcon : autoTagPulse, autoTagText);
     autoTagText.textContent = rec.activityGuess
-      ? t('record.autoDetectedShort', { a: t(`record.activities.${rec.activityGuess}`) })
+      ? t('record.autoDetectedConfidence', {
+        a: t(`record.activities.${rec.activityGuess}`),
+        pct: Math.round((classification?.confidence || 0) * 100)
+      })
       : t('record.autoDetecting');
+    autoTag.disabled = !classification;
+    autoTag.title = classification ? t('record.activityEvidence') : '';
+    autoTag.setAttribute('aria-label', autoTag.title || autoTagText.textContent);
   }
   renderAutoTag();
   actRow.append(liveActWrap, autoTag);
@@ -527,6 +679,10 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     const nav = getRewalkNavigation(navigationPlatform());
     if (!nav) { toast(t('rewalk.navOpenFailed'), 'warn'); return; }
     const target = targetLabel(rewalk.navTargetType || rewalk.targetType);
+    const tripId = rewalk.tripId;
+    const targetId = rewalk.navTarget?.id;
+    const targetLat = rewalk.navTarget?.lat;
+    const targetLon = rewalk.navTarget?.lon;
     const provider = nav.provider === 'amap' ? 'Amap' : 'Google Maps';
     let dialog;
     dialog = modal({
@@ -537,14 +693,17 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
         el('button', { class: 'btn ghost', onclick: () => dialog.close() }, t('common.cancel')),
         el('button', { class: 'btn primary', onclick: () => {
           dialog.close();
+          const currentNav = getRewalkNavigation(navigationPlatform());
+          if (!currentNav || rewalk.tripId !== tripId || rewalk.navTarget?.id !== targetId
+            || rewalk.navTarget?.lat !== targetLat || rewalk.navTarget?.lon !== targetLon) return;
           let opened = false;
           try {
-            const child = window.open(nav.primary, '_blank');
+            const child = window.open(currentNav.primary, '_blank');
             opened = !!child;
             if (child) child.opener = null;
           } catch { /* external navigation unavailable */ }
           if (!opened) {
-            try { window.location.assign(nav.fallback); }
+            try { window.location.assign(currentNav.fallback); }
             catch { toast(t('rewalk.navOpenFailed'), 'warn'); return; }
           }
           if (markExternalNavigation()) toast(t('rewalk.navOpened'), 'ok', 3500);
@@ -1149,9 +1308,14 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
 
   // ---------- waypoints mid-recording ----------
   function recEditOpts() {
-    return (rec.status === 'recording' || rec.status === 'paused') && rec.tripId
-      ? { tripId: rec.tripId, onSaved: refreshRecordingWaypoints }
-      : {};
+    if (rec.status !== 'recording' && rec.status !== 'paused') return {};
+    const tripId = rec.tripId;
+    if (!tripId) return {};
+    return {
+      tripId,
+      scopeCurrent: () => (rec.status === 'recording' || rec.status === 'paused') && rec.tripId === tripId,
+      onSaved: refreshRecordingWaypoints
+    };
   }
   function refreshRecordingWaypoints(full) {
     if (!full || full.trip.id !== rec.tripId) return;
@@ -1193,6 +1357,36 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
         : code === 'denied' ? t('record.permissionDenied')
           : t('record.geoSilent');
   }
+  function qualityWarningAction(warning: any) {
+    if (warning.action === 'retry-location') return () => retryGeolocation();
+    if (warning.action === 'retry-save') return () => { void retrySave(); };
+    if (warning.action === 'free-storage') return () => { void navigate('settings', { anchor: 'database' }); };
+    return () => toast(t('record.qualityActionCharge'), 'info', 4500);
+  }
+  function qualityWarningLabel(warning: any) {
+    if (warning.action === 'retry-location') return t('record.geoRetry');
+    if (warning.action === 'retry-save') return t('record.saveRetry');
+    if (warning.action === 'free-storage') return t('record.qualityActionStorage');
+    return t('record.qualityActionCharge');
+  }
+  function activeQualityWarnings() {
+    const active = rec.status === 'recording' || rec.status === 'paused';
+    return active ? (rec.quality?.warnings || []).filter((warning) => {
+      if (warning.code === 'storage-capacity' || warning.code === 'storage-write') return false;
+      if (rec.geoError && warning.action === 'retry-location') return false;
+      return true;
+    }) : [];
+  }
+  function renderQualityWarnings() {
+    const warnings = activeQualityWarnings();
+    warnings.sort((a, b) => (a.severity === 'critical' ? -1 : 1) - (b.severity === 'critical' ? -1 : 1));
+    qualityWarningKey = warnings.map((warning) => warning.code).join(',');
+    for (const warning of warnings.slice(0, 2)) {
+      const banner = geoBanner(t(warning.messageKey, warning.params), qualityWarningAction(warning), qualityWarningLabel(warning));
+      banner.classList.toggle('critical', warning.severity === 'critical');
+      bannerBox.append(banner);
+    }
+  }
   function renderBanners() {
     bannerBox.innerHTML = '';
     if (readOnly) {
@@ -1214,6 +1408,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     } else if (rec.geoError && rec.status === 'paused' && !rec.permissionDenied) {
       bannerBox.append(geoBanner(geoErrorMsg(rec.geoError), () => resumeRecording()));
     }
+    renderQualityWarnings();
     if (recoverable && rec.status === 'idle') {
       bannerBox.append(el('div', { class: 'card', style: { pointerEvents: 'auto', display: 'flex', gap: '8px', alignItems: 'center', padding: '10px 12px' } },
         el('span', { class: 'grow small' }, `⏸ ${recoverable.name || t('record.newTripName')}`),
@@ -1551,7 +1746,6 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
 
   // ---------- recorder events ----------
   on('recorder:started', async ({ simulated }) => {
-    liveActivity = (await getTrip(rec.tripId))?.activity || get('activity');
     leaveEditMode();
     viewingTripEditable = false;
     viewingTrip = null;
@@ -1559,6 +1753,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     map?.startLive();
     map?.setFollow(true);
     followBtn.classList.add('active');
+    liveActivity = (await getTrip(rec.tripId))?.activity || get('activity');
     renderButtons();
     renderBanners();
     renderPanel(rec.live);
@@ -1595,7 +1790,16 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     renderOled(live);
     if (live.pointCount === 1 && !rec.simulated) { renderStatus(); toast(t('record.firstFix'), 'ok', 2500); }
   });
-  on('recorder:tick', ({ live }) => { renderPanel(live); renderOled(live); });
+  on('recorder:tick', ({ live }) => {
+    renderPanel(live);
+    renderOled(live);
+    const warningKey = activeQualityWarnings().map((warning) => warning.code).join(',');
+    if (warningKey !== qualityWarningKey) renderBanners();
+  });
+  on('recorder:quality', () => {
+    renderQualityPanel();
+    renderBanners();
+  });
   on('recorder:saved', () => { renderSaveChip(); renderBanners(); });
   on('recorder:persistence', () => { renderSaveChip(); });
   on('recorder:saveerror', () => { renderSaveChip(); renderBanners(); });
@@ -1633,6 +1837,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
       renderViewBar();
     }
   });
+  on('activity:classification', () => renderAutoTag());
   on('activity:guess', ({ activity }) => {
     renderAutoTag();
     toast(t('record.autoDetected', { a: t(`record.activities.${activity}`) }), 'info', 2500);
@@ -1655,8 +1860,8 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     )) return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && appState.editMode && canEditMap()) {
       e.preventDefault();
-      if (e.shiftKey) redoEdit();
-      else undoEdit();
+      if (e.shiftKey) redoEdit(recEditOpts());
+      else undoEdit(recEditOpts());
       return;
     }
     if (e.key === ' ') {
@@ -1741,8 +1946,9 @@ export function createRecordView(navigate: (name: 'analysis' | 'export') => void
     resize: () => { map?.resize(); renderMapLayer(); },
     refresh: () => { renderButtons(); renderBanners(); renderViewBar(); renderRewalk(); },
     focus: (intent) => {
-      if (!intent) return;
+      if (!intent || (intent.tripId && intent.tripId !== appState.activeTripId)) return;
       requestAnimationFrame(() => {
+        if (intent.tripId && intent.tripId !== appState.activeTripId) return;
         if (intent.fit && map && !psActive && !map.destroyed) map.fitTrack();
         if (intent.anchor) document.querySelector(`[data-anchor="${intent.anchor}"]`)?.scrollIntoView({ block: 'center' });
       });

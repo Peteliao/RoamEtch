@@ -5,7 +5,8 @@ import { get, set, patch, resetSettings, MEET_P2P_NOTICE_VERSION } from '../core
 import { meet } from '../core/meet';
 import { on } from '../core/events';
 import { regionState, setRegionMode, runProbe } from '../core/region';
-import { storageEstimate, requestStoragePersistence, eraseAll, listTrips, TRIP_SCHEMA_VERSION } from '../core/store';
+import { storageEstimate, requestStoragePersistence, eraseAll, listTrips, TRIP_SCHEMA_VERSION,
+  listQuarantinedRows, restoreQuarantinedRows, discardQuarantinedRows } from '../core/store';
 import { inspectStorageHealth, previewMediaCleanup, executeMediaCleanup } from '../core/storageHealth';
 import { runRestoreDrill, type RestoreDrillProgress, type RestoreDrillResult } from '../core/restoreDrill';
 import { appState, setActiveTrip } from './state';
@@ -427,6 +428,65 @@ export function createSettingsView(navigate) {
       cleanupBtn.disabled = false;
     }
   };
+  const quarantineLine = el('div', { class: 'small muted', style: { marginTop: '6px' }, 'aria-live': 'polite' }, t('settings.quarantineIdle'));
+  const quarantineList = el('div', { class: 'quarantine-list', hidden: true });
+  const quarantineBackupBtn = el('button', { class: 'btn sm' }, icon('download', 14), t('settings.quarantineBackup'));
+  const quarantineRestoreBtn = el('button', { class: 'btn sm' }, icon('export', 14), t('settings.quarantineRestore'));
+  const quarantineDiscardBtn = el('button', { class: 'btn sm danger' }, icon('trash', 14), t('settings.quarantineDiscard'));
+  let quarantined: Awaited<ReturnType<typeof listQuarantinedRows>> = [];
+  async function renderQuarantine() {
+    quarantined = await listQuarantinedRows();
+    quarantineLine.textContent = t('settings.quarantineSummary', { n: quarantined.length });
+    quarantineLine.style.color = quarantined.length ? 'var(--warn)' : '';
+    quarantineList.innerHTML = '';
+    for (const record of quarantined.slice(0, 20)) {
+      quarantineList.append(el('div', { class: 'small mono' }, `${record.sourceTable} · ${record.rowId} · ${record.reason}`));
+    }
+    quarantineList.hidden = !quarantined.length;
+    for (const button of [quarantineBackupBtn, quarantineRestoreBtn, quarantineDiscardBtn]) button.disabled = !quarantined.length;
+  }
+  quarantineBackupBtn.onclick = async () => {
+    try { await exportBackupFlow(); }
+    catch { toast(t('backup.exportErr'), 'err'); }
+  };
+  quarantineRestoreBtn.onclick = async () => {
+    const confirmed = await confirmModal({
+      title: t('settings.quarantineRestore'),
+      message: t('settings.quarantineRestoreConfirm', { n: quarantined.length }),
+      confirmText: t('settings.quarantineRestore')
+    });
+    if (!confirmed) return;
+    quarantineRestoreBtn.disabled = true;
+    try {
+      const result = await restoreQuarantinedRows();
+      toast(t('settings.quarantineRestored', { restored: result.restored, skipped: result.skipped }), 'ok', 4000);
+      await renderQuarantine();
+    } catch (error) {
+      console.error(error);
+      toast(t('settings.quarantineFailed'), 'err');
+    } finally {
+      await renderQuarantine();
+    }
+  };
+  quarantineDiscardBtn.onclick = async () => {
+    const confirmed = await confirmModal({
+      title: t('settings.quarantineDiscard'),
+      message: t('settings.quarantineDiscardConfirm', { n: quarantined.length }),
+      danger: true,
+      confirmText: t('settings.quarantineDiscard')
+    });
+    if (!confirmed) return;
+    quarantineDiscardBtn.disabled = true;
+    try {
+      const discarded = await discardQuarantinedRows(quarantined.map((record) => record.id));
+      toast(t('settings.quarantineDiscarded', { n: discarded }), 'ok');
+    } catch (error) {
+      console.error(error);
+      toast(t('settings.quarantineFailed'), 'err');
+    } finally {
+      await renderQuarantine();
+    }
+  };
   const backupHealthLine = el('div', { class: 'small muted', style: { marginTop: '3px' } });
   const backupBtn = el('button', { class: 'btn sm' }, icon('download', 14), t('trips.backup'));
   backupBtn.onclick = async () => {
@@ -597,6 +657,7 @@ export function createSettingsView(navigate) {
     persistBtn.title = t('settings.storagePersistHint');
     backupHealthLine.textContent = t('backup.lastBackup', { when: lastBackupLabel() }) + (backupDue() ? ' · ' + t('backup.dueShort') : '');
     backupHealthLine.style.color = backupDue() ? 'var(--warn)' : '';
+    await renderQuarantine();
     await renderBackupHistory();
   }
   refreshStorage();
@@ -612,6 +673,11 @@ export function createSettingsView(navigate) {
     el('div', { class: 'sep' }),
     el('div', { class: 'row wrap', style: { marginBottom: '6px' } }, healthBtn, healthCancelBtn),
     healthLine, healthDetails,
+    el('div', { class: 'sep' }),
+    el('div', { class: 'row wrap', style: { marginBottom: '4px' } }, icon('shield', 15), t('settings.quarantineTitle')),
+    el('div', { class: 'small faint' }, t('settings.quarantineDesc')),
+    quarantineLine, quarantineList,
+    el('div', { class: 'row wrap', style: { marginTop: '6px' } }, quarantineBackupBtn, quarantineRestoreBtn, quarantineDiscardBtn),
     el('div', { class: 'sep' }),
     backupHealthLine,
     el('div', { class: 'row wrap', style: { marginTop: '8px' } }, backupBtn, restoreBtn, drillBtn),
@@ -839,8 +905,16 @@ export function createSettingsView(navigate) {
     resize: () => {},
     focus: (intent) => {
       const anchor = typeof intent === 'string' ? intent : intent?.anchor;
-      if (anchor !== 'relay') return;
+      if (anchor !== 'relay' && anchor !== 'database') return;
       requestAnimationFrame(() => {
+        if (anchor === 'database') {
+          dataCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          dataCard.classList.remove('settings-focus');
+          void dataCard.offsetWidth;
+          dataCard.classList.add('settings-focus');
+          setTimeout(() => dataCard.classList.remove('settings-focus'), 2000);
+          return;
+        }
         mapAdvanced.open();
         meetAdvanced.open();
         relaySection.scrollIntoView({ behavior: 'smooth', block: 'center' });

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initI18n, setLanguage, t } from '../src/core/i18n';
 import { set } from '../src/core/settings';
 import { loadTripFull } from '../src/core/store';
-import { feedFix, getRewalkNavigation, markExternalNavigation, startRewalk, stopRewalk } from '../src/core/rewalk';
+import { feedFix, getRewalkNavigation, markExternalNavigation, rewalk, startRewalk, stopRewalk } from '../src/core/rewalk';
 
 vi.mock('../src/core/store', () => ({ loadTripFull: vi.fn() }));
 vi.mock('../src/core/recorder', () => ({ rec: { status: 'idle' } }));
@@ -34,6 +34,20 @@ const points = [
 
 function voiceTexts() {
   return spoken.map((utterance) => utterance.text).filter((text) => text.trim());
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function fullTrip(id: string, name: string) {
+  return {
+    trip: { id, name },
+    segments: [{ id: `${id}-segment`, points }],
+    waypoints: []
+  } as any;
 }
 
 beforeEach(async () => {
@@ -130,5 +144,37 @@ describe('re-walk TTS wording', () => {
     expect(voiceTexts()).toHaveLength(count);
     feedFix(points[0].lat, points[0].lon);
     expect(voiceTexts().slice(count)).toContain('已回到路线，开始沿轨迹行进。');
+  });
+});
+
+describe('re-walk load cancellation', () => {
+  it('does not start navigation when stopped while the trip load is pending', async () => {
+    const load = deferred<any>();
+    vi.mocked(loadTripFull).mockReturnValueOnce(load.promise);
+
+    const pending = startRewalk('trip-1');
+    stopRewalk();
+    load.resolve(fullTrip('trip-1', 'Old trip'));
+
+    await expect(pending).resolves.toBe('cancelled');
+    expect(rewalk.active).toBe(false);
+    expect(navigator.geolocation.watchPosition).not.toHaveBeenCalled();
+  });
+
+  it('does not let an older pending load replace a newer re-walk session', async () => {
+    const oldLoad = deferred<any>();
+    vi.mocked(loadTripFull)
+      .mockReturnValueOnce(oldLoad.promise)
+      .mockResolvedValueOnce(fullTrip('trip-2', 'New trip'));
+
+    const pendingOld = startRewalk('trip-1');
+    await expect(startRewalk('trip-2')).resolves.toBe(true);
+    oldLoad.resolve(fullTrip('trip-1', 'Old trip'));
+
+    await expect(pendingOld).resolves.toBe('cancelled');
+    expect(rewalk.active).toBe(true);
+    expect(rewalk.tripId).toBe('trip-2');
+    expect(rewalk.name).toBe('New trip');
+    expect(navigator.geolocation.watchPosition).toHaveBeenCalledTimes(1);
   });
 });

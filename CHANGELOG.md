@@ -4,6 +4,54 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.6.0] - 2026-11-27
+
+### Added
+
+- Scoped asynchronous edits, undo/redo, altitude backfill, rewalk, and navigation to
+  stable trip sessions with cancellation and stale-result suppression.
+- Separated team network contact from GPS sample freshness, including weak/stale/paused
+  location states, accuracy trends, update age, and out-of-order packet protection.
+- Upgraded full backups to format v4 across all nine tables, including share-import
+  fingerprints and quarantine records, with historical v1–v4 restore fixtures.
+- Added persistent quarantine preview, backup, restore, and discard flows for damaged
+  records instead of silently deleting them at startup.
+- Added recording-quality trends, fix age, sampling/completeness metrics, storage and
+  battery warnings, and explainable multi-feature activity classification.
+- Expanded the signed physical-iPhone release gate to 64 cells, including independent
+  incoming-call, network-switch, and web-app-update evidence, a configurable TTL,
+  attachment verification, and mandatory release-workflow enforcement.
+- Added a production Chromium stress suite for million-point import → IndexedDB →
+  Worker → map → edit → export, accelerated eight-hour recording recovery, and CDP
+  throughput/latency/packet-loss/offline shaping. These are synthetic desktop-browser
+  regressions, not physical-iPhone or real-world soak evidence.
+- Added classified, explainable GPS repair with selectable reasons, before/after
+  overlays and metrics, Worker previews, persistent repair versions, and scoped restore.
+- Added verified pre-migration checkpoints, streaming fingerprints, quota-safe failure
+  before upgrade, and automatic rollback when post-migration verification fails.
+  Rollback journals survive interrupted restarts, and shared/exclusive cross-tab locks
+  keep ordinary writes out of migration and recovery windows.
+
+### Changed
+
+- Large-track map simplification, GPX export, repair previews, and cancellable compute
+  tasks now use Workers; unchanged trip versions reuse track arrays, statistics,
+  previews, and share-link work instead of repeating full-track calculations.
+- Backup export and restore now enforce a 256 MiB envelope and 3,000,000-point
+  combined limit with actionable GPX/media/share-import guidance and transaction-time
+  conflict checks.
+- Media cleanup previews revalidate TTL, content versions, and references under a Web
+  Lock and again inside the deletion transaction.
+
+### Fixed
+
+- Mid-recording waypoint text/photo save, move, delete, undo, and redo now retain the
+  active recorder trip without leaking edits across trip sessions or views.
+- Live map following now starts before the asynchronous trip metadata read, keeping
+  the first fixes centered above the expanding recording-quality panel.
+- Stale team heartbeats, duplicate packets, and delayed location packets can no longer
+  restore GPS freshness or move a peer's last-known position.
+
 ## [3.5.0] - 2026-11-27
 
 ### Added

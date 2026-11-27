@@ -216,7 +216,7 @@ describe('export snapshots', () => {
 
     await vi.waitFor(() => expect(mocks.generatePoster).toHaveBeenCalledTimes(1));
     expect(mocks.loadTripFull).toHaveBeenCalledTimes(1);
-    expect(mocks.loadTripFull).toHaveBeenCalledWith('a');
+    expect(mocks.loadTripFull).toHaveBeenCalledWith('a', { trackSnapshot: mocks.state.activeTripFull });
     expect(mocks.generatePoster.mock.calls[0][0]).toBe(latest);
     expect(mocks.generatePoster.mock.calls[0][1].privacy).toEqual({ radius: 0, hideSensitive: true });
   });
@@ -293,7 +293,7 @@ describe('export snapshots', () => {
     expect([...linkCard.querySelectorAll('button')].some((button) => button.textContent === 'export.linkBuild')).toBe(false);
     linkCard.querySelector<HTMLButtonElement>('.btn')!.click();
 
-    await vi.waitFor(() => expect(mocks.loadTripFull).toHaveBeenCalledWith('a'));
+    await vi.waitFor(() => expect(mocks.loadTripFull).toHaveBeenCalledWith('a', { trackSnapshot: mocks.state.activeTripFull }));
     await vi.waitFor(() => expect(mocks.clipboardWrite).toHaveBeenCalledTimes(1));
     expect(vi.mocked(buildShareLink).mock.calls.at(-1)![0].waypoints[0].name).toBe('Fresh link node');
   });
@@ -425,9 +425,9 @@ describe('export snapshots', () => {
     const generate = card(view, 'export.poster').querySelector<HTMLButtonElement>('.btn.primary')!;
     expect(generate.disabled).toBe(false);
     generate.click();
-    await vi.waitFor(() => expect(mocks.loadTripFull).toHaveBeenCalledWith('b'));
+    await vi.waitFor(() => expect(mocks.loadTripFull).toHaveBeenCalledWith('b', { trackSnapshot: mocks.state.activeTripFull }));
     await vi.waitFor(() => expect(mocks.generatePoster).toHaveBeenCalledTimes(1));
-    expect(mocks.loadTripFull).toHaveBeenCalledWith('b');
+    expect(mocks.loadTripFull).toHaveBeenCalledWith('b', { trackSnapshot: mocks.state.activeTripFull });
     expect(select.value).toBe('b');
   });
 

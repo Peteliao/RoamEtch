@@ -51,7 +51,7 @@ test('iPhone WebKit boots offline and exports trip data from the production shel
   }, seeded.tripId);
   expect(offlineData.name).toBeTruthy();
   expect(offlineData.point).toMatchObject({ lat: expect.any(Number), lon: expect.any(Number) });
-  expect(offlineData.schemaVersion).toBe(3);
+  expect(offlineData.schemaVersion).toBe(4);
 
   await gotoTripSection(offline, 'share');
   const [gpxDownload] = await Promise.all([

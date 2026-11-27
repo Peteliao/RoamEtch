@@ -2,14 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/roametch/ios-evidence.schema.json",
   "title": "RoamEtch P0-4 iOS real-device evidence",
-  "description": "Release-gating evidence from physical iPhones only. Playwright WebKit, iPhone simulators, and desktop Chromium CDP metrics are not iOS hardware evidence. Pending work is represented by an absent evidence file, never by fabricated runs.",
+  "description": "Release-gating evidence from physical iPhones only, with verifiable collector provenance and a default 30-day TTL. Playwright WebKit, iPhone simulators, desktop Chromium CDP metrics, and synthesized evidence are not iOS hardware evidence. Pending work is represented by an absent evidence file, never by fabricated runs.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "matrixVersion", "capturedAt", "buildFingerprint", "artifact", "iosPolicy", "runs"],
+  "required": ["schemaVersion", "matrixVersion", "capturedAt", "provenance", "buildFingerprint", "artifact", "iosPolicy", "runs"],
   "properties": {
     "schemaVersion": { "const": 1 },
-    "matrixVersion": { "const": "p0-4-v1" },
-    "capturedAt": { "type": "string", "format": "date-time" },
+    "matrixVersion": { "const": "p0-4-v2" },
+    "capturedAt": { "type": "string", "format": "date-time", "description": "Required capture time; the verifier rejects future timestamps and evidence older than the configured TTL." },
+    "provenance": { "$ref": "#/$defs/provenance" },
     "buildFingerprint": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
     "artifact": {
       "type": "object",
@@ -32,12 +33,38 @@
     },
     "runs": {
       "type": "array",
-      "minItems": 52,
-      "maxItems": 52,
+      "minItems": 64,
+      "maxItems": 64,
       "items": { "$ref": "#/$defs/run" }
     }
   },
   "$defs": {
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "collector", "collectorVersion", "sources", "attestation"],
+      "properties": {
+        "method": { "const": "physical-device", "description": "Synthesized evidence is explicitly rejected." },
+        "collector": { "type": "string", "minLength": 1 },
+        "collectorVersion": { "type": "string", "minLength": 1 },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["xcode-instruments", "metric-kit", "device-log"] }
+        },
+        "attestation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["algorithm", "keyId", "signature"],
+          "properties": {
+            "algorithm": { "const": "ed25519" },
+            "keyId": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$", "description": "SHA-256 of the trusted public key's DER SPKI encoding." },
+            "signature": { "type": "string", "pattern": "^[A-Za-z0-9+/]{86}==$", "description": "Base64 Ed25519 signature over canonical evidence JSON excluding this attestation object." }
+          }
+        }
+      }
+    },
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "iosRelease": {
       "type": "object",
@@ -161,6 +188,9 @@
             "offline",
             "lock-screen",
             "background",
+            "incoming-call",
+            "network-switch",
+            "app-update",
             "quota",
             "memory-pressure",
             "system-termination"
@@ -242,13 +272,38 @@
               "result": { "properties": { "actual": { "type": "object", "required": ["quotaTriggered"], "properties": { "quotaTriggered": { "const": true } } } } }
             }
           }
+        },
+        {
+          "if": { "properties": { "scenario": { "const": "incoming-call" } }, "required": ["scenario"] },
+          "then": {
+            "properties": {
+              "result": { "properties": { "actual": { "type": "object", "required": ["incomingCalls", "recordingResumed"], "properties": { "incomingCalls": { "type": "integer", "minimum": 1 }, "recordingResumed": { "const": true } } } } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "scenario": { "const": "network-switch" } }, "required": ["scenario"] },
+          "then": {
+            "properties": {
+              "result": { "properties": { "actual": { "type": "object", "required": ["networkTransitions", "locationFreshnessSeparated"], "properties": { "networkTransitions": { "type": "integer", "minimum": 2 }, "locationFreshnessSeparated": { "const": true } } } } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "scenario": { "const": "app-update" } }, "required": ["scenario"] },
+          "then": {
+            "properties": {
+              "result": { "properties": { "actual": { "type": "object", "required": ["updateInstalled", "spillRecovered"], "properties": { "updateInstalled": { "const": true }, "spillRecovered": { "const": true } } } } }
+            }
+          }
         }
       ]
     }
   },
+  "x-default-max-age-days": 30,
   "x-required-matrix": {
-    "version": "p0-4-v1",
-    "requiredCells": 52,
+    "version": "p0-4-v2",
+    "requiredCells": 64,
     "environments": [
       { "tier": "legacy-low-memory", "model": "iPhone SE (2nd generation)", "ramGb": 3, "osBand": "minimum" },
       { "tier": "current", "model": "Record the physical current model, e.g. iPhone 15 Pro or newer", "ramGbMinimum": 8, "osBand": "latest" }
@@ -265,6 +320,9 @@
       "offline",
       "lock-screen",
       "background",
+      "incoming-call",
+      "network-switch",
+      "app-update",
       "quota",
       "memory-pressure",
       "system-termination"

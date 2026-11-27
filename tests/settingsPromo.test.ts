@@ -34,7 +34,9 @@ vi.mock('../src/core/region', () => ({
 }));
 vi.mock('../src/core/store', () => ({
   storageEstimate: vi.fn(async () => ({ quota: 1000, usage: 100 })),
-  eraseAll: vi.fn(), isolateDamaged: vi.fn()
+  eraseAll: vi.fn(), isolateDamaged: vi.fn(),
+  listQuarantinedRows: vi.fn(async () => []),
+  restoreQuarantinedRows: vi.fn(), discardQuarantinedRows: vi.fn()
 }));
 vi.mock('../src/core/gpx', () => ({ triggerDownload: vi.fn() }));
 vi.mock('../src/core/diag', () => ({ exportDiagLog: vi.fn(() => '{}') }));

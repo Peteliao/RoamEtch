@@ -20,6 +20,262 @@ export function assessTrackGpsQuality(segments, options = {}) {
   return assessGpsQuality(segmentPoints(segments), options);
 }
 
+export interface AccuracySample {
+  t: number;
+  acc: number;
+}
+
+export type AccuracyTrend = 'unknown' | 'improving' | 'stable' | 'worsening';
+
+export interface AccuracyTrendAssessment {
+  trend: AccuracyTrend;
+  previousAccuracy: number | null;
+  recentAccuracy: number | null;
+  delta: number | null;
+  worsening: boolean;
+}
+
+const qualityMedian = (values: number[]) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+};
+
+/** Compare the older and newer halves of a short, accepted-fix accuracy history. */
+export function assessAccuracyTrend(samples: readonly AccuracySample[] = []): AccuracyTrendAssessment {
+  const valid = (Array.isArray(samples) ? samples : [])
+    .filter((sample) => Number.isFinite(sample?.t) && Number.isFinite(sample?.acc) && sample.acc > 0)
+    .sort((a, b) => a.t - b.t);
+  if (valid.length < 4) {
+    return { trend: 'unknown', previousAccuracy: null, recentAccuracy: null, delta: null, worsening: false };
+  }
+  const split = Math.floor(valid.length / 2);
+  const previousAccuracy = qualityMedian(valid.slice(0, split).map((sample) => sample.acc));
+  const recentAccuracy = qualityMedian(valid.slice(split).map((sample) => sample.acc));
+  const delta = recentAccuracy - previousAccuracy;
+  const threshold = Math.max(5, previousAccuracy * 0.2);
+  const trend: AccuracyTrend = delta > threshold ? 'worsening' : delta < -threshold ? 'improving' : 'stable';
+  return { trend, previousAccuracy, recentAccuracy, delta, worsening: trend === 'worsening' };
+}
+
+export interface StorageReading {
+  supported: boolean;
+  usage: number | null;
+  quota: number | null;
+  usageRatio: number | null;
+  checkedAt: number | null;
+}
+
+export interface BatteryReading {
+  supported: boolean;
+  level: number | null;
+  charging: boolean | null;
+  checkedAt: number | null;
+}
+
+export type RecordingQualityWarningCode =
+  | 'gps-no-fix' | 'gps-stale' | 'gps-accuracy' | 'gps-sampling' | 'gps-incomplete'
+  | 'storage-capacity' | 'storage-write' | 'storage-low' | 'storage-critical'
+  | 'battery-low' | 'battery-critical';
+
+export interface RecordingQualityWarning {
+  code: RecordingQualityWarningCode;
+  severity: 'info' | 'warn' | 'critical';
+  action: 'retry-location' | 'retry-save' | 'save-power' | 'free-storage' | 'charge';
+  messageKey: string;
+  params: Record<string, number>;
+}
+
+export interface RecordingQuality {
+  activeDurationMs: number | null;
+  firstValidFixT: number | null;
+  lastValidFixT: number | null;
+  lastValidFixAgeMs: number | null;
+  observedFixes: number;
+  validFixes: number;
+  invalidFixes: number;
+  validRatio: number | null;
+  validSampleRatePerMin: number | null;
+  validSpanMs: number | null;
+  completeness: number | null;
+  trackSpanMs: number | null;
+  trackCompleteness: number | null;
+  accuracyTrend: AccuracyTrendAssessment;
+  accuracySamples: AccuracySample[];
+  storage: StorageReading;
+  battery: BatteryReading;
+  warnings: RecordingQualityWarning[];
+}
+
+export interface RecordingQualityInput {
+  now: number;
+  durationMs: number | null;
+  segmentStartedAt: number | null;
+  pausedSpans?: readonly { start: number; end: number | null }[];
+  firstValidFixT: number | null;
+  lastValidFixT: number | null;
+  firstPointT: number | null;
+  lastPointT: number | null;
+  observedFixes: number;
+  validFixes: number;
+  invalidFixes: number;
+  accuracySamples: readonly AccuracySample[];
+  storage: StorageReading;
+  battery: BatteryReading;
+  saveState: { pending: number; error: string | null; degraded: boolean };
+}
+
+const emptyStorage = (supported = false): StorageReading => ({
+  supported, usage: null, quota: null, usageRatio: null, checkedAt: null
+});
+const emptyBattery = (supported = false): BatteryReading => ({
+  supported, level: null, charging: null, checkedAt: null
+});
+const ratio = (value: number | null) => value == null ? null : Math.max(0, Math.min(1, value));
+
+function activeSpanMs(
+  from: number | null,
+  to: number | null,
+  pausedSpans: readonly { start: number; end: number | null }[] = [],
+  now: number
+): number | null {
+  if (from == null || to == null) return null;
+  const start = Math.min(from, to);
+  const end = Math.max(from, to);
+  const pausedMs = pausedSpans.reduce((sum, span) => {
+    if (!Number.isFinite(span?.start)) return sum;
+    const pausedEnd = Number.isFinite(span.end) ? span.end! : now;
+    return sum + Math.max(0, Math.min(end, pausedEnd) - Math.max(start, span.start));
+  }, 0);
+  return Math.max(0, end - start - pausedMs);
+}
+
+/**
+ * Live recording metrics use only observed callbacks and accepted fixes. No
+ * configured Hz is assumed: browsers decide when watchPosition emits a fix.
+ */
+export function assessRecordingQuality(input: RecordingQualityInput): RecordingQuality {
+  const durationMs = Number.isFinite(input.durationMs) && input.durationMs! >= 0 ? input.durationMs! : null;
+  const observedFixes = Math.max(0, Number(input.observedFixes) || 0);
+  const validFixes = Math.max(0, Number(input.validFixes) || 0);
+  const invalidFixes = Math.max(0, Number(input.invalidFixes) || 0);
+  const firstValidFixT = Number.isFinite(input.firstValidFixT) ? input.firstValidFixT : null;
+  const lastValidFixT = Number.isFinite(input.lastValidFixT) ? input.lastValidFixT : null;
+  const firstPointT = Number.isFinite(input.firstPointT) ? input.firstPointT : null;
+  const lastPointT = Number.isFinite(input.lastPointT) ? input.lastPointT : null;
+  const lastValidFixAgeMs = lastValidFixT == null ? null : Math.max(0, input.now - lastValidFixT);
+  const validSpanMs = activeSpanMs(firstValidFixT, lastValidFixT, input.pausedSpans, input.now);
+  const trackSpanMs = activeSpanMs(firstPointT, lastPointT, input.pausedSpans, input.now);
+  const usage = Number.isFinite(input.storage?.usage) && input.storage.usage! >= 0 ? input.storage.usage! : null;
+  const quota = Number.isFinite(input.storage?.quota) && input.storage.quota! > 0 ? input.storage.quota! : null;
+  const storage: StorageReading = {
+    supported: !!input.storage?.supported,
+    usage,
+    quota,
+    usageRatio: null,
+    checkedAt: Number.isFinite(input.storage?.checkedAt) ? input.storage.checkedAt! : null
+  };
+  if (storage.usage != null && storage.quota != null) storage.usageRatio = ratio(storage.usage / storage.quota);
+  const batteryLevel = Number.isFinite(input.battery?.level) && input.battery.level! >= 0 && input.battery.level! <= 1
+    ? input.battery.level! : null;
+  const battery: BatteryReading = {
+    supported: !!input.battery?.supported,
+    level: batteryLevel,
+    charging: typeof input.battery?.charging === 'boolean' ? input.battery.charging : null,
+    checkedAt: Number.isFinite(input.battery?.checkedAt) ? input.battery.checkedAt! : null
+  };
+  const quality: RecordingQuality = {
+    activeDurationMs: durationMs,
+    firstValidFixT,
+    lastValidFixT,
+    lastValidFixAgeMs,
+    observedFixes,
+    validFixes,
+    invalidFixes,
+    validRatio: observedFixes > 0 ? ratio(validFixes / observedFixes) : null,
+    validSampleRatePerMin: durationMs != null && durationMs > 0 ? validFixes / (durationMs / 60_000) : null,
+    validSpanMs,
+    completeness: durationMs != null && durationMs > 0 && validSpanMs != null
+      ? ratio(validSpanMs / durationMs) : null,
+    trackSpanMs,
+    trackCompleteness: durationMs != null && durationMs > 0 && trackSpanMs != null
+      ? ratio(trackSpanMs / durationMs) : null,
+    accuracyTrend: assessAccuracyTrend(input.accuracySamples),
+    accuracySamples: (input.accuracySamples || [])
+      .filter((sample) => Number.isFinite(sample?.t) && Number.isFinite(sample?.acc) && sample.acc > 0)
+      .map((sample) => ({ t: sample.t, acc: sample.acc })),
+    storage,
+    battery,
+    warnings: []
+  };
+  const warnings: RecordingQualityWarning[] = [];
+  const waitStart = Number.isFinite(input.segmentStartedAt)
+    ? input.segmentStartedAt!
+    : durationMs != null ? input.now - durationMs : input.now;
+  const waitMs = input.now - Math.max(waitStart, lastValidFixT ?? -Infinity);
+  if (lastValidFixT == null && waitMs >= 20_000) {
+    warnings.push({ code: 'gps-no-fix', severity: 'warn', action: 'retry-location', messageKey: 'record.qualityWarnNoFix', params: {} });
+  } else if (lastValidFixT != null && waitMs >= 60_000) {
+    warnings.push({ code: 'gps-stale', severity: 'critical', action: 'retry-location', messageKey: 'record.qualityWarnStale', params: { s: Math.floor(waitMs / 1000) } });
+  } else if (lastValidFixT != null && waitMs >= 20_000) {
+    warnings.push({ code: 'gps-stale', severity: 'warn', action: 'retry-location', messageKey: 'record.qualityWarnStale', params: { s: Math.floor(waitMs / 1000) } });
+  }
+  if (quality.accuracyTrend.worsening && (quality.accuracyTrend.recentAccuracy || 0) > 15) {
+    warnings.push({
+      code: 'gps-accuracy', severity: 'warn', action: 'retry-location', messageKey: 'record.qualityWarnAccuracy',
+      params: { acc: Math.round(quality.accuracyTrend.recentAccuracy || 0) }
+    });
+  }
+  if (observedFixes >= 6 && quality.validRatio != null && quality.validRatio < 0.7) {
+    warnings.push({
+      code: 'gps-sampling', severity: 'warn', action: 'retry-location', messageKey: 'record.qualityWarnSampling',
+      params: { pct: Math.round(quality.validRatio * 100) }
+    });
+  }
+  if (durationMs != null && durationMs >= 60_000 && quality.completeness != null && quality.completeness < 0.75) {
+    warnings.push({
+      code: 'gps-incomplete', severity: 'warn', action: 'retry-location', messageKey: 'record.qualityWarnIncomplete',
+      params: { pct: Math.round(quality.completeness * 100) }
+    });
+  }
+  if (input.saveState?.degraded || input.saveState?.error === 'capacity') {
+    warnings.push({
+      code: 'storage-capacity', severity: 'critical', action: 'retry-save', messageKey: 'record.saveDegraded',
+      params: { n: Math.max(0, Number(input.saveState?.pending) || 0) }
+    });
+  } else if (input.saveState?.error === 'write') {
+    warnings.push({
+      code: 'storage-write', severity: 'warn', action: 'retry-save', messageKey: 'record.saveFailed',
+      params: { n: Math.max(0, Number(input.saveState?.pending) || 0) }
+    });
+  } else if (storage.usageRatio != null && storage.usageRatio >= 0.9) {
+    warnings.push({
+      code: 'storage-critical', severity: 'critical', action: 'free-storage', messageKey: 'record.qualityWarnStorageCritical',
+      params: { pct: Math.round(storage.usageRatio * 100) }
+    });
+  } else if (storage.usageRatio != null && storage.usageRatio >= 0.8) {
+    warnings.push({
+      code: 'storage-low', severity: 'warn', action: 'free-storage', messageKey: 'record.qualityWarnStorageLow',
+      params: { pct: Math.round(storage.usageRatio * 100) }
+    });
+  }
+  if (battery.level != null && battery.charging === false) {
+    if (battery.level <= 0.15) {
+      warnings.push({
+        code: 'battery-critical', severity: 'critical', action: 'charge', messageKey: 'record.qualityWarnBatteryCritical',
+        params: { pct: Math.round(battery.level * 100) }
+      });
+    } else if (battery.level <= 0.2) {
+      warnings.push({
+        code: 'battery-low', severity: 'warn', action: 'charge', messageKey: 'record.qualityWarnBatteryLow',
+        params: { pct: Math.round(battery.level * 100) }
+      });
+    }
+  }
+  quality.warnings = warnings;
+  return quality;
+}
+
 export function assessGpsQuality(points, { poorAcc = 50, activity = 'hike' } = {}) {
   let accSum = 0, accN = 0, poorFixes = 0;
   let timedPairs = 0, gaps = 0, gapMs = 0, maxGapMs = 0;

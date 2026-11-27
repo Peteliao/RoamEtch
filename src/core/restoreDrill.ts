@@ -7,7 +7,7 @@ import {
 import { sha256Hex, stableStringify } from './integrity';
 import { DATABASE_MIGRATIONS, TRIP_SCHEMA_VERSION } from './migrations';
 
-const TABLE_NAMES = ['trips', 'segments', 'trackChunks', 'trackSnapshots', 'waypoints', 'media', 'elevCache', 'shareImports'] as const;
+const TABLE_NAMES = ['trips', 'segments', 'trackChunks', 'trackSnapshots', 'waypoints', 'media', 'elevCache', 'shareImports', 'quarantine'] as const;
 const COUNT_NAMES = ['trips', 'segments', 'trackChunks', 'trackSnapshots', 'waypoints', 'media'] as const;
 const CLEANUP_TIMEOUT_MS = 3000;
 const TRIP_ID = 'restore-drill-trip';
@@ -268,7 +268,8 @@ async function verifyTarget(
     || !sameJson(snapshot, fixture.snapshot)
     || !sameJson(waypoint, fixture.waypoint)
     || !sameJson(rows.elevCache, [])
-    || !sameJson(rows.shareImports, expected.shareImports ?? [])) {
+    || !sameJson(rows.shareImports, expected.shareImports ?? [])
+    || !sameJson(rows.quarantine, [])) {
     throw new RestoreDrillError('restore-drill-verification-failed');
   }
 
@@ -338,7 +339,7 @@ function errorInfo(error: any, signal?: AbortSignal): RestoreDrillErrorInfo {
 }
 
 /**
- * Exercises the production v3 export/inspect/restore pipeline using only synthetic
+ * Exercises the production v4 export/inspect/restore pipeline using only synthetic
  * rows in uniquely named temporary databases. The main database is never a target.
  */
 export async function runRestoreDrill(options: RestoreDrillOptions = {}): Promise<RestoreDrillResult> {
@@ -382,7 +383,7 @@ export async function runRestoreDrill(options: RestoreDrillOptions = {}): Promis
       target: databases[1], signal,
       onProgress: (progress) => report('inspect', progress)
     }));
-    if (inspected.manifest.version !== 3 || inspected.manifest.tripSchemaVersion !== TRIP_SCHEMA_VERSION
+    if (inspected.manifest.version !== 4 || inspected.manifest.tripSchemaVersion !== TRIP_SCHEMA_VERSION
       || inspected.integrity.ok !== true || inspected.integrity.checked !== 2 || inspected.integrity.failed.length
       || inspected.conflicts.length) {
       throw new RestoreDrillError('restore-drill-integrity-failed');

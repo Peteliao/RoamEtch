@@ -36,8 +36,14 @@ import { buildIceServers } from './webrtcConfig';
 import { P2PTransferError, P2PTransferManager, webrtcAvailable } from './webrtcTransfer';
 
 const STALE_MS = 45_000;
+export const MEET_POSITION_TTL_MS = 60_000;
+export const MEET_WEAK_GPS_ACCURACY_M = 50;
+const WEAK_GPS_TREND_ACCURACY_M = 30;
+const WEAK_GPS_TREND_RATIO = 1.5;
+const ACCURACY_HISTORY_KEEP = 6;
 const REMOVE_MS = 10 * 60_000;
 const HEARTBEAT_MS = 20_000;
+const PACKET_CLOCK_TOLERANCE_MS = 5 * 60_000;
 const MAX_EXPIRY_MIN = 480;
 export const MEET_CHAT_MAX_LEN = 500;
 const MAX_CHAT_MESSAGES = 120;
@@ -165,7 +171,64 @@ function relayStatus(s: MeetSession) {
   return 'connecting';
 }
 
-function peerView(p: any, self: any, hostId: string | null) {
+function validAccuracy(value: any) {
+  const n = Number(value);
+  return value != null && Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function accuracyTrend(history: any[]) {
+  if (!Array.isArray(history) || history.length < 3) return false;
+  const [first, second, latest] = history.slice(-3);
+  return latest.acc >= WEAK_GPS_TREND_ACCURACY_M
+    && latest.acc >= first.acc * WEAK_GPS_TREND_RATIO
+    && latest.acc > second.acc
+    && second.acc > first.acc;
+}
+
+function weakGpsReason(acc: number | null, history: any[]) {
+  if (acc != null && acc > MEET_WEAK_GPS_ACCURACY_M) return 'accuracy';
+  if (accuracyTrend(history)) return 'deteriorating';
+  return null;
+}
+
+function rememberAccuracy(target: any, acc: number | null, at: number) {
+  if (acc == null) return;
+  if (!Array.isArray(target.accuracyHistory)) target.accuracyHistory = [];
+  target.accuracyHistory.push({ at, acc });
+  while (target.accuracyHistory.length > ACCURACY_HISTORY_KEEP) target.accuracyHistory.shift();
+}
+
+function observePeerClock(peer: any, ts: number, now: number) {
+  const observed = Math.max(-PACKET_CLOCK_TOLERANCE_MS, Math.min(PACKET_CLOCK_TOLERANCE_MS, ts - now));
+  if (!Number.isFinite(peer.clockOffsetMs) || observed > peer.clockOffsetMs) peer.clockOffsetMs = observed;
+}
+
+function networkStatus(peer: any, now: number) {
+  if (peer.left) return 'left';
+  return now - peer.lastContactAt > STALE_MS ? 'offline' : 'online';
+}
+
+function normalizedFixAt(position: any, now: number) {
+  const sampledAt = Number(position.lastFixAt || position.fixAt || 0);
+  if (!sampledAt) return 0;
+  const corrected = position.fixApprox ? sampledAt : sampledAt - (Number(position.clockOffsetMs) || 0);
+  return Math.min(now, Math.max(0, corrected));
+}
+
+function fixAge(position: any, now: number) {
+  if (!Number(position.lastFixAt || position.fixAt || 0)) return null;
+  return Math.max(0, now - normalizedFixAt(position, now));
+}
+
+function positionStatus(position: any, now: number, sharing = position.sharing) {
+  if (sharing === false) return 'paused';
+  if (!position.hasFix && !Number(position.lastFixAt || position.fixAt || 0)) return 'locating';
+  if (position.lat == null || position.lon == null) return 'locating';
+  if ((fixAge(position, now) ?? Infinity) >= MEET_POSITION_TTL_MS) return 'stale';
+  return weakGpsReason(position.acc ?? null, position.accuracyHistory) ? 'weak' : 'fresh';
+}
+
+function peerView(p: any, self: any, hostId: string | null, now: number) {
   const distance = self.hasFix && p.lat != null && p.lon != null
     ? haversine(self.lat, self.lon, p.lat, p.lon)
     : null;
@@ -178,7 +241,10 @@ function peerView(p: any, self: any, hostId: string | null) {
       clock = Math.round(rel / 30) % 12 || 12;
     }
   }
-  const age = Math.max(0, Date.now() - p.lastSeen);
+  const contactAge = Math.max(0, now - p.lastContactAt);
+  const network = networkStatus(p, now);
+  const location = positionStatus(p, now);
+  const sampledAge = fixAge(p, now);
   return {
     id: p.id,
     name: p.name,
@@ -193,9 +259,47 @@ function peerView(p: any, self: any, hostId: string | null) {
     clock,
     sharing: p.sharing !== false,
     isHost: p.id === hostId,
+    lastContactAt: p.lastContactAt,
+    lastLocAt: p.lastLocAt,
+    lastFixAt: p.lastFixAt,
+    contactAge,
+    locAge: p.lastLocAt ? Math.max(0, now - p.lastLocAt) : null,
+    fixAge: sampledAge,
+    positionUpdatedAt: sampledAge == null ? 0 : normalizedFixAt(p, now),
+    fixApprox: !!p.fixApprox,
+    networkStatus: network,
+    positionStatus: location,
+    weakGpsReason: location === 'weak' ? weakGpsReason(p.acc ?? null, p.accuracyHistory) : null,
+    left: !!p.left,
     lastSeen: p.lastSeen,
-    age,
-    stale: age > STALE_MS
+    age: contactAge,
+    // Compatibility alias: stale keeps its original network-contact meaning.
+    stale: network === 'offline'
+  };
+}
+
+function selfView(s: MeetSession, now: number) {
+  const location = positionStatus(s.self, now, s.sharing);
+  const sampledAge = fixAge(s.self, now);
+  return {
+    id: s.self.id,
+    name: s.self.name,
+    color: meetRoleColor(s.hostId === s.self.id),
+    isHost: s.hostId === s.self.id,
+    lat: s.self.lat,
+    lon: s.self.lon,
+    acc: s.self.acc,
+    heading: s.self.heading,
+    speed: s.self.speed,
+    hasFix: s.self.hasFix,
+    fixAt: s.self.fixAt,
+    lastFixAt: s.self.fixAt,
+    ts: s.self.ts,
+    fixAge: sampledAge,
+    positionUpdatedAt: sampledAge == null ? 0 : normalizedFixAt(s.self, now),
+    positionStatus: location,
+    weakGpsReason: location === 'weak' ? weakGpsReason(s.self.acc ?? null, s.self.accuracyHistory) : null,
+    networkStatus: s.relayState === 'connected' ? 'online' : 'offline'
   };
 }
 
@@ -220,8 +324,11 @@ export function getMeetSnapshot() {
       now: Date.now()
     };
   }
-  const peers = [...s.peers.values()].map((p) => peerView(p, s.self, s.hostId));
-  peers.sort((a, b) => (a.stale === b.stale ? (a.distance ?? Infinity) - (b.distance ?? Infinity) : a.stale ? 1 : -1));
+  const now = Date.now();
+  const self = selfView(s, now);
+  const peers = [...s.peers.values()].map((p) => peerView(p, self, s.hostId, now));
+  const peerRank = (p: any) => p.networkStatus === 'left' ? 3 : p.stale ? 2 : p.positionStatus === 'fresh' ? 0 : 1;
+  peers.sort((a, b) => peerRank(a) - peerRank(b) || (a.distance ?? Infinity) - (b.distance ?? Infinity));
   return {
     active: true,
     status: relayStatus(s),
@@ -234,20 +341,7 @@ export function getMeetSnapshot() {
     roomLabel: s.roomLabel,
     link: s.link,
     roomId: s.roomId,
-    self: {
-      id: s.self.id,
-      name: s.self.name,
-      color: meetRoleColor(s.hostId === s.self.id),
-      isHost: s.hostId === s.self.id,
-      lat: s.self.lat,
-      lon: s.self.lon,
-      acc: s.self.acc,
-      heading: s.self.heading,
-      speed: s.self.speed,
-      hasFix: s.self.hasFix,
-      fixAt: s.self.fixAt,
-      ts: s.self.ts
-    },
+    self,
     peers,
     messages: s.messages.map((m: any) => ({ ...m })),
     chatUnread: s.chatUnread,
@@ -257,7 +351,7 @@ export function getMeetSnapshot() {
     geoError: s.geoError,
     startedAt: s.startedAt,
     expiresAt: s.expiresAt,
-    now: Date.now(),
+    now,
     route: s.route ? {
       peerId: s.route.peerId,
       coords: s.route.coords,
@@ -291,7 +385,10 @@ function startWatch() {
   }
   try {
     s.watchId = navigator.geolocation.watchPosition(
-      (pos) => applyFix(pos.coords, pos.timestamp),
+      (pos) => {
+        if (session !== s) return;
+        applyFix(pos.coords, pos.timestamp);
+      },
       (err) => {
         if (session !== s) return;
         s.geoError = err?.code === 1 ? 'denied' : err?.code === 2 ? 'unavailable' : 'timeout';
@@ -317,24 +414,31 @@ function applyFix(coords: any, timestamp?: number) {
   if (!s || !coords) return;
   const hadFix = s.self.hasFix;
   const hadGeoError = !!s.geoError;
+  const previousStatus = positionStatus(s.self, Date.now(), s.sharing);
   const lat = Number(coords.latitude);
   const lon = Number(coords.longitude);
   if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
   const heading = coords.heading != null && isFinite(coords.heading) ? Number(coords.heading) : null;
   const speed = coords.speed != null && isFinite(coords.speed) ? Number(coords.speed) : null;
-  const acc = coords.accuracy != null && isFinite(coords.accuracy) ? Number(coords.accuracy) : null;
+  const acc = validAccuracy(coords.accuracy);
   const now = Date.now();
+  const suppliedAt = Number(timestamp);
+  const sampleAt = Number.isFinite(suppliedAt) && suppliedAt > 0 ? suppliedAt : now;
+  if (s.self.hasFix && sampleAt <= s.self.fixAt) return;
   s.self = {
     ...s.self,
     lat, lon, acc, heading, speed,
     hasFix: true,
-    fixAt: now,
-    ts: Number(timestamp) || now
+    fixAt: sampleAt,
+    lastFixAt: sampleAt,
+    ts: sampleAt,
+    fixApprox: false
   };
+  rememberAccuracy(s.self, acc, sampleAt);
   s.geoError = null;
-  s.lastFix = { lat, lon, at: now };
+  s.lastFix = { lat, lon, at: sampleAt };
   emitSelf();
-  if (!hadFix || hadGeoError) emitState();
+  if (!hadFix || hadGeoError || previousStatus !== positionStatus(s.self, now, s.sharing)) emitState();
   maybePublishFix(lat, lon, now);
 }
 
@@ -485,7 +589,8 @@ function publishLoc() {
   return publishPacket({
     k: 'loc', id: s.self.id, name: s.self.name, c: s.self.color,
     la: s.self.lat, lo: s.self.lon, ac: s.self.acc,
-    hd: s.self.heading, sp: s.self.speed, sh: s.sharing
+    hd: s.self.heading, sp: s.self.speed, sh: s.sharing,
+    ft: s.self.fixAt
   });
 }
 
@@ -510,7 +615,7 @@ function sendPresence() {
   }
 }
 
-function touchPeer(msg: any, now: number) {
+function touchPeer(msg: any, now: number, ts: number) {
   const s = session;
   if (!s) return null;
   const id = String(msg.id || '').slice(0, 40);
@@ -523,15 +628,42 @@ function touchPeer(msg: any, now: number) {
       name: cleanName(msg.name) || t('meet.unnamedPeer'),
       color: /^#[0-9a-f]{6}$/i.test(String(msg.c)) ? msg.c : colorFor(id),
       lat: null, lon: null, acc: null, heading: null, speed: null,
-      sharing: true, ts: 0, lastSeen: now, hostId: null,
-      locSeq: 0, hiSeq: 0, stateSeq: 0
+      sharing: true, ts: 0, lastSeen: 0, lastContactAt: 0, lastLocAt: 0,
+      lastFixAt: 0, fixApprox: false, clockOffsetMs: null,
+      left: false, leftAt: 0, accuracyHistory: [], viewState: '',
+      hostId: null, locSeq: 0, hiSeq: 0, stateSeq: 0
     };
     s.peers.set(id, p);
   }
   if (msg.name) p.name = cleanName(msg.name) || p.name;
   if (/^#[0-9a-f]{6}$/i.test(String(msg.c))) p.color = msg.c;
+  observePeerClock(p, ts, now);
+  p.lastContactAt = now;
   p.lastSeen = now;
   return { peer: p, isNew };
+}
+
+function noteReplayContact(msg: any, now: number) {
+  if (!['hi', 'loc', 'st', 'msg'].includes(msg.k)) return;
+  const s = session;
+  const peer = s?.peers.get(String(msg.id || '').slice(0, 40));
+  if (!s || !peer || peer.left) return;
+  const wasOffline = networkStatus(peer, now) === 'offline';
+  peer.lastContactAt = now;
+  peer.lastSeen = now;
+  if (msg.k === 'loc') peer.lastLocAt = now;
+  if (wasOffline) emitState();
+}
+
+function markPeerLeft(s: MeetSession, id: string, now: number) {
+  const peer = s.peers.get(id);
+  if (!peer) return false;
+  peer.left = true;
+  peer.leftAt = now;
+  s.p2p?.closePeer(id);
+  if (s.hostId === id) s.hostId = null;
+  if (s.route?.peerId === id) s.route = null;
+  return true;
 }
 
 async function handleIncoming(text: string) {
@@ -543,7 +675,7 @@ async function handleIncoming(text: string) {
   if (session !== s || s.epoch !== epoch || s.room !== room || !msg || msg.v !== MEET_PROTOCOL_VERSION || typeof msg.k !== 'string') return;
   const now = Date.now();
   const ts = Number(msg.ts);
-  if (!isFinite(ts) || Math.abs(now - ts) > 5 * 60_000) return;
+  if (!isFinite(ts) || Math.abs(now - ts) > PACKET_CLOCK_TOLERANCE_MS) return;
   const senderId = String(msg.id || '').slice(0, 40);
   if (!senderId || senderId === s.self.id) return;
   if (msg.k === 'rtc') {
@@ -554,13 +686,19 @@ async function handleIncoming(text: string) {
     void s.p2p.handleSignal(signal).catch(() => undefined);
     return;
   }
-  if (!acceptMeetSequence(s.replay, senderId, Number(msg.sq), now)) return;
+  if (!acceptMeetSequence(s.replay, senderId, Number(msg.sq), now)) {
+    noteReplayContact(msg, now);
+    return;
+  }
 
   if (msg.k === 'hi') {
     const existing = s.peers.get(senderId);
     if (existing?.hiSeq && Number(msg.sq) <= existing.hiSeq) return;
-    const touched = touchPeer(msg, now);
+    const touched = touchPeer(msg, now, ts);
     if (!touched) return;
+    const wasLeft = touched.peer.left;
+    touched.peer.left = false;
+    touched.peer.leftAt = 0;
     touched.peer.hiSeq = Number(msg.sq);
     if (msg.id === msg.hostId && (!s.hostId || s.hostId === msg.id || s.hostId === s.self.id)) {
       if (!s.hostId) s.hostId = msg.id;
@@ -570,7 +708,7 @@ async function handleIncoming(text: string) {
       }
     }
     if (s.hostId === s.self.id) touched.peer.hostId = s.self.id;
-    if (touched.isNew) emit('meet:peerjoined', { name: touched.peer.name, id: touched.peer.id });
+    if (touched.isNew || wasLeft) emit('meet:peerjoined', { name: touched.peer.name, id: touched.peer.id });
     if (touched.isNew && s.hostId === s.self.id) publishHi();
     emitState();
     return;
@@ -588,8 +726,9 @@ async function handleIncoming(text: string) {
     if (!image && !voice && !text) return;
     if (!chatRateOk(s, senderId, now)) return;
     if (image && !imageRateOk(s, senderId, now)) return;
-    const touched = touchPeer(msg, now);
+    const touched = touchPeer(msg, now, ts);
     if (!touched) return;
+    if (touched.peer.left) return;
     if (touched.isNew) {
       if (s.hostId === s.self.id) {
         touched.peer.hostId = s.self.id;
@@ -641,29 +780,47 @@ async function handleIncoming(text: string) {
     const lat = Number(msg.la);
     const lon = Number(msg.lo);
     if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
-    const touched = touchPeer(msg, now);
+    let sampleAt = ts;
+    let fixApprox = true;
+    if (msg.ft != null) {
+      const ft = Number(msg.ft);
+      if (!Number.isSafeInteger(ft) || ft <= 0 || ft > ts + 1000) return;
+      sampleAt = ft;
+      fixApprox = false;
+    }
+    const touched = touchPeer(msg, now, ts);
     if (!touched) return;
     const p = touched.peer;
+    if (p.left) return;
     const seq = Number(msg.sq);
     if (p.locSeq && seq <= p.locSeq) return;
-    if (p.ts && ts < p.ts - 1000) return;
     p.locSeq = seq;
-    p.lat = lat;
-    p.lon = lon;
-    p.acc = isFinite(Number(msg.ac)) ? Number(msg.ac) : null;
-    p.heading = isFinite(Number(msg.hd)) ? Number(msg.hd) : null;
-    p.speed = isFinite(Number(msg.sp)) ? Number(msg.sp) : null;
-    p.sharing = msg.sh !== false;
+    p.lastLocAt = now;
     p.ts = ts;
     if (s.hostId === s.self.id) p.hostId = s.self.id;
+    if (p.lastFixAt && sampleAt <= p.lastFixAt) {
+      if (touched.isNew) emit('meet:peerjoined', { name: p.name, id: p.id });
+      emitState();
+      return;
+    }
+    p.lat = lat;
+    p.lon = lon;
+    p.acc = validAccuracy(msg.ac);
+    p.heading = msg.hd != null && isFinite(Number(msg.hd)) ? Number(msg.hd) : null;
+    p.speed = msg.sp != null && isFinite(Number(msg.sp)) ? Number(msg.sp) : null;
+    p.sharing = msg.sh !== false;
+    p.lastFixAt = sampleAt;
+    p.fixApprox = fixApprox;
+    rememberAccuracy(p, p.acc, sampleAt);
     if (touched.isNew) emit('meet:peerjoined', { name: p.name, id: p.id });
     emitState();
     return;
   }
 
   if (msg.k === 'st') {
-    const touched = touchPeer(msg, now);
+    const touched = touchPeer(msg, now, ts);
     if (!touched) return;
+    if (touched.peer.left) return;
     const seq = Number(msg.sq);
     if (touched.peer.stateSeq && seq <= touched.peer.stateSeq) return;
     touched.peer.stateSeq = seq;
@@ -685,11 +842,12 @@ async function handleIncoming(text: string) {
   }
 
   if (msg.k === 'bye') {
-    const known = s.peers.delete(senderId);
-    s.p2p?.closePeer(senderId);
-    if (!known) return;
-    if (s.hostId === senderId) s.hostId = null;
-    if (s.route?.peerId === senderId) s.route = null;
+    const peer = s.peers.get(senderId);
+    if (!peer) return;
+    observePeerClock(peer, ts, now);
+    peer.lastContactAt = now;
+    peer.lastSeen = now;
+    markPeerLeft(s, senderId, now);
     emit('meet:peerleft', { id: senderId });
     emitState();
     return;
@@ -705,10 +863,7 @@ async function handleIncoming(text: string) {
       await leaveMeet('kicked');
       return;
     }
-    const known = s.peers.delete(target);
-    s.p2p?.closePeer(target);
-    if (!known) return;
-    if (s.route?.peerId === target) s.route = null;
+    markPeerLeft(s, target, now);
     emitState();
   }
 }
@@ -725,24 +880,33 @@ function tick() {
     return;
   }
   s.tickCount++;
-  if (s.tickCount % 5 === 0) {
-    let changed = false;
-    for (const [id, p] of s.peers) {
-      const age = now - p.lastSeen;
-      if (age > REMOVE_MS) {
-        s.peers.delete(id);
-        s.p2p?.closePeer(id);
-        if (s.hostId === id) s.hostId = null;
-        if (s.route?.peerId === id) s.route = null;
-        changed = true;
-      } else {
-        const stale = age > STALE_MS;
-        if (p.stale !== stale) { p.stale = stale; changed = true; }
-      }
-    }
-    if (changed) emitState();
-    pruneMeetReplay(s.replay, new Set(s.peers.keys()), now, REMOVE_MS);
+  let changed = false;
+  const selfState = `${positionStatus(s.self, now, s.sharing)}:${weakGpsReason(s.self.acc ?? null, s.self.accuracyHistory) || ''}`;
+  if (s.self.viewState !== selfState) {
+    s.self.viewState = selfState;
+    changed = true;
   }
+  for (const [id, p] of s.peers) {
+    const age = now - p.lastContactAt;
+    if ((p.left ? now - p.leftAt : age) > REMOVE_MS) {
+      s.peers.delete(id);
+      s.p2p?.closePeer(id);
+      if (s.hostId === id) s.hostId = null;
+      if (s.route?.peerId === id) s.route = null;
+      changed = true;
+      continue;
+    }
+    const network = networkStatus(p, now);
+    const location = positionStatus(p, now);
+    const viewState = `${network}:${location}:${weakGpsReason(p.acc ?? null, p.accuracyHistory) || ''}`;
+    p.stale = network === 'offline';
+    if (p.viewState !== viewState) {
+      p.viewState = viewState;
+      changed = true;
+    }
+  }
+  if (changed) emitState();
+  if (s.tickCount % 5 === 0) pruneMeetReplay(s.replay, new Set(s.peers.keys()), now, REMOVE_MS);
   if (s.tickCount % Math.round(HEARTBEAT_MS / 1000) === 0) {
     publishState();
     if (s.hostId === s.self.id && s.tickCount % 36 === 0) publishHi();
@@ -768,7 +932,8 @@ async function beginSession({ invite, name, host, expiryMin }: { invite: string;
       name: selfName,
       color: '#2bcda7',
       lat: null, lon: null, acc: null, heading: null, speed: null,
-      hasFix: false, fixAt: 0, ts: 0
+      hasFix: false, fixAt: 0, lastFixAt: 0, ts: 0, fixApprox: false,
+      accuracyHistory: [], viewState: ''
     },
     hostId: host ? selfId : null,
     peers: new Map(),
@@ -1114,18 +1279,18 @@ export async function kickMeetPeer(peerId: string) {
   if (!s || s.hostId !== s.self.id || !peerId || peerId === s.self.id) return false;
   await publishPacket({ k: 'kick', id: s.self.id, target: peerId, by: s.self.id });
   if (session !== s) return false;
-  s.peers.delete(peerId);
-  s.p2p?.closePeer(peerId);
-  if (s.route?.peerId === peerId) s.route = null;
+  markPeerLeft(s, peerId, Date.now());
   emitState();
   return true;
 }
 
 export async function planMeetRoute(peerId: string) {
   const s = session;
-  if (!s || !s.self.hasFix) return null;
+  if (!s) return null;
+  const now = Date.now();
+  if (positionStatus(s.self, now, s.sharing) !== 'fresh') return null;
   const peer = s.peers.get(peerId);
-  if (!peer || peer.lat == null || peer.lon == null) return null;
+  if (!peer || peer.left || positionStatus(peer, now) !== 'fresh' || peer.lat == null || peer.lon == null) return null;
   s.routeAbort?.abort();
   const ctrl = new AbortController();
   s.routeAbort = ctrl;

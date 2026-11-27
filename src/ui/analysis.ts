@@ -5,17 +5,17 @@ import 'uplot/dist/uPlot.min.css';
 import { t } from '../core/i18n';
 import { get } from '../core/settings';
 import { on } from '../core/events';
-import { getTrackSnapshotSummary, listTrips } from '../core/store';
+import { getTrackSnapshotSummary, listTrackRepairVersions, listTrips } from '../core/store';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, usableTrackPoints } from '../core/geo';
 import { findTrackGaps, repairTrackGaps } from '../core/gapRepair';
 import { assessTrackGpsQuality } from '../core/gpsQuality';
-import { cleanGpsTrack, restoreGpsTrack } from '../core/trackCleanup';
+import { applyTrackRepair, restoreGpsTrack, restoreTrackRepairVersion } from '../core/trackCleanup';
 import { TrackMap } from './map';
 import { WP_ICONS } from '../core/waypointMeta';
 import { canvasPalette } from '../core/palette';
 import { effectiveTheme } from '../core/theme';
 import { buildProfile, altitudeUnit, distanceInUnit, distanceUnit, speedUnit } from '../core/profileChart';
-import { computeDistanceSplitsAsync, previewTrackCleanupAsync } from '../core/workerBridge';
+import { computeDistanceSplitsAsync, previewTrackRepairAsync } from '../core/workerBridge';
 import { appState, setActiveTrip, refreshActiveTrip, isTripSectionActive } from './state';
 import { el, icon, confirmModal, toast } from './helpers';
 import { renderTripEmptyState } from './tripEmptyState';
@@ -74,8 +74,12 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
   let mapTrackKey = '';
   let renderSequence = 0;
   let qualitySequence = 0;
+  let qualityTrackKey = '';
   let qualityController: AbortController | null = null;
+  let repairSequence = 0;
+  let repairController: AbortController | null = null;
   let splitSequence = 0;
+  let splitComputeKey = '';
   let splitResult = [];
   let splitTrackKey = '';
   let selectedSplitIndex: number | null = null;
@@ -121,42 +125,308 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     return el('div', { class: 'stat-mini' }, el('div', { class: 'v' }, value), el('div', { class: 'k' }, label));
   }
 
+  function repairMetricText(key, value, units) {
+    if (value == null) return '—';
+    if (key === 'distance') {
+      const formatted = fmtDistance(value, units);
+      return `${formatted.v}${formatted.u}`;
+    }
+    if (key === 'duration' || key === 'movingMs' || key === 'stillMs' || key === 'breakMs') {
+      return fmtDuration(value, { compact: true });
+    }
+    if (key === 'ascent' || key === 'descent') {
+      const formatted = fmtAltitude(value, units);
+      return `${formatted.v}${formatted.u}`;
+    }
+    return String(value);
+  }
+
+  function renderRepairVersions(versions, full, expectedUpdatedAt) {
+    if (!versions.length) return null;
+    const tripId = full.trip.id;
+    const units = get('units');
+    const rows = el('div', { class: 'repair-version-list' });
+    const addRow = (label, metrics, version = null) => {
+      const actions = el('div', { class: 'repair-version-actions' });
+      if (version) {
+        const restore = el('button', {
+          type: 'button', class: 'btn sm', disabled: full.trip.status === 'recording'
+        }, icon('undo', 14), t('analysis.repairVersionRestore'));
+        restore.onclick = async () => {
+          const ok = await confirmModal({
+            title: t('analysis.repairVersionRestoreTitle', { n: version.version }),
+            message: t('analysis.repairVersionRestoreConfirm', { n: version.version, points: version.points }),
+            confirmText: t('analysis.repairVersionRestore'), danger: true
+          });
+          if (!ok || appState.activeTripId !== tripId) return;
+          restore.disabled = true;
+          try {
+            await restoreTrackRepairVersion(tripId, version.versionId, { expectedUpdatedAt });
+            await refreshActiveTrip(tripId);
+            toast(t('analysis.repairVersionRestoreDone', { n: version.version }), 'ok', 4500);
+          } catch (e) {
+            console.error(e);
+            toast(t(e?.message === 'track-changed' ? 'analysis.qualityChanged' : 'analysis.repairVersionRestoreFail'), 'warn');
+            restore.disabled = false;
+          }
+        };
+        actions.append(restore);
+      }
+      const row = el('div', { class: 'repair-version-row' },
+        el('strong', { class: 'mono' }, label),
+        el('span', {}, `${metrics.pointCount ?? '—'} ${t('analysis.points')}`),
+        el('span', { class: 'mono' }, repairMetricText('distance', metrics.distance, units)),
+        el('span', { class: 'mono' }, repairMetricText('duration', metrics.duration, units)),
+        actions);
+      rows.append(row);
+      return row;
+    };
+    addRow(t('analysis.repairVersionCurrent'), appState.stats || {});
+    for (const version of versions.slice(0, 20)) {
+      const categories = version.selectedCategories.map((id) => t(`analysis.repairCategory.${id}`)).join(' · ');
+      const row = addRow(t('analysis.repairVersionLabel', {
+        n: version.version, date: new Date(version.createdAt).toLocaleString()
+      }), version.metrics || {}, version);
+      row.classList.add('repair-version-saved');
+      row.title = categories;
+      row.setAttribute('aria-label', `${t('analysis.repairVersionLabel', { n: version.version, date: new Date(version.createdAt).toLocaleString() })} · ${categories}`);
+    }
+    return el('div', { class: 'gps-snapshot repair-versions' },
+      el('strong', {}, t('analysis.repairVersionsTitle')),
+      el('div', { class: 'small faint' }, t('analysis.repairVersionsHint')),
+      rows);
+  }
+
+  function renderRepairPanel(full, initialPreview, ownerSequence, expectedUpdatedAt) {
+    const tripId = full.trip.id;
+    const activity = full.trip.activity || 'hike';
+    const units = get('units');
+    const body = el('div', { class: 'gps-repair' });
+    let current = initialPreview;
+    let applying = false;
+    const isCurrent = () => ownerSequence === qualitySequence && appState.activeTripId === tripId
+      && appState.activeTripFull?.trip.updatedAt === expectedUpdatedAt;
+    const focusPoint = (point) => {
+      if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lon)) return;
+      ensureMiniMap();
+      if (embedded && appState.tripDetail.open && appState.tripDetail.section !== 'overview') navigate('analysis');
+      requestAnimationFrame(() => {
+        miniMap?.resize();
+        miniMap?.flyTo(point.lat, point.lon, 16);
+        miniMap?.showHover(point.lat, point.lon, t('analysis.repairIssueLocation'));
+        miniMapBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    };
+    const render = () => {
+      const selected = new Set(current.selected);
+      const selectedImpact = current.categories.filter((category) => selected.has(category.id))
+        .reduce((sum, category) => sum + category.impactDistance, 0);
+      const impact = fmtDistance(selectedImpact, units);
+      const metricRows = [
+        ['distance', t('analysis.distance')],
+        ['duration', t('analysis.duration')],
+        ['movingMs', t('analysis.movingTime')],
+        ['stillMs', t('analysis.stillTime')],
+        ['breakMs', t('analysis.breakTime')],
+        ['ascent', t('analysis.ascent')],
+        ['pointCount', t('analysis.points')]
+      ];
+      const metrics = el('table', { class: 'repair-metrics' },
+        el('tr', {}, el('th', {}, t('analysis.repairMetric')),
+          el('th', {}, t('analysis.repairBefore')), el('th', {}, t('analysis.repairAfter'))));
+      for (const [key, label] of metricRows) {
+        metrics.append(el('tr', {},
+          el('th', { scope: 'row' }, label),
+          el('td', { class: 'mono' }, repairMetricText(key, current.metrics.before[key], units)),
+          el('td', { class: 'mono' }, repairMetricText(key, current.metrics.after[key], units))));
+      }
+      const categories = el('div', { class: 'repair-categories', role: 'group', 'aria-label': t('analysis.repairCategories') });
+      for (const category of current.categories) {
+        const checkbox = el('input', { type: 'checkbox', checked: selected.has(category.id) });
+        checkbox.onchange = () => {
+          const next = new Set(selected);
+          if (checkbox.checked) next.add(category.id); else next.delete(category.id);
+          void update([...next]);
+        };
+        const categoryImpact = fmtDistance(category.impactDistance, units);
+        const row = el('div', { class: 'repair-category' },
+          el('label', { class: 'repair-category-label' },
+            checkbox,
+            el('span', { class: 'repair-category-name' }, t(`analysis.repairCategory.${category.id}`)),
+            el('span', { class: 'tag' }, t('analysis.repairCategoryCount', { n: category.count })),
+            el('span', { class: 'repair-category-impact mono' }, `${categoryImpact.v}${categoryImpact.u}`)));
+        const suggestions = current.suggestions.filter((item) => item.category === category.id);
+        if (suggestions.length) {
+          const details = el('details', { class: 'repair-reasons' },
+            el('summary', {}, t('analysis.repairReasons', { n: suggestions.length })));
+          for (const item of suggestions.slice(0, 20)) {
+            const point = item.firstPoint;
+            details.append(el('button', {
+              type: 'button', class: 'repair-reason',
+              onclick: () => focusPoint(point)
+            },
+              el('span', {}, t(`analysis.repairReason.${item.reason}`)),
+              el('span', { class: 'small faint' }, `${t('analysis.qualitySegment', { n: item.segmentIndex + 1 })} · ${t('analysis.repairPoints', { n: item.indexes.length })}`)));
+          }
+          if (suggestions.length > 20) details.append(el('div', { class: 'small faint' }, t('analysis.repairMoreReasons', { n: suggestions.length - 20 })));
+          row.append(details);
+        }
+        categories.append(row);
+      }
+      const safe = el('button', { type: 'button', class: 'btn sm' }, t('analysis.repairSafeSelection'));
+      safe.onclick = () => void update(current.categories.filter((category) => category.defaultSelected).map((category) => category.id));
+      const clear = el('button', { type: 'button', class: 'btn sm' }, t('analysis.repairClearSelection'));
+      clear.onclick = () => void update([]);
+      const apply = el('button', { type: 'button', class: 'btn primary sm', disabled: !current.selected.length },
+        icon('shield', 15), t('analysis.repairApply'));
+      apply.onclick = async () => {
+        if (applying) return;
+        const preview = current;
+        const ok = await confirmModal({
+          title: t('analysis.repairApplyTitle'),
+          message: t('analysis.repairApplyConfirm', {
+            removed: preview.summary.removed,
+            altitude: preview.summary.altitudeCleared,
+            gaps: preview.summary.classifiedGaps,
+            impact: `${impact.v}${impact.u}`
+          }),
+          confirmText: t('analysis.repairApply')
+        });
+        if (!ok || !isCurrent() || current !== preview) return;
+        applying = true;
+        body.classList.add('is-busy');
+        apply.disabled = true;
+        const operation = new AbortController();
+        repairController?.abort();
+        repairController = operation;
+        try {
+          const result = await applyTrackRepair(tripId, {
+            activity, preview, expectedUpdatedAt, signal: operation.signal
+          });
+          await refreshActiveTrip(tripId);
+          toast(t('analysis.repairApplyDone', {
+            removed: result.removed, altitude: result.altitudeCleared, version: result.version?.version || '—'
+          }), 'ok', 4500);
+        } catch (e) {
+          if (e?.name === 'AbortError') return;
+          console.error(e);
+          toast(t(e?.message === 'track-changed' ? 'analysis.qualityChanged' : 'analysis.repairApplyFail'), 'warn');
+          applying = false;
+          body.classList.remove('is-busy');
+          apply.disabled = !current.selected.length;
+        } finally {
+          if (repairController === operation) repairController = null;
+        }
+      };
+      const semantics = el('details', { class: 'repair-semantics' },
+        el('summary', {}, t('analysis.repairSemanticsTitle')),
+        el('ul', {},
+          el('li', {}, t('analysis.repairSemanticDistance')),
+          el('li', {}, t('analysis.repairSemanticDuration')),
+          el('li', {}, t('analysis.repairSemanticMoving')),
+          el('li', {}, t('analysis.repairSemanticGaps')),
+          el('li', {}, t('analysis.repairSemanticAscent'))));
+      body.replaceChildren(
+        el('div', { class: 'gps-preview-head' },
+          el('strong', {}, t('analysis.repairTitle')),
+          el('span', { class: 'tag' }, t('analysis.repairImpact', { d: `${impact.v}${impact.u}` }))),
+        el('div', { class: 'repair-legend' },
+          el('span', {}, el('i', { class: 'before', 'aria-hidden': 'true' }), t('analysis.repairBefore')),
+          el('span', {}, el('i', { class: 'after', 'aria-hidden': 'true' }), t('analysis.repairAfter'))),
+        el('div', { class: 'small faint' }, t('analysis.repairHint')),
+        metrics, semantics,
+        el('div', { class: 'repair-selection-head' },
+          el('strong', {}, t('analysis.repairCategories')),
+          el('div', {}, safe, clear)),
+        categories,
+        el('div', { class: 'repair-actions' }, apply,
+          el('span', { class: 'small faint' }, t('analysis.repairSummary', {
+            removed: current.summary.removed,
+            altitude: current.summary.altitudeCleared,
+            gaps: current.summary.classifiedGaps
+          }))));
+    };
+    const update = async (selected) => {
+      const sequence = ++repairSequence;
+      repairController?.abort();
+      const controller = new AbortController();
+      repairController = controller;
+      body.classList.add('is-busy');
+      body.setAttribute('aria-busy', 'true');
+      try {
+        const next = await previewTrackRepairAsync(full.segments, activity, { selected }, { signal: controller.signal });
+        if (sequence !== repairSequence || !isCurrent() || controller.signal.aborted) return;
+        current = next;
+        miniMap?.setRepairPreview(next.overlay);
+        render();
+      } catch (e) {
+        if (e?.name !== 'AbortError' && isCurrent()) {
+          console.error(e);
+          toast(t('analysis.qualityPreviewFail'), 'warn');
+        }
+      } finally {
+        if (repairController === controller) repairController = null;
+        body.classList.remove('is-busy');
+        body.removeAttribute('aria-busy');
+      }
+    };
+    miniMap?.setRepairPreview(current.overlay);
+    render();
+    return body;
+  }
+
   async function renderQuality() {
+    const full = appState.activeTripFull;
+    if (!full) {
+      qualityTrackKey = '';
+      qualitySequence++;
+      repairSequence++;
+      qualityController?.abort();
+      repairController?.abort();
+      qualityBox.innerHTML = '';
+      miniMap?.setRepairPreview(null);
+      return;
+    }
+    const trackKey = `${full.trip.id}:${full.trip.updatedAt || 0}:${full.trip.status || ''}`;
+    if (trackKey === qualityTrackKey) return;
+    qualityTrackKey = trackKey;
     const sequence = ++qualitySequence;
+    const previousRepairSequence = ++repairSequence;
     qualityController?.abort();
+    repairController?.abort();
     const controller = new AbortController();
     qualityController = controller;
     qualityBox.innerHTML = '';
-    const full = appState.activeTripFull;
-    if (!full) return;
+    miniMap?.setRepairPreview(null);
     const tripId = full.trip.id;
     const updatedAt = full.trip.updatedAt;
     const activity = full.trip.activity || 'hike';
     const q = assessTrackGpsQuality(full.segments, { activity });
     const recording = full.trip.status === 'recording';
-    let snapshot, previewResult;
+    let snapshot, previewResult, versions;
     try {
-      [snapshot, previewResult] = await Promise.all([
+      [snapshot, previewResult, versions] = await Promise.all([
         getTrackSnapshotSummary(tripId),
-        recording ? null : previewTrackCleanupAsync(full.segments, activity, {}, { signal: controller.signal })
+        recording ? null : previewTrackRepairAsync(full.segments, activity, {}, { signal: controller.signal }),
+        listTrackRepairVersions(tripId).catch((error) => { console.error(error); return []; })
       ]);
     } catch (e) {
       if (controller.signal.aborted || e?.name === 'AbortError') return;
       if (sequence !== qualitySequence || appState.activeTripId !== tripId
         || appState.activeTripFull?.trip.updatedAt !== updatedAt) return;
+      qualityTrackKey = '';
       console.error(e);
       qualityBox.append(el('div', { class: 'card quality-card' },
         el('div', { class: 'small muted', 'aria-live': 'polite' }, t('analysis.qualityPreviewFail'))));
       return;
     }
-    if (sequence !== qualitySequence || appState.activeTripId !== tripId
+    if (sequence !== qualitySequence || previousRepairSequence !== repairSequence || appState.activeTripId !== tripId
       || appState.activeTripFull?.trip.updatedAt !== updatedAt || controller.signal.aborted) return;
-    if (q.score == null && !snapshot) return;
+    if (q.score == null && !snapshot && !previewResult?.categories?.length && !versions.length) return;
     const tone = q.rating === 'excellent' || q.rating === 'good'
       ? 'var(--accent)' : q.rating === 'fair' ? 'var(--warn)' : 'var(--danger)';
     const metric = (label, value) => el('div', { class: 'quality-metric' },
       el('div', { class: 'v' }, value), el('div', { class: 'k' }, label));
-    const preview = recording ? { removed: 0, issues: [], impactDistance: 0 } : previewResult;
     const children = [
       el('div', { class: 'quality-head' },
         el('h3', {}, icon('shield', 18), t('analysis.qualityTitle')),
@@ -184,56 +454,10 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     children.push(el('div', { class: 'small faint quality-note' },
       `${q.fixes} ${t('analysis.qualityFixes')} · ${t('analysis.qualityNote')}`));
 
-    if (preview.removed) {
-      const impact = fmtDistance(preview.impactDistance || 0, get('units'));
-      const issues = el('div', { class: 'gps-issues' });
-      for (const issue of preview.issues) {
-        const distance = fmtDistance(issue.distance, get('units'));
-        const first = issue.firstPoint;
-        const view = el('button', {
-          type: 'button', class: 'gps-issue', 'aria-label': t('analysis.qualityIssueView', { segment: issue.segmentIndex + 1 }),
-          onclick: () => {
-            ensureMiniMap();
-            if (embedded && appState.tripDetail.open && appState.tripDetail.section !== 'overview') navigate('analysis');
-            requestAnimationFrame(() => {
-              miniMap?.resize();
-              miniMap?.flyTo(first.lat, first.lon, 16);
-              miniMap?.showHover(first.lat, first.lon, t(`analysis.qualityReason.${issue.reason}`));
-              miniMapBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            });
-          }
-        },
-        el('span', { class: 'gps-issue-reason' }, t(`analysis.qualityReason.${issue.reason}`)),
-        el('span', { class: 'gps-issue-meta' },
-          `${t('analysis.qualitySegment', { n: issue.segmentIndex + 1 })} · ${t('analysis.qualityIssuePoints', { n: issue.count })} · ${distance.v}${distance.u}`));
-        issues.append(view);
-      }
-      const btn = el('button', { class: 'btn primary sm' }, icon('shield', 15), t('analysis.qualityClean'));
-      btn.onclick = async () => {
-        const ok = await confirmModal({
-          title: t('analysis.qualityCleanTitle'),
-          message: t('analysis.qualityCleanConfirm', { n: preview.removed }),
-          confirmText: t('analysis.qualityClean')
-        });
-        if (!ok) return;
-        btn.disabled = true;
-        try {
-          const result = await cleanGpsTrack(tripId, { activity, preview, expectedUpdatedAt: updatedAt });
-          await refreshActiveTrip(tripId);
-          if (result.removed) toast(t('analysis.qualityCleanDone', { n: result.removed }), 'ok', 4500);
-        } catch (e) {
-          console.error(e);
-          toast(t(e?.message === 'track-changed' ? 'analysis.qualityChanged' : 'analysis.qualityCleanFail'), 'warn');
-          btn.disabled = false;
-        }
-      };
-      children.push(
-        el('div', { class: 'gps-preview' },
-          el('div', { class: 'gps-preview-head' },
-            el('strong', {}, t('analysis.qualityPreviewTitle', { n: preview.removed })),
-            el('span', { class: 'tag' }, t('analysis.qualityImpact', { d: `${impact.v}${impact.u}` }))),
-          issues, btn,
-          el('div', { class: 'small faint' }, t('analysis.qualityCleanHint'))));
+    if (!recording && previewResult?.categories?.length) {
+      children.push(renderRepairPanel(full, previewResult, sequence, updatedAt));
+    } else if (!recording) {
+      children.push(el('div', { class: 'small faint gps-preview' }, t('analysis.repairEmpty')));
     }
 
     if (snapshot) {
@@ -244,7 +468,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
           message: t('analysis.qualityRestoreConfirm', { n: snapshot.points }),
           confirmText: t('analysis.qualityRestore'), danger: true
         });
-        if (!ok) return;
+        if (!ok || appState.activeTripId !== tripId) return;
         restore.disabled = true;
         try {
           const result = await restoreGpsTrack(tripId, { expectedUpdatedAt: updatedAt });
@@ -266,6 +490,8 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
         restore,
         recording ? el('div', { class: 'small faint' }, t('analysis.qualityRestoreRecording')) : null));
     }
+    const versionBox = renderRepairVersions(versions, full, updatedAt);
+    if (versionBox) children.push(versionBox);
     qualityBox.append(el('div', { class: 'card quality-card' }, children));
   }
 
@@ -700,14 +926,18 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     const sequence = ++splitSequence;
     const full = appState.activeTripFull;
     const trackKey = full ? `${full.trip.id}:${full.trip.updatedAt || 0}` : '';
+    const computeKey = `${trackKey}:${Number(splitSelect.value)}`;
     if (!full?.segments.some((segment) => segment.points?.length)) {
       splitResult = [];
       selectedSplitIndex = null;
       splitTrackKey = trackKey;
+      splitComputeKey = computeKey;
       splitCard.style.display = 'none';
       miniMap?.setSplitHighlight([]);
       return;
     }
+    if (computeKey === splitComputeKey) return;
+    splitComputeKey = computeKey;
     splitCard.style.display = '';
     if (trackKey !== splitTrackKey) {
       splitResult = [];
@@ -728,6 +958,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
       if (selectedSplitIndex != null) miniMap?.setSplitHighlight(splitResult[selectedSplitIndex].parts);
     } catch (e) {
       if (sequence !== splitSequence) return;
+      splitComputeKey = '';
       console.error(e);
       selectedSplitIndex = null;
       miniMap?.setSplitHighlight([]);
@@ -846,7 +1077,12 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     },
     destroy: () => {
       qualitySequence++;
+      qualityTrackKey = '';
+      repairSequence++;
+      qualityController?.abort();
+      repairController?.abort();
       splitSequence++;
+      splitComputeKey = '';
       miniMap?.destroy();
       miniMap = null;
       chart?.destroy();

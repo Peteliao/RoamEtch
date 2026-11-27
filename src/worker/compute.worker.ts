@@ -4,6 +4,8 @@ import { computeDistanceSplits } from '../core/distanceSplits';
 import { simplify } from '../core/geo';
 import { wgs84ToGcj02, gcj02ToWgs84 } from '../core/coords';
 import { previewTrackCleanup } from '../core/gpsQuality';
+import { buildTrackRepairPreview } from '../core/trackRepair';
+import { buildGPX } from '../core/gpx';
 
 self.onmessage = (e) => {
   const { id, type, payload } = e.data;
@@ -29,6 +31,12 @@ self.onmessage = (e) => {
       }
       case 'cleanup-preview':
         result = previewTrackCleanup(payload.segments, payload.activity, payload.opts);
+        break;
+      case 'repair-preview':
+        result = buildTrackRepairPreview(payload.segments, payload.activity, payload.opts);
+        break;
+      case 'gpx':
+        result = buildGPX(payload.full);
         break;
       default:
         throw new Error('unknown task ' + type);

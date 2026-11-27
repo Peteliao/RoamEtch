@@ -1,15 +1,17 @@
-import { createHash } from 'node:crypto';
+import { createHash, createPublicKey, verify } from 'node:crypto';
 import {
-  lstatSync, readFileSync, readdirSync, statSync
+  lstatSync, readFileSync, readdirSync, realpathSync, statSync
 } from 'node:fs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
-export const MATRIX_VERSION = 'p0-4-v1';
-export const REQUIRED_CELL_COUNT = 52;
+export const MATRIX_VERSION = 'p0-4-v2';
+export const REQUIRED_CELL_COUNT = 64;
+export const DEFAULT_MAX_AGE_DAYS = 30;
 export const LARGE_TRACK_POINTS = 20_000;
 export const LARGE_BACKUP_BYTES = 50 * 1024 * 1024;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const IOS_SCENARIOS = [
   'cold-start',
@@ -22,6 +24,9 @@ export const IOS_SCENARIOS = [
   'offline',
   'lock-screen',
   'background',
+  'incoming-call',
+  'network-switch',
+  'app-update',
   'quota',
   'memory-pressure',
   'system-termination'
@@ -39,6 +44,7 @@ const DEFAULT_EVIDENCE = join(ROOT, 'docs', 'qa', 'ios-evidence.json');
 const SHA256 = /^[a-f0-9]{64}$/;
 const FINGERPRINT = /^sha256:[a-f0-9]{64}$/;
 const IOS_VERSION = /^\d+\.\d+(?:\.\d+)?$/;
+const ISO_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
 const PHYSICAL_UDID = /^(?:[a-f0-9]{40}|[a-f0-9]{8}-[a-f0-9]{16})$/i;
 const SCENARIO_SET = new Set(IOS_SCENARIOS);
 const MEMORY_SOURCES = new Set(['xcode-instruments', 'metric-kit', 'device-log']);
@@ -97,7 +103,15 @@ function isCount(value) {
 }
 
 function isDateTime(value) {
-  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+  if (typeof value !== 'string') return false;
+  const match = ISO_DATE_TIME.exec(value);
+  if (!match || !Number.isFinite(Date.parse(value))) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth[month - 1];
 }
 
 function isHttpUrl(value) {
@@ -123,7 +137,94 @@ function safeEvidencePath(value) {
     && !/^[a-z]:/i.test(value)
     && !value.includes('\\')
     && !value.startsWith('/')
-    && !value.split('/').includes('..');
+    && !/[\u0000-\u001f\u007f]/.test(value)
+    && value.split('/').every((part) => part && part !== '.' && part !== '..');
+}
+
+function canonicalJson(value) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (isRecord(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  throw new Error('Evidence contains a value that cannot be canonically serialized');
+}
+
+/**
+ * Deterministic signed payload: recursively sorted object keys, no whitespace,
+ * JSON string/number encoding, and the attestation object itself excluded.
+ */
+export function canonicalizeIosEvidenceJson(evidence) {
+  if (!isRecord(evidence)) return canonicalJson(evidence);
+  if (!isRecord(evidence.provenance)) return canonicalJson(evidence);
+  const unsigned = { ...evidence, provenance: { ...evidence.provenance } };
+  delete unsigned.provenance.attestation;
+  return canonicalJson(unsigned);
+}
+
+function loadTrustedPublicKey(value) {
+  if (!isNonEmptyString(value)) throw new Error('a base64 SPKI Ed25519 public key is required');
+  const bytes = Buffer.from(value.trim(), 'base64');
+  if (!bytes.length) throw new Error('the trusted public key is empty');
+  const key = createPublicKey({ key: bytes, format: 'der', type: 'spki' });
+  if (key.asymmetricKeyType !== 'ed25519') throw new Error('the trusted public key must be Ed25519');
+  return key;
+}
+
+function publicKeyId(key) {
+  return `sha256:${sha256(key.export({ type: 'spki', format: 'der' }))}`;
+}
+
+function isEd25519Signature(value) {
+  if (!isNonEmptyString(value)) return false;
+  const bytes = Buffer.from(value, 'base64');
+  return bytes.length === 64 && bytes.toString('base64') === value;
+}
+
+function validateProvenance(evidence, trustedPublicKey, errors) {
+  const provenance = evidence.provenance;
+  if (!isRecord(provenance)) {
+    errors.push('provenance is required and must describe trusted physical-device collection');
+    return null;
+  }
+  if (provenance.method !== 'physical-device') {
+    errors.push('provenance.method must be physical-device; synthesized evidence is explicitly rejected');
+  }
+  if (!isNonEmptyString(provenance.collector) || !isNonEmptyString(provenance.collectorVersion)) {
+    errors.push('provenance must identify the collector and collectorVersion');
+  }
+  let sources = null;
+  if (!Array.isArray(provenance.sources) || !provenance.sources.length
+    || provenance.sources.some((source) => !MEMORY_SOURCES.has(source))
+    || new Set(provenance.sources).size !== provenance.sources.length) {
+    errors.push('provenance.sources must be a non-empty unique list of trusted device collection sources');
+  } else {
+    sources = new Set(provenance.sources);
+  }
+
+  const attestation = provenance.attestation;
+  if (!isRecord(attestation) || attestation.algorithm !== 'ed25519'
+    || !FINGERPRINT.test(attestation.keyId || '') || !isEd25519Signature(attestation.signature)) {
+    errors.push('provenance.attestation requires an Ed25519 keyId and signature');
+    return sources;
+  }
+  let key;
+  try {
+    key = loadTrustedPublicKey(trustedPublicKey);
+  } catch (error) {
+    errors.push(`A trusted iOS evidence public key is required via --trusted-public-key or IOS_EVIDENCE_TRUSTED_PUBLIC_KEY: ${error.message}`);
+    return sources;
+  }
+  if (attestation.keyId !== publicKeyId(key)) {
+    errors.push('provenance.attestation.keyId does not match the trusted public key');
+  }
+  let validSignature = false;
+  try {
+    validSignature = verify(null, Buffer.from(canonicalizeIosEvidenceJson(evidence), 'utf8'), key, Buffer.from(attestation.signature, 'base64'));
+  } catch { validSignature = false; }
+  if (!validSignature) errors.push('provenance.attestation signature is invalid for the trusted public key (forged or modified evidence)');
+  return sources;
 }
 
 function requiredKey(tier, osBand, mode, scenario) {
@@ -156,27 +257,63 @@ function validateEvidenceReference(ref, label, evidenceRoot, errors) {
     return;
   }
   if (!evidenceRoot) return;
-  const path = resolve(evidenceRoot, ref.path);
-  const root = resolve(evidenceRoot);
-  if (path !== root && !path.startsWith(root + sep)) {
-    errors.push(`${label} escapes --evidence-root`);
-    return;
-  }
   try {
-    if (!lstatSync(path).isFile()) throw new Error('not a regular file');
+    const path = realpathSync(resolve(evidenceRoot, ref.path));
+    const fromRoot = relative(evidenceRoot, path);
+    if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
+      errors.push(`${label} attachment escapes --evidence-root through a symlink: ${ref.path}`);
+      return;
+    }
+    if (!lstatSync(path).isFile()) {
+      errors.push(`${label} attachment is not a regular file: ${ref.path}`);
+      return;
+    }
     if (sha256(readFileSync(path)) !== ref.sha256) errors.push(`${label} SHA-256 does not match ${ref.path}`);
-  } catch {
-    errors.push(`${label} attachment is missing: ${ref.path}`);
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') errors.push(`${label} attachment is missing: ${ref.path}`);
+    else errors.push(`${label} attachment cannot be verified: ${ref.path} (${error.message})`);
   }
 }
 
 /** Semantic release gate; the JSON Schema documents the same wire contract. */
-export function verifyIosEvidence(evidence, build, { evidenceRoot = null } = {}) {
+export function verifyIosEvidence(evidence, build, {
+  evidenceRoot = null,
+  trustedPublicKey = null,
+  now = Date.now(),
+  maxAgeDays = DEFAULT_MAX_AGE_DAYS
+} = {}) {
   const errors = [];
   if (!isRecord(evidence)) return { ok: false, errors: ['Evidence must be a JSON object'], summary: { passedRuns: 0, requiredCells: REQUIRED_CELL_COUNT } };
   if (evidence.schemaVersion !== 1) errors.push('schemaVersion must be 1');
   if (evidence.matrixVersion !== MATRIX_VERSION) errors.push(`matrixVersion must be ${MATRIX_VERSION}`);
-  if (!isNonEmptyString(evidence.capturedAt) || !isDateTime(evidence.capturedAt)) errors.push('capturedAt must be an ISO date-time');
+
+  let attachmentRoot = null;
+  if (!isNonEmptyString(evidenceRoot)) errors.push('--evidence-root is required to verify every attachment');
+  else {
+    try {
+      attachmentRoot = realpathSync(resolve(evidenceRoot));
+      if (!statSync(attachmentRoot).isDirectory()) throw new Error('not a directory');
+    } catch {
+      errors.push(`--evidence-root is not an accessible directory: ${evidenceRoot}`);
+    }
+  }
+
+  const nowMs = now instanceof Date ? now.getTime() : now;
+  const validNow = typeof nowMs === 'number' && Number.isFinite(nowMs);
+  if (!validNow) errors.push('Verification time must be a valid Date or millisecond timestamp');
+  const maxAge = Number(maxAgeDays);
+  const validMaxAge = Number.isFinite(maxAge) && maxAge > 0;
+  if (!validMaxAge) errors.push('maxAgeDays must be a positive number of days');
+
+  if (!isNonEmptyString(evidence.capturedAt)) errors.push('capturedAt is required and must be an ISO date-time with timezone');
+  else if (!isDateTime(evidence.capturedAt)) errors.push('capturedAt must be an ISO date-time with timezone');
+  else if (validNow) {
+    const ageMs = nowMs - Date.parse(evidence.capturedAt);
+    if (ageMs < 0) errors.push('capturedAt must not be in the future');
+    else if (validMaxAge && ageMs > maxAge * DAY_MS) errors.push(`capturedAt is older than the ${maxAgeDays}-day TTL; recapture the real-device matrix`);
+  }
+
+  const provenanceSources = validateProvenance(evidence, trustedPublicKey, errors);
 
   if (!isRecord(build) || !FINGERPRINT.test(build.fingerprint || '')) errors.push('A computed sha256:<hex> build fingerprint is required');
   if (evidence.buildFingerprint !== build?.fingerprint) errors.push('Build fingerprint does not match dist (rebuild and rerun the real-device matrix)');
@@ -209,6 +346,11 @@ export function verifyIosEvidence(evidence, build, { evidenceRoot = null } = {})
     if (!isNonEmptyString(run.tester)) errors.push(`${label}.tester is required`);
     if (!isDateTime(run.startedAt) || !isDateTime(run.completedAt) || Date.parse(run.completedAt) < Date.parse(run.startedAt)) {
       errors.push(`${label} must have valid startedAt/completedAt timestamps`);
+    } else {
+      if (isDateTime(evidence.capturedAt) && Date.parse(run.completedAt) > Date.parse(evidence.capturedAt)) {
+        errors.push(`${label}.completedAt must not be after capturedAt`);
+      }
+      if (validNow && Date.parse(run.completedAt) > nowMs) errors.push(`${label}.completedAt must not be in the future`);
     }
 
     const device = run.device;
@@ -269,6 +411,18 @@ export function verifyIosEvidence(evidence, build, { evidenceRoot = null } = {})
       else if (run.scenario !== 'system-termination' && result.systemTerminations !== 0) errors.push(`${label} must not record a system termination`);
       if (run.scenario === 'quota' && result.actual?.quotaTriggered !== true) errors.push(`${label} must demonstrate a real QuotaExceededError`);
       if (run.scenario === 'memory-pressure' && result.actual?.recovered !== true) errors.push(`${label} must confirm recovery after memory pressure`);
+      if (run.scenario === 'incoming-call'
+        && (!isCount(result.actual?.incomingCalls) || result.actual.incomingCalls < 1 || result.actual.recordingResumed !== true)) {
+        errors.push(`${label} must record a real incoming call and confirmed recording recovery`);
+      }
+      if (run.scenario === 'network-switch'
+        && (!isCount(result.actual?.networkTransitions) || result.actual.networkTransitions < 2 || result.actual.locationFreshnessSeparated !== true)) {
+        errors.push(`${label} must record real network transitions and independent GPS freshness reporting`);
+      }
+      if (run.scenario === 'app-update'
+        && (result.actual?.updateInstalled !== true || result.actual.spillRecovered !== true)) {
+        errors.push(`${label} must record a real web-app update and recovered pending points`);
+      }
     }
 
     const memory = run.memory;
@@ -281,10 +435,14 @@ export function verifyIosEvidence(evidence, build, { evidenceRoot = null } = {})
       if (run.scenario !== 'system-termination' && memory.jetsamEvents !== 0) errors.push(`${label} must not record jetsam`);
     }
 
+    if (provenanceSources && MEMORY_SOURCES.has(memory?.source) && !provenanceSources.has(memory.source)) {
+      errors.push(`${label}.memory.source is not declared in trusted provenance.sources`);
+    }
+
     const refs = run.evidence;
     if (!Array.isArray(refs) || refs.length < 2) errors.push(`${label}.evidence requires at least one visual and one diagnostic artifact`);
     else {
-      refs.forEach((ref, refIndex) => validateEvidenceReference(ref, `${label}.evidence[${refIndex}]`, evidenceRoot, errors));
+      refs.forEach((ref, refIndex) => validateEvidenceReference(ref, `${label}.evidence[${refIndex}]`, attachmentRoot, errors));
       if (!refs.some((ref) => VISUAL_TYPES.has(ref?.type))) errors.push(`${label}.evidence requires a screenshot or video`);
       if (!refs.some((ref) => DIAGNOSTIC_TYPES.has(ref?.type))) errors.push(`${label}.evidence requires a log, trace, Instruments, or device-log artifact`);
     }
@@ -309,7 +467,14 @@ export function verifyIosEvidence(evidence, build, { evidenceRoot = null } = {})
   };
 }
 
-export async function verifyEvidenceFile(filePath, { distDir = DEFAULT_DIST, fingerprint = null, evidenceRoot = null } = {}) {
+export async function verifyEvidenceFile(filePath, {
+  distDir = DEFAULT_DIST,
+  fingerprint = null,
+  evidenceRoot = null,
+  trustedPublicKey = null,
+  now = Date.now(),
+  maxAgeDays = DEFAULT_MAX_AGE_DAYS
+} = {}) {
   let evidence;
   try {
     evidence = JSON.parse(readFileSync(resolve(filePath), 'utf8'));
@@ -322,7 +487,7 @@ export async function verifyEvidenceFile(filePath, { distDir = DEFAULT_DIST, fin
   } catch (error) {
     return { ok: false, errors: [`Cannot fingerprint dist: ${error.message}`], summary: { passedRuns: 0, requiredCells: REQUIRED_CELL_COUNT } };
   }
-  return verifyIosEvidence(evidence, build, { evidenceRoot });
+  return verifyIosEvidence(evidence, build, { evidenceRoot, trustedPublicKey, now, maxAgeDays });
 }
 
 function usage() {
@@ -332,20 +497,37 @@ function usage() {
     '  --evidence <path>       Evidence JSON (default: docs/qa/ios-evidence.json)',
     '  --dist <path>           Build tree to fingerprint (default: dist)',
     '  --fingerprint <sha256>  Verify an archived build when dist is unavailable',
-    '  --evidence-root <path>  Also verify attachment existence and SHA-256',
+    '  --evidence-root <path>  Required directory used to verify every attachment',
+    '  --trusted-public-key <b64>  Trusted Ed25519 SPKI key (or IOS_EVIDENCE_TRUSTED_PUBLIC_KEY)',
+    '  --max-age-days <days>   Maximum evidence age (default: 30; or IOS_EVIDENCE_MAX_AGE_DAYS)',
     '  --print-fingerprint     Print the current dist fingerprint and exit',
     '  --help                  Show this help'
   ].join('\n');
 }
 
 async function main() {
-  const options = { evidence: DEFAULT_EVIDENCE, distDir: DEFAULT_DIST, fingerprint: null, evidenceRoot: null, printFingerprint: false };
+  const options = {
+    evidence: DEFAULT_EVIDENCE,
+    distDir: DEFAULT_DIST,
+    fingerprint: null,
+    evidenceRoot: null,
+    trustedPublicKey: process.env.IOS_EVIDENCE_TRUSTED_PUBLIC_KEY || null,
+    maxAgeDays: process.env.IOS_EVIDENCE_MAX_AGE_DAYS || DEFAULT_MAX_AGE_DAYS,
+    printFingerprint: false
+  };
   const args = process.argv.slice(2);
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
     if (arg === '--help' || arg === '-h') { console.log(usage()); return; }
     if (arg === '--print-fingerprint') { options.printFingerprint = true; continue; }
-    const names = { '--evidence': 'evidence', '--dist': 'distDir', '--fingerprint': 'fingerprint', '--evidence-root': 'evidenceRoot' };
+    const names = {
+      '--evidence': 'evidence',
+      '--dist': 'distDir',
+      '--fingerprint': 'fingerprint',
+      '--evidence-root': 'evidenceRoot',
+      '--trusted-public-key': 'trustedPublicKey',
+      '--max-age-days': 'maxAgeDays'
+    };
     if (!names[arg] || !args[index + 1]) throw new Error(`Unknown or incomplete option: ${arg}\n${usage()}`);
     options[names[arg]] = args[++index];
   }

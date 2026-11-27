@@ -67,6 +67,26 @@ describe('compact share links', () => {
     expect(parsed.points).toHaveLength(262);
   });
 
+  it('bounds large-track preview work while preserving endpoints and segment shape', () => {
+    vi.stubGlobal('location', { href: 'https://example.com/RoamEtch/' });
+    const points = Array.from({ length: 20_000 }, (_, i) => ({
+      lat: 30 + Math.sin(i / 200) * 0.002,
+      lon: 120 + i * 0.00001,
+      t: i * 1000
+    }));
+    const { url } = buildShareLink({
+      trip: { name: 'Large preview', activity: 'hike' },
+      segments: [{ id: 'large', points }],
+      waypoints: []
+    }, { radius: 0, hideSensitive: true });
+
+    const parsed = parseShareFragment(url.slice(url.indexOf('#')));
+    expect(parsed?.points.length).toBeGreaterThan(1);
+    expect(parsed?.points.length).toBeLessThanOrEqual(262);
+    expect(parsed?.points[0]).toEqual({ lat: 30, lon: 120 });
+    expect(parsed?.points.at(-1)?.lon).toBeCloseTo(120.19999, 5);
+  });
+
   it('rejects malformed fragments instead of throwing', () => {
     expect(parseShareFragment('')).toBeNull();
     expect(parseShareFragment('#t=!')).toBeNull();

@@ -1,5 +1,5 @@
 // Pure trip statistics. Shared by the Web Worker and main-thread fallback.
-import { slopeAt, measureTrackStep, physicsFor, SPEED_TOLERANCE, usableTrackPoints } from './geo';
+import { measureTrackStep, physicsFor, SPEED_TOLERANCE, usableTrackPoints } from './geo';
 import { estimateCalories } from './calories';
 
 const MOVING_SPEED = 0.5;   // m/s
@@ -27,6 +27,7 @@ export function computeStats(segments, opts: any = {}) {
 
   segments.forEach((seg, si) => {
     const pts = usableTrackPoints(seg.points || []);
+    const rawStepDistances = includeSeries ? new Float64Array(pts.length) : null;
     let segDist = 0, segActiveMs = 0, segMinT = null, segMaxT = null;
     let segSmoothAlt = null, segAltRef = null, segAscent = 0, segDescent = 0;
     let prev = null;
@@ -42,6 +43,7 @@ export function computeStats(segments, opts: any = {}) {
       let stepD = 0, speed = null;
       const step = prev ? measureTrackStep(prev, p, activity) : null;
       if (step) {
+        if (rawStepDistances) rawStepDistances[i] = step.rawDist;
         stepD = step.dist;
         if (step.dt > 0 && step.dt <= MAX_DT) {
           activeMs += step.dt;
@@ -91,7 +93,23 @@ export function computeStats(segments, opts: any = {}) {
       activeMs: segActiveMs,
       pointCount: pts.length
     });
-    if (includeSeries) pts.forEach((p, i) => slopeSeries.push(slopeAt(pts, i)));
+    if (includeSeries && rawStepDistances) {
+      if (pts.length) slopeSeries.push(null);
+      for (let i = 1; i < pts.length; i++) {
+        const p = pts[i];
+        if (p.alt == null) {
+          slopeSeries.push(null);
+          continue;
+        }
+        let j = i - 1, dist = 0;
+        while (j > 0 && dist < 30) {
+          dist += rawStepDistances[j];
+          j--;
+        }
+        const q = pts[j];
+        slopeSeries.push(q.alt == null || dist < 5 ? null : ((p.alt - q.alt) / dist) * 100);
+      }
+    }
   });
 
   const duration = minT != null && maxT != null ? maxT - minT : 0;

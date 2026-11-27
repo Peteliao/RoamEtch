@@ -4,11 +4,13 @@ import { computeStatsAsync } from '../core/workerBridge';
 import { get, set } from '../core/settings';
 import { emit } from '../core/events';
 import { backfillTripAltitudes } from '../core/elevation';
+import { clearHistory } from '../core/history';
 
 export const appState = {
   view: 'record',
   activeTripId: null,
   activeTripFull: null,
+  tripSession: 0,
   editMode: false,
   showTripInRecord: false,
   tripDetail: { open: false, tripId: null, section: 'overview' },
@@ -24,42 +26,59 @@ export function isTripSectionActive(section) {
 let recalcTimer = null;
 let activeTripRequest = 0;
 let statsRequest = 0;
+let statsComputeKey = '';
+let altBackfillTimer = null;
+let altBackfillController = null;
 
 export async function setActiveTrip(id, { fit = false } = {}) {
   const request = ++activeTripRequest;
   statsRequest++;
+  cancelAltBackfill();
   if (id !== appState.activeTripId) {
+    appState.tripSession++;
+    clearHistory();
     appState.activeTripFull = null;
     appState.stats = null;
+    statsComputeKey = '';
     if (appState.tripDetail.tripId && appState.tripDetail.tripId !== id) {
       appState.tripDetail = { open: false, tripId: null, section: 'overview' };
     }
   }
   appState.activeTripId = id;
-  if (fit) appState.showTripInRecord = true;
   set('lastTripId', id);
   if (!id) {
     appState.activeTripFull = null;
     appState.stats = null;
+    statsComputeKey = '';
     emit('trip:active', null);
     return null;
   }
   const full = await loadTripFull(id);
   if (request !== activeTripRequest || appState.activeTripId !== id) return null;
+  if (fit) appState.showTripInRecord = true;
   appState.activeTripFull = full;
   emit('trip:active', full);
   await recalcNow();
   return full;
 }
 
-export async function refreshActiveTrip(id = appState.activeTripId, { recalc = true }: { recalc?: boolean } = {}) {
-  if (!id) return null;
+export async function refreshActiveTrip(id = appState.activeTripId, {
+  recalc = true,
+  session = appState.tripSession,
+  view = null
+}: { recalc?: boolean; session?: number; view?: string | null } = {}) {
+  if (!id || session !== appState.tripSession || (view && view !== appState.view)) return null;
   // Recording edits can refresh their own trip without changing the selected trip.
-  if (id !== appState.activeTripId) return loadTripFull(id);
+  if (id !== appState.activeTripId) {
+    const full = await loadTripFull(id);
+    if (!full || session !== appState.tripSession || (view && view !== appState.view)) return null;
+    return full;
+  }
   const request = ++activeTripRequest;
   statsRequest++;
   const full = await loadTripFull(id);
-  if (request !== activeTripRequest || appState.activeTripId !== id) return null;
+  if (request !== activeTripRequest || appState.activeTripId !== id
+    || session !== appState.tripSession || (view && view !== appState.view)) return null;
   if (appState.activeTripFull?.trip.activity !== full.trip.activity) appState.stats = null;
   appState.activeTripFull = full;
   emit('trip:active', full);
@@ -79,17 +98,27 @@ export function scheduleRecalc() {
 export async function recalcNow() {
   if (recalcTimer) clearTimeout(recalcTimer);
   recalcTimer = null;
-  const request = ++statsRequest;
   const full = appState.activeTripFull;
   if (!full) return null;
   const id = full.trip.id;
+  const options = {
+    ascentThreshold: get('ascentThreshold'),
+    activity: full.trip.activity,
+    weightKg: get('weightKg')
+  };
+  const reportedDistance = full.trip.reportedDistance != null ? Number(full.trip.reportedDistance) : null;
+  const computeKey = JSON.stringify([
+    id, full.trip.updatedAt || 0, reportedDistance, options.ascentThreshold,
+    options.activity, options.weightKg
+  ]);
+  if (computeKey === statsComputeKey && appState.stats) return appState.stats;
+  const request = ++statsRequest;
   emit('stats:busy');
   const stats = await computeStatsAsync(
     full.segments.map((s) => ({ id: s.id, points: s.points })),
-    { ascentThreshold: get('ascentThreshold'), activity: full.trip.activity, weightKg: get('weightKg') }
+    options
   );
   if (request !== statsRequest || appState.activeTripId !== id || appState.activeTripFull?.trip.id !== id) return null;
-  const reportedDistance = full.trip.reportedDistance != null ? Number(full.trip.reportedDistance) : null;
   const resolvedStats = reportedDistance != null && isFinite(reportedDistance) && reportedDistance >= 0
     ? { ...stats, distance: reportedDistance }
     : stats;
@@ -98,19 +127,43 @@ export async function recalcNow() {
   });
   if (!cached || request !== statsRequest || appState.activeTripId !== id || appState.activeTripFull?.trip.id !== id) return null;
   appState.stats = resolvedStats;
+  statsComputeKey = computeKey;
   emit('trip:stats', resolvedStats);
   return resolvedStats;
 }
 
+export function cancelAltBackfill() {
+  if (altBackfillTimer) clearTimeout(altBackfillTimer);
+  altBackfillTimer = null;
+  altBackfillController?.abort();
+  altBackfillController = null;
+}
+
 /** After edits that null-out altitudes, refill from service when online. */
-export function scheduleAltBackfill() {
-  const id = appState.activeTripId;
-  if (!id) return;
-  setTimeout(async () => {
-    const filled = await backfillTripAltitudes(id);
-    if (filled) {
-      await refreshActiveTrip();
-      emit('toast', { type: 'ok', msg: `${filled} pts altitude filled` });
+export function scheduleAltBackfill(tripId = appState.activeTripId) {
+  cancelAltBackfill();
+  if (!tripId) return;
+  const session = appState.tripSession;
+  const view = appState.view;
+  const controller = new AbortController();
+  altBackfillController = controller;
+  altBackfillTimer = setTimeout(async () => {
+    altBackfillTimer = null;
+    if (controller.signal.aborted || session !== appState.tripSession
+      || tripId !== appState.activeTripId || view !== appState.view) return;
+    try {
+      const filled = await backfillTripAltitudes(tripId, { signal: controller.signal });
+      if (!filled || controller.signal.aborted || session !== appState.tripSession
+        || tripId !== appState.activeTripId || view !== appState.view) return;
+      await refreshActiveTrip(tripId, { session, view });
+      if (!controller.signal.aborted && session === appState.tripSession
+        && tripId === appState.activeTripId && view === appState.view) {
+        emit('toast', { type: 'ok', msg: `${filled} pts altitude filled` });
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) console.warn('altitude backfill failed', error);
+    } finally {
+      if (altBackfillController === controller) altBackfillController = null;
     }
   }, 800);
 }

@@ -116,7 +116,7 @@ export function createMeetView(navigate) {
   }
 
   function initialCenter() {
-    if (snap.active && snap.self?.hasFix) return [snap.self.lon, snap.self.lat] as any;
+    if (snap.active && snap.self?.positionStatus === 'fresh') return [snap.self.lon, snap.self.lat] as any;
     if (regionState.effective === 'cn') return [116.4, 39.9] as any;
     return [10, 30] as any;
   }
@@ -129,7 +129,7 @@ export function createMeetView(navigate) {
       preserveDrawingBuffer: false,
       fallbackText: t('map.fallback'),
       onMeetPeerClick: (id) => flyPeer(id)
-    }).init(center, snap.active && snap.self?.hasFix ? 14 : (regionState.effective === 'cn' ? 9 : 3));
+    }).init(center, snap.active && snap.self?.positionStatus === 'fresh' ? 14 : (regionState.effective === 'cn' ? 9 : 3));
     map.observeViewportInset(panel);
     map.map?.once('load', maybeAutoFit);
     return map;
@@ -1063,32 +1063,81 @@ export function createMeetView(navigate) {
     return el('span', { class: 'meet-badge' + (cls ? ` ${cls}` : '') }, text);
   }
 
+  function positionLabel(p) {
+    const keys = {
+      locating: 'positionLocating', fresh: 'positionFresh', weak: 'positionWeak',
+      stale: 'positionStale', paused: 'positionPaused'
+    };
+    return t(`meet.${keys[p?.positionStatus] || keys.locating}`);
+  }
+
+  function networkLabel(p) {
+    if (p?.networkStatus === 'left') return t('meet.networkLeft');
+    if (p?.networkStatus === 'offline') {
+      return p.contactAge != null
+        ? t('meet.networkOfflineAge', { s: Math.ceil(p.contactAge / 1000) })
+        : t('meet.networkOffline');
+    }
+    return t('meet.networkOnline');
+  }
+
+  function fixUpdateText(p) {
+    if (p?.fixAge == null) return '';
+    const seconds = Math.max(0, Math.floor(p.fixAge / 1000));
+    const time = seconds < 5
+      ? t('meet.justNow')
+      : seconds < 60
+        ? t('meet.secondsAgo', { s: seconds })
+        : t('meet.minutesAgo', { m: Math.floor(seconds / 60) });
+    return t('meet.positionUpdated', { time });
+  }
+
+  function statusBadges(p) {
+    const badges = [];
+    if (p?.networkStatus === 'left') badges.push(badge(t('meet.networkLeftShort'), 'left'));
+    else if (p?.networkStatus === 'offline') badges.push(badge(t('meet.networkOfflineShort'), 'offline'));
+    if (p?.positionStatus === 'weak') badges.push(badge(t('meet.positionWeakShort'), 'weak'));
+    else if (p?.positionStatus === 'stale') badges.push(badge(t('meet.positionStaleShort'), 'stale'));
+    else if (p?.positionStatus === 'paused') badges.push(badge(t('meet.positionPausedShort'), 'paused'));
+    if (p?.fixApprox) badges.push(el('span', { class: 'meet-badge approx', title: t('meet.fixApprox') }, '~'));
+    return badges;
+  }
+
   function subForPeer(p) {
-    if (p.stale) return t('meet.stale', { s: Math.round(p.age / 1000) });
-    if (!p.sharing) return t('meet.sharingPaused');
-    const bits = [];
+    const bits = [networkLabel(p), positionLabel(p)];
+    const updated = fixUpdateText(p);
+    if (updated) bits.push(updated);
+    if (p.fixApprox) bits.push(t('meet.fixApprox'));
     if (p.distance != null) bits.push(fmtDist(p.distance));
     const b = bearingText(p);
     if (b) bits.push(b);
-    return bits.join(' · ') || t('meet.waitingFix');
+    return bits.join(' · ');
   }
 
   function selfRow(s) {
-    let sub = t('meet.waitingFix');
-    if (s.geoError) sub = s.geoError === 'denied' ? t('meet.statusGpsDenied') : t('meet.gpsUnavailableHint');
-    else if (s.self?.hasFix && s.sharing) sub = t('meet.sharing');
-    else if (s.self?.hasFix) sub = t('meet.sharingPaused');
+    const self = s.self || {};
+    const sub = [];
+    if (s.geoError) sub.push(s.geoError === 'denied' ? t('meet.statusGpsDenied') : t('meet.gpsUnavailableHint'));
+    else sub.push(positionLabel(self));
+    const updated = fixUpdateText(self);
+    if (updated) sub.push(updated);
     return el('div', { class: 'meet-peer-row self' },
-      el('span', { class: 'meet-peer-dot', style: { background: s.self?.color || 'var(--accent)' } }),
+      el('span', { class: 'meet-peer-dot', style: { background: self.color || 'var(--accent)' } }),
       el('div', { class: 'meet-peer-main' },
-        el('div', { class: 'meet-peer-name' }, el('span', { class: 'mp-name' }, s.self?.name || t('meet.me')), badge(t('meet.me')), s.isHost ? badge(t('meet.hostBadge'), 'host') : null),
-        el('div', { class: 'meet-peer-sub' }, sub))
+        el('div', { class: 'meet-peer-name' },
+          el('span', { class: 'mp-name' }, self.name || t('meet.me')),
+          badge(t('meet.me')), s.isHost ? badge(t('meet.hostBadge'), 'host') : null,
+          ...statusBadges(self)),
+        el('div', { class: 'meet-peer-sub' }, sub.join(' · ')))
     );
   }
 
   function peerRow(s, p) {
-    const main = el('div', { class: 'meet-peer-main', onclick: () => flyPeer(p.id) },
-      el('div', { class: 'meet-peer-name' }, el('span', { class: 'mp-name' }, p.name), p.isHost ? badge(t('meet.hostBadge'), 'host') : null, p.stale ? badge(t('meet.staleBadge'), 'bad') : null),
+    const main = el('div', { class: 'meet-peer-main', onclick: () => { if (p.networkStatus !== 'left') flyPeer(p.id); } },
+      el('div', { class: 'meet-peer-name' },
+        el('span', { class: 'mp-name' }, p.name),
+        p.isHost ? badge(t('meet.hostBadge'), 'host') : null,
+        ...statusBadges(p)),
       el('div', { class: 'meet-peer-sub' }, subForPeer(p))
     );
     const actions = el('div', { class: 'meet-peer-actions' });
@@ -1099,7 +1148,7 @@ export function createMeetView(navigate) {
       type: 'button',
       title: activeRoute ? t('meet.routeClear') : t('meet.route'),
       'aria-label': activeRoute ? t('meet.routeClear') : t('meet.route'),
-      disabled: loadingRoute || p.lat == null || !s.self?.hasFix
+      disabled: loadingRoute || p.positionStatus !== 'fresh' || p.networkStatus === 'left' || s.self?.positionStatus !== 'fresh'
     }, icon('routeFwd', 17));
     routeBtn.onclick = async (e) => {
       e.stopPropagation();
@@ -1110,7 +1159,7 @@ export function createMeetView(navigate) {
       else toast(t('meet.routeFail'), 'err');
     };
     actions.append(routeBtn);
-    if (s.isHost) {
+    if (s.isHost && p.networkStatus !== 'left') {
       const kickBtn = el('button', {
         class: 'iconbtn meet-row-btn danger', type: 'button',
         title: t('meet.kick'), 'aria-label': t('meet.kick'),
@@ -1118,8 +1167,10 @@ export function createMeetView(navigate) {
       }, icon('x', 16));
       actions.append(kickBtn);
     }
-    return el('div', { class: 'meet-peer-row' + (p.stale ? ' stale' : '') },
-      el('span', { class: 'meet-peer-dot', style: { background: p.color } }), main, actions);
+    return el('div', {
+      class: 'meet-peer-row' + (p.stale ? ' stale' : '')
+        + ` network-${p.networkStatus} position-${p.positionStatus}`
+    }, el('span', { class: 'meet-peer-dot', style: { background: p.color } }), main, actions);
   }
 
   function warningBanner(key, text, action = null) {
@@ -1140,8 +1191,11 @@ export function createMeetView(navigate) {
     panel.classList.add('show');
     panel.classList.toggle('collapsed', panelCollapsed);
     panelHead.setAttribute('aria-expanded', panelCollapsed ? 'false' : 'true');
-    peerCountEl.textContent = t('meet.peerCount', { n: s.peers.length });
-    const nearest = s.peers.find((p) => !p.stale && p.distance != null);
+    const activeCount = s.peers.filter((p) => p.networkStatus !== 'left').length;
+    peerCountEl.textContent = t('meet.peerCount', { n: activeCount });
+    const nearest = s.self?.positionStatus === 'fresh'
+      ? s.peers.find((p) => p.networkStatus !== 'left' && p.positionStatus === 'fresh' && p.distance != null)
+      : null;
     nearestEl.textContent = nearest
       ? t('meet.nearest', { name: nearest.name, dist: fmtDist(nearest.distance) })
       : t('meet.noPeersHint');
@@ -1165,6 +1219,12 @@ export function createMeetView(navigate) {
     if (s.geoError) {
       panelBody.append(warningBanner('pin', s.geoError === 'denied' ? t('meet.gpsDeniedHint') : t('meet.gpsUnavailableHint'),
         el('button', { class: 'btn sm ghost', onclick: () => meet.retryGeo() }, t('meet.retryGps'))));
+    } else if (s.self?.positionStatus === 'weak') {
+      panelBody.append(warningBanner('warn', s.self.weakGpsReason === 'accuracy'
+        ? t('meet.weakGpsAccuracy', { acc: Math.round(s.self.acc || 0) })
+        : t('meet.weakGpsTrend')));
+    } else if (s.self?.positionStatus === 'stale') {
+      panelBody.append(warningBanner('warn', t('meet.selfPositionStale')));
     }
     if (s.route?.loading) {
       const p = s.peers.find((x) => x.id === s.route.peerId);
@@ -1218,7 +1278,7 @@ export function createMeetView(navigate) {
     tools.classList.add('show');
     shareBtn.disabled = false;
     codeText.textContent = s.roomLabel ? `#${s.roomLabel}` : '';
-    const n = s.peers.length;
+    const n = s.peers.filter((p) => p.networkStatus !== 'left').length;
     let cls = '';
     let text = t('meet.statusConnecting');
     if (s.relayState === 'connected') {
@@ -1255,11 +1315,11 @@ export function createMeetView(navigate) {
       ensureMap();
     }
     map.setMeetData({ self: s.self, peers: s.peers, route: s.route });
-    if (s.self?.hasFix) maybeAutoFit();
+    if (s.self?.positionStatus === 'fresh') maybeAutoFit();
   }
 
   function maybeAutoFit() {
-    if (!snap.active || !snap.self?.hasFix || autoFitDone || !map) return;
+    if (!snap.active || !snap.self || snap.self.positionStatus !== 'fresh' || autoFitDone || !map) return;
     if (!map.map?.isStyleLoaded()) {
       map.map?.once('load', maybeAutoFit);
       return;
@@ -1290,7 +1350,7 @@ export function createMeetView(navigate) {
 
   function toggleFollow() {
     if (!snap.active) return;
-    if (!snap.self?.hasFix) {
+    if (!snap.self || snap.self.positionStatus !== 'fresh') {
       meet.retryGeo();
       toast(t('meet.gpsUnavailableHint'), 'warn');
       return;
@@ -1302,7 +1362,8 @@ export function createMeetView(navigate) {
   function flyPeer(id) {
     const s = getMeetSnapshot();
     const p = s.peers.find((x) => x.id === id);
-    if (!p || p.lat == null || p.lon == null) return;
+    if (!p || p.networkStatus === 'left' || p.lat == null || p.lon == null) return;
+    if (p.positionStatus !== 'fresh') toast(t('meet.lastKnownPosition'), 'warn', 2200);
     map.flyTo(p.lat, p.lon, Math.max(map.map?.getZoom?.() || 14, 14));
   }
 

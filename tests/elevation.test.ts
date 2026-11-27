@@ -83,6 +83,38 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('altitude backfill concurrency', () => {
+  it('does not write altitude caches or report progress when aborted before the cache write', async () => {
+    const controller = new AbortController();
+    const onProgress = vi.fn();
+    let fetchSignal: AbortSignal | undefined;
+    const fetch = vi.fn((_url: string, init: RequestInit) => {
+      fetchSignal = init.signal as AbortSignal;
+      return Promise.resolve({
+        ok: true,
+        json: async () => {
+          controller.abort();
+          return { elevation: [123] };
+        }
+      });
+    });
+    vi.stubGlobal('fetch', fetch);
+    const chunk = { id: 'chunk-1', tripId: 'trip-1', segmentId: 'seg-1', seq: 0, points: [original] };
+    mockChunkScan([chunk]);
+    mocks.db.trackChunks.get.mockResolvedValue(chunk);
+
+    await expect(backfillTripAltitudes('trip-1', {
+      signal: controller.signal,
+      onProgress
+    })).rejects.toMatchObject({ name: 'AbortError' });
+
+    expect(fetchSignal?.aborted).toBe(true);
+    expect(mocks.elevCachePut).not.toHaveBeenCalled();
+    expect(mocks.db.trackChunks.put).not.toHaveBeenCalled();
+    expect(mocks.updateTrip).not.toHaveBeenCalled();
+    expect(onProgress).not.toHaveBeenCalled();
+    expect(mocks.emit).not.toHaveBeenCalledWith('elev:backfilled', expect.anything());
+  });
+
   it('does not resurrect a chunk replaced while the request was in flight', async () => {
     const response = deferred<any>();
     const fetch = vi.fn(() => response.promise);

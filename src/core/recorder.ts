@@ -10,7 +10,14 @@ import { patchFlushedAltitude, resolveAltitude } from './elevation';
 import { acquireRecorderLock, releaseRecorderLock, broadcast, isHolding } from './locks';
 import { requestWakeLock, releaseWakeLock } from './wakelock';
 import { armKeepAlive, disarmKeepAlive } from './keepalive';
-import { classifyActivity } from './activity';
+import {
+  ACTIVITY_CONFIDENCE_THRESHOLD, classifyActivityDetailed,
+  type ActivityClassification, type ActivitySample
+} from './activity';
+import {
+  assessRecordingQuality, type AccuracySample, type BatteryReading,
+  type RecordingQuality, type StorageReading
+} from './gpsQuality';
 import { migrateLegacyKey } from './storageKeys';
 import { computeStatsSummaryAsync } from './workerBridge';
 
@@ -35,12 +42,15 @@ export const rec = {
   simulated: false,
   permissionDenied: false,
   geoError: null,              // denied | unavailable | timeout | silent | null
-  activityGuess: null,         // live classification while trip.activity === 'auto'
+  activityGuess: null,         // applied live classification while trip.activity === 'auto'
+  activityClassification: null as ActivityClassification | null,
   tripActivity: 'auto',
   filteredCount: 0,
   live: null,
+  quality: null as RecordingQuality | null,
   lastPoint: null,
   lastFixT: 0,
+  lastValidFixT: 0,            // accepted, in-limit fix (stationary fixes included)
   lastFixWall: 0,
   firstFixT: 0,
   startedAt: 0,
@@ -62,8 +72,28 @@ let altSmooth = null;
 let altRef = null;
 let pausedAt = 0;
 let hiddenAt = 0;
-let speedSamples = [];
-let watchEpoch = 0;
+let activitySamples: ActivitySample[] = [];
+let watchEpoch = 0;             // watch callback generation
+let qualityEpoch = 0;           // device-status callback generation
+let qualityTimer = null;
+let batteryMonitor: any = null;
+let batteryOnLevel = null;
+let batteryOnCharging = null;
+let deviceCheckInFlight = false;
+let qualityObservedFixes = 0;
+let qualityValidFixes = 0;
+let qualityInvalidFixes = 0;
+let qualityFirstFixT = 0;
+let qualityLastFixT = 0;
+let qualityFirstPointT = 0;
+let qualityLastPointT = 0;
+let qualitySegmentStartedAt = 0;
+let qualityActiveElapsedMs = 0;
+let qualityActiveStartedAt = 0;
+let qualityPausedSpans: { start: number; end: number | null }[] = [];
+let accuracySamples: AccuracySample[] = [];
+let storageReading: StorageReading = { supported: false, usage: null, quota: null, usageRatio: null, checkedAt: null };
+let batteryReading: BatteryReading = { supported: false, level: null, charging: null, checkedAt: null };
 let anchorT = 0;               // last valid fix time, including stationary ones
 let motionHistory = [];
 const jumpGate = createJumpGate();
@@ -83,6 +113,142 @@ function freshLive() {
   };
 }
 
+function resetActivityAndQuality() {
+  activitySamples = [];
+  rec.activityGuess = null;
+  rec.activityClassification = null;
+  rec.lastValidFixT = 0;
+  qualityObservedFixes = 0;
+  qualityValidFixes = 0;
+  qualityInvalidFixes = 0;
+  qualityFirstFixT = 0;
+  qualityLastFixT = 0;
+  qualityFirstPointT = 0;
+  qualityLastPointT = 0;
+  accuracySamples = [];
+  qualitySegmentStartedAt = Date.now();
+  qualityActiveElapsedMs = 0;
+  qualityActiveStartedAt = 0;
+  qualityPausedSpans = [];
+  const hasStorage = typeof navigator !== 'undefined' && typeof navigator.storage?.estimate === 'function';
+  const hasBattery = typeof navigator !== 'undefined' && typeof (navigator as any).getBattery === 'function';
+  storageReading = { supported: hasStorage, usage: null, quota: null, usageRatio: null, checkedAt: null };
+  batteryReading = { supported: hasBattery, level: null, charging: null, checkedAt: null };
+  rec.quality = null;
+}
+
+function activeDurationMs(now = Date.now()) {
+  if (!qualityActiveStartedAt && !qualityActiveElapsedMs) return null;
+  return qualityActiveElapsedMs + (qualityActiveStartedAt ? Math.max(0, now - qualityActiveStartedAt) : 0);
+}
+
+function refreshQuality(notify = true) {
+  if (!rec.live || !rec.tripId || (rec.status !== 'recording' && rec.status !== 'paused')) return;
+  const now = Date.now();
+  rec.quality = assessRecordingQuality({
+    now,
+    durationMs: activeDurationMs(now),
+    segmentStartedAt: qualitySegmentStartedAt || rec.startedAt || now,
+    pausedSpans: qualityPausedSpans,
+    firstValidFixT: qualityFirstFixT || null,
+    lastValidFixT: qualityLastFixT || null,
+    firstPointT: qualityFirstPointT || null,
+    lastPointT: qualityLastPointT || null,
+    observedFixes: qualityObservedFixes,
+    validFixes: qualityValidFixes,
+    invalidFixes: qualityInvalidFixes,
+    accuracySamples,
+    storage: storageReading,
+    battery: batteryReading,
+    saveState: rec.saveState
+  });
+  if (notify) emit('recorder:quality', { quality: rec.quality, tripId: rec.tripId, epoch: qualityEpoch });
+}
+
+function qualityMonitorCurrent(epoch, tripId) {
+  return epoch === qualityEpoch && rec.tripId === tripId
+    && (rec.status === 'recording' || rec.status === 'paused');
+}
+
+function readBattery(epoch: number, tripId: string, battery: any) {
+  if (!qualityMonitorCurrent(epoch, tripId) || !battery) return;
+  const rawLevel = battery.level;
+  const level = typeof rawLevel === 'number' ? rawLevel : null;
+  batteryReading = {
+    supported: true,
+    level: level != null && Number.isFinite(level) && level >= 0 && level <= 1 ? level : null,
+    charging: typeof battery.charging === 'boolean' ? battery.charging : null,
+    checkedAt: Date.now()
+  };
+  refreshQuality();
+}
+
+async function checkStorage(epoch: number, tripId: string) {
+  if (!qualityMonitorCurrent(epoch, tripId) || deviceCheckInFlight) return;
+  if (typeof navigator === 'undefined' || typeof navigator.storage?.estimate !== 'function') {
+    storageReading = { ...storageReading, supported: false };
+    refreshQuality();
+    return;
+  }
+  deviceCheckInFlight = true;
+  try {
+    const estimate = await navigator.storage.estimate();
+    if (!qualityMonitorCurrent(epoch, tripId)) return;
+    storageReading = {
+      supported: true,
+      usage: Number.isFinite(estimate?.usage) && estimate.usage >= 0 ? estimate.usage : null,
+      quota: Number.isFinite(estimate?.quota) && estimate.quota > 0 ? estimate.quota : null,
+      usageRatio: null,
+      checkedAt: Date.now()
+    };
+    refreshQuality();
+  } catch {
+    // Keep the last successful estimate (if any); an unavailable quota is not zero.
+  } finally {
+    if (epoch === qualityEpoch) deviceCheckInFlight = false;
+  }
+}
+
+function startQualityMonitoring() {
+  stopQualityMonitoring();
+  if (!qualityActiveStartedAt) qualityActiveStartedAt = Date.now();
+  const epoch = qualityEpoch;
+  const tripId = rec.tripId;
+  if (!tripId) return;
+  qualityTimer = setInterval(() => {
+    if (!qualityMonitorCurrent(epoch, tripId)) return;
+    refreshQuality(false);
+    void checkStorage(epoch, tripId);
+  }, 15_000);
+  const getBattery = typeof navigator !== 'undefined' ? (navigator as any).getBattery : null;
+  if (typeof getBattery === 'function') {
+    batteryReading = { supported: true, level: null, charging: null, checkedAt: null };
+    Promise.resolve().then(() => getBattery.call(navigator)).then((battery) => {
+      if (!qualityMonitorCurrent(epoch, tripId)) return;
+      batteryMonitor = battery;
+      batteryOnLevel = () => readBattery(epoch, tripId, battery);
+      batteryOnCharging = () => readBattery(epoch, tripId, battery);
+      battery?.addEventListener?.('levelchange', batteryOnLevel);
+      battery?.addEventListener?.('chargingchange', batteryOnCharging);
+      readBattery(epoch, tripId, battery);
+    }).catch(() => { /* Battery Status is optional and absent on many browsers. */ });
+  }
+  void checkStorage(epoch, tripId);
+  refreshQuality();
+}
+
+function stopQualityMonitoring() {
+  qualityEpoch++;
+  if (qualityTimer) clearInterval(qualityTimer);
+  qualityTimer = null;
+  if (batteryMonitor && batteryOnLevel) batteryMonitor.removeEventListener?.('levelchange', batteryOnLevel);
+  if (batteryMonitor && batteryOnCharging) batteryMonitor.removeEventListener?.('chargingchange', batteryOnCharging);
+  batteryMonitor = null;
+  batteryOnLevel = null;
+  batteryOnCharging = null;
+  deviceCheckInFlight = false;
+}
+
 function pendingPointCount() {
   return buffer.length + (inflight?.length || 0);
 }
@@ -100,6 +266,7 @@ function enterSaveDegraded() {
 function emitPersistence() {
   rec.saveState.pending = pendingPointCount();
   emit('recorder:persistence', { ...rec.saveState });
+  refreshQuality();
 }
 
 function clearTimer(timer) {
@@ -164,7 +331,7 @@ export async function startRecording({ tripId = null, name = '', activity = null
     rec.geoError = null;
     rec.lastFixWall = Date.now();
     rec.activityGuess = null;
-    speedSamples = [];
+    rec.activityClassification = null;
     let trip;
     if (tripId) {
       trip = await store.getTrip(tripId);
@@ -183,6 +350,7 @@ export async function startRecording({ tripId = null, name = '', activity = null
     rec.live = freshLive();
     rec.lastPoint = null;
     rec.firstFixT = 0; rec.lastFixT = 0;
+    resetActivityAndQuality();
     altSmooth = null; altRef = null;
     buffer = [];
     inflight = null;
@@ -200,6 +368,7 @@ export async function startRecording({ tripId = null, name = '', activity = null
     armKeepAlive();
     startTick();
     rec.status = 'recording';
+    startQualityMonitoring();
     broadcast({ type: 'rec-state', state: 'recording', tripId: trip.id });
     emit('recorder:started', { tripId: trip.id, simulated });
     started = true;
@@ -212,6 +381,7 @@ export async function startRecording({ tripId = null, name = '', activity = null
     if (!started) {
       stopWatch();
       stopTick();
+      stopQualityMonitoring();
       releaseWakeLock();
       disarmKeepAlive();
       buffer = [];
@@ -222,6 +392,9 @@ export async function startRecording({ tripId = null, name = '', activity = null
       rec.segmentId = null;
       rec.live = null;
       rec.lastPoint = null;
+      rec.lastValidFixT = 0;
+      rec.activityClassification = null;
+      rec.quality = null;
       rec.tripActivity = 'auto';
       rec.simulated = false;
       rec.saveState = { pending: 0, lastSavedAt: 0, error: null, degraded: false };
@@ -342,7 +515,12 @@ function armResumeBreak() {
 export function setRecordingActivity(activity) {
   if (rec.status === 'recording' || rec.status === 'paused') {
     rec.tripActivity = activity;
+    activitySamples = [];
+    rec.activityClassification = null;
+    // A manual choice is authoritative. Switching back to auto starts fresh.
+    rec.activityGuess = null;
     resetMotionFilter();
+    emit('activity:classification', { classification: null, tripId: rec.tripId });
   }
 }
 
@@ -379,21 +557,41 @@ function rememberMotion(point) {
   if (motionHistory.length > 400) motionHistory.splice(0, motionHistory.length - 400);
 }
 
-function feedAutoActivity(speed, dt, tripActivity) {
-  if (tripActivity !== 'auto' || speed == null || speed <= MOVING_SPEED) return;
-  if (dt !== 0 && !(dt > 0 && dt <= 60_000)) return;
-  speedSamples.push(speed);
-  if (speedSamples.length > 400) speedSamples.shift();
-  if (speedSamples.length >= 6 && (!rec.activityGuess || speedSamples.length % 5 === 0)) {
-    const guess = classifyActivity(speedSamples);
-    if (guess && guess !== rec.activityGuess) {
-      rec.activityGuess = guess;
-      emit('activity:guess', { activity: guess });
-    }
+function noteValidFix(now: number, acc: number | null) {
+  qualityValidFixes++;
+  if (!qualityFirstFixT) qualityFirstFixT = now;
+  qualityLastFixT = now;
+  rec.lastValidFixT = now;
+  if (acc != null && isFinite(acc) && acc > 0) {
+    accuracySamples.push({ t: now, acc });
+    accuracySamples = accuracySamples
+      .filter((sample) => now - sample.t <= 120_000 && sample.t <= now)
+      .slice(-240);
+  }
+}
+
+function feedAutoActivity(sample: ActivitySample) {
+  if (rec.tripActivity !== 'auto') return;
+  activitySamples.push(sample);
+  if (activitySamples.length > 400) activitySamples.shift();
+  if (activitySamples.length < 6 || activitySamples.length % 5 !== 0) return;
+  const classification = classifyActivityDetailed(activitySamples);
+  rec.activityClassification = classification;
+  emit('activity:classification', { classification, tripId: rec.tripId });
+  if (classification.activity && classification.confidence >= ACTIVITY_CONFIDENCE_THRESHOLD
+    && classification.activity !== rec.activityGuess) {
+    rec.activityGuess = classification.activity;
+    emit('activity:guess', {
+      activity: rec.activityGuess,
+      confidence: classification.confidence,
+      classification,
+      tripId: rec.tripId
+    });
   }
 }
 
 function acceptPoint(fix, now, acc, fixSpeed, activity, dist = 0, dt = 0, implied = null) {
+  const previousPoint = rec.lastPoint;
   if (pendingPointCount() >= MAX_PENDING_POINTS) {
     enterSaveDegraded();
     return false;
@@ -452,7 +650,14 @@ function acceptPoint(fix, now, acc, fixSpeed, activity, dist = 0, dt = 0, implie
   breakOnNextFix = false;
   rememberMotion(point);
   buffer.push(point);
-  feedAutoActivity(speed, dt, rec.tripActivity);
+  if (!qualityFirstPointT) qualityFirstPointT = now;
+  qualityLastPointT = now;
+  noteValidFix(now, acc);
+  feedAutoActivity({
+    t: now, speed: point.speed, distance: dist, dt,
+    elevationChange: alt != null && previousPoint?.alt != null && isFinite(previousPoint.alt)
+      ? alt - previousPoint.alt : null
+  });
   emitPersistence();
   if (altPromise) {
     altPromise.then((res) => {
@@ -474,14 +679,29 @@ function acceptPoint(fix, now, acc, fixSpeed, activity, dist = 0, dt = 0, implie
 
 async function processFix(fix) {
   if (rec.status !== 'recording' || suspendFixIngest) return;
+  qualityObservedFixes++;
   const arrival = Date.now();
   const rawT = Number(fix?.t);
   const now = Number.isFinite(rawT) && rawT > 0 ? rawT : arrival;
-  const lat = Number(fix?.lat), lon = Number(fix?.lon);
-  if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return;
+  const rawLat = fix?.lat, rawLon = fix?.lon;
+  if (rawLat == null || rawLon == null || rawLat === '' || rawLon === '') {
+    qualityInvalidFixes++;
+    refreshQuality();
+    return;
+  }
+  const lat = Number(rawLat), lon = Number(rawLon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+    qualityInvalidFixes++;
+    refreshQuality();
+    return;
+  }
 
   // Cached/queued fixes from before a suspension must never rewind the track.
-  if ((rec.lastFixT && now <= rec.lastFixT) || arrival - now > STALE_FIX_MS) return;
+  if ((rec.lastFixT && now <= rec.lastFixT) || arrival - now > STALE_FIX_MS) {
+    qualityInvalidFixes++;
+    refreshQuality();
+    return;
+  }
   if (pendingPointCount() >= MAX_PENDING_POINTS) {
     rec.lastFixWall = arrival;
     rec.filteredCount++;
@@ -497,15 +717,18 @@ async function processFix(fix) {
   }
 
   const accLimit = forceAccLimit || get('accuracyLimit');
-  if (fix.acc != null && (!isFinite(fix.acc) || fix.acc <= 0 || fix.acc > accLimit)) {
+  const rawAccuracy = fix?.acc == null || fix.acc === '' ? null : Number(fix.acc);
+  if (rawAccuracy != null && (!Number.isFinite(rawAccuracy) || rawAccuracy <= 0 || rawAccuracy > accLimit)) {
+    qualityInvalidFixes++;
     rec.filteredCount++;
     emit('recorder:filtered', { reason: 'accuracy', count: rec.filteredCount });
+    refreshQuality();
     return;
   }
   if (!rec.firstFixT) rec.firstFixT = now;
   rec.lastFixT = now;
 
-  const acc = fix.acc != null && isFinite(fix.acc) ? fix.acc : null;
+  const acc = rawAccuracy != null && Number.isFinite(rawAccuracy) ? rawAccuracy : null;
   const fixSpeed = fix.speed != null && isFinite(fix.speed) && fix.speed >= 0 ? fix.speed : null;
   const tripActivity = rec.tripActivity || get('activity');
   const activity = tripActivity === 'auto' ? (rec.activityGuess || 'auto') : tripActivity;
@@ -527,9 +750,11 @@ async function processFix(fix) {
   }
 
   const decision = jumpGate.evaluate({ fix, anchor: rec.lastPoint, history: motionHistory, activity });
+  qualityInvalidFixes += decision.discarded?.length || 0;
   if (decision.action === 'pending') {
     rec.filteredCount++;
     emit('recorder:filtered', { reason: 'jump', count: rec.filteredCount });
+    refreshQuality();
     return;
   }
   if (decision.action === 'confirm') {
@@ -537,7 +762,7 @@ async function processFix(fix) {
     const jumpDist = haversine(rec.lastPoint.lat, rec.lastPoint.lon, first.lat, first.lon);
     const jumpDt = first.t - (anchorT || rec.lastPoint.t);
     if (!(await beginNewSegment(first.t, { dist: Math.round(jumpDist), dt: Math.round(jumpDt), auto: true }, 'record.geoRelocated'))) return;
-    rec.filteredCount = Math.max(0, rec.filteredCount - (decision.points.length - 1));
+    let confirmed = 0;
     let previous = null;
     for (const candidate of decision.points) {
       let cDist = 0, cDt = 0, cImplied = null;
@@ -547,9 +772,11 @@ async function processFix(fix) {
         if (cDt > 0) cImplied = cDist / (cDt / 1000);
       }
       const candidateActivity = rec.tripActivity === 'auto' ? (rec.activityGuess || 'auto') : rec.tripActivity;
-      if (!acceptPoint(candidate, candidate.t, candidate.acc ?? null, candidate.speed ?? null, candidateActivity, cDist, cDt, cImplied)) break;
+      if (acceptPoint(candidate, candidate.t, candidate.acc ?? null, candidate.speed ?? null, candidateActivity, cDist, cDt, cImplied)) confirmed++;
+      else break;
       previous = rec.lastPoint;
     }
+    rec.filteredCount = Math.max(0, rec.filteredCount - confirmed);
     return;
   }
 
@@ -559,15 +786,27 @@ async function processFix(fix) {
     if (dist < deadband) {
       if (dt > 0 && dt <= 60_000) {
         rec.live.activeMs += dt;
-        if (fixSpeed != null && fixSpeed > MOVING_SPEED && fixSpeed <= physicsFor('travel').vmax * 1.3) rec.live.movingMs += dt;
+        const observedSpeed = fixSpeed ?? implied;
+        if (observedSpeed != null && observedSpeed > MOVING_SPEED && observedSpeed <= physicsFor('travel').vmax * 1.3) rec.live.movingMs += dt;
         else rec.live.stillMs += dt;
       }
       anchorT = now;
-      rec.live.speed = fixSpeed != null && fixSpeed > MOVING_SPEED && fixSpeed <= physicsFor('travel').vmax * 1.3 ? fixSpeed : 0;
+      const sampleSpeed = fixSpeed != null && fixSpeed <= physicsFor('travel').vmax * 1.3
+        ? fixSpeed
+        : implied != null && implied <= physicsFor('travel').vmax * 1.3 ? implied : null;
+      rec.live.speed = sampleSpeed;
       rec.live.acc = acc;
       rec.live.lat = lat; rec.live.lon = lon;
       rec.live.heading = fix.heading != null && isFinite(fix.heading) ? fix.heading : null;
-      emit('recorder:tick', { live: rec.live });
+      noteValidFix(now, acc);
+      const sampleAlt = fix.alt != null && isFinite(fix.alt) && fix.altAcc != null && fix.altAcc <= 30 ? fix.alt : null;
+      feedAutoActivity({
+        t: now, speed: sampleSpeed, distance: dist, dt,
+        elevationChange: sampleAlt != null && rec.lastPoint?.alt != null && isFinite(rec.lastPoint.alt)
+          ? sampleAlt - rec.lastPoint.alt : null
+      });
+      refreshQuality();
+      emit('recorder:tick', { live: rec.live, quality: rec.quality });
       return;
     }
     if (dt > GAP_TIME) {
@@ -752,7 +991,8 @@ function startTick() {
         }
         if (!geoRetryTimer && Date.now() - lastWatchRestart > 5000) retryGeolocation();
       }
-      emit('recorder:tick', { live: rec.live });
+      refreshQuality(false);
+      emit('recorder:tick', { live: rec.live, quality: rec.quality });
     }
   }, 1000);
 }
@@ -774,9 +1014,16 @@ export async function pauseRecording() {
     }
     return false;
   }
+  const pauseTime = Date.now();
+  if (qualityActiveStartedAt) {
+    qualityActiveElapsedMs += Math.max(0, pauseTime - qualityActiveStartedAt);
+    qualityActiveStartedAt = 0;
+  }
+  qualityPausedSpans.push({ start: pauseTime, end: null });
   rec.status = 'paused';
+  stopQualityMonitoring();
   suspendFixIngest = false;
-  pausedAt = Date.now();
+  pausedAt = pauseTime;
   resetMotionFilter(); breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
   await store.updateTrip(rec.tripId, { status: 'paused' }).catch((e) => console.error('trip status update failed', e));
   rec.saveState.pending = 0;
@@ -824,16 +1071,27 @@ export async function resumeRecording() {
     rec.lastPoint = null;
     rec.live.segCount++;
     rec.status = 'recording';
+    const resumeTime = Date.now();
+    const openPause = qualityPausedSpans[qualityPausedSpans.length - 1];
+    if (openPause && openPause.end == null) openPause.end = resumeTime;
+    qualityActiveStartedAt = resumeTime;
     clearGeoRetry();
     lastWatchRestart = 0;
     rec.startedAt = Date.now() - (rec.live?.duration || 0);
     rec.permissionDenied = false;
     rec.geoError = null;
     rec.lastFixWall = Date.now();
+    qualitySegmentStartedAt = resumeTime;
     resetMotionFilter(); breakOnNextFix = false; forceAccLimit = 0; anchorT = 0;
     suspendFixIngest = false;
     await store.updateTrip(rec.tripId, { status: 'recording' }).catch((e) => console.error('trip status update failed', e));
     if (!rec.simulated && !startWatch()) {
+      const failedAt = Date.now();
+      if (qualityActiveStartedAt) {
+        qualityActiveElapsedMs += Math.max(0, failedAt - qualityActiveStartedAt);
+        qualityActiveStartedAt = 0;
+      }
+      qualityPausedSpans.push({ start: failedAt, end: null });
       rec.status = 'paused';
       suspendFixIngest = false;
       rec.segmentId = prevSegmentId;
@@ -849,6 +1107,7 @@ export async function resumeRecording() {
     requestWakeLock();
     armKeepAlive();
     startTick();
+    startQualityMonitoring();
     broadcast({ type: 'rec-state', state: 'recording', tripId: rec.tripId });
     emit('recorder:resumed', { tripId: rec.tripId });
     return true;
@@ -870,11 +1129,13 @@ async function doStopRecording() {
   suspendFixIngest = true;
   stopWatch();
   stopTick();
+  stopQualityMonitoring();
   await fixChain.catch(() => {});
   if (!(await flushBuffer())) {
     suspendFixIngest = false;
     rec.lastFixWall = Date.now();
     startTick();
+    startQualityMonitoring();
     if (!rec.simulated) {
       armResumeBreak();
       startWatch();
@@ -887,9 +1148,17 @@ async function doStopRecording() {
     await store.pruneEmptySegments(rec.tripId);
     if (rec.tripId) {
       const tr = await store.getTrip(rec.tripId);
-      const finalActivity = tr?.activity === 'auto'
-        ? (rec.activityGuess || classifyActivity(speedSamples) || 'hike')
-        : null;
+      let finalActivity = null;
+      const selectedActivity = rec.tripActivity || tr?.activity || 'auto';
+      if (selectedActivity === 'auto') {
+        const finalClassification = classifyActivityDetailed(activitySamples);
+        rec.activityClassification = finalClassification;
+        // Low confidence keeps the last confident guess, or leaves the trip auto.
+        finalActivity = finalClassification.activity || rec.activityGuess;
+      } else {
+        // A manual selection is authoritative even if its earlier write failed.
+        finalActivity = selectedActivity;
+      }
       await store.updateTrip(rec.tripId, finalActivity ? { status: 'finished', activity: finalActivity } : { status: 'finished' });
     }
     rec.status = 'finished';
@@ -903,7 +1172,8 @@ async function doStopRecording() {
     rec.saveState.degraded = false;
     emitPersistence();
     const id = rec.tripId;
-    rec.tripId = null; rec.segmentId = null; rec.live = null; rec.lastPoint = null; rec.tripActivity = 'auto';
+    rec.tripId = null; rec.segmentId = null; rec.live = null; rec.lastPoint = null;
+    rec.lastValidFixT = 0; rec.quality = null; rec.activityClassification = null; rec.tripActivity = 'auto';
     return id;
   } catch (e) {
     console.error('stop failed', e);
@@ -927,10 +1197,9 @@ export async function continueTrip(tripId) {
     rec.tripId = tripId;
     rec.status = 'paused';
     rec.simulated = false;
-    rec.activityGuess = null;
     rec.tripActivity = trip.activity || 'auto';
-    speedSamples = [];
     rec.live = freshLive();
+    resetActivityAndQuality();
     // rebuild live counters from stored data
     const full = await store.loadTripTrack(tripId);
     const st = await computeStatsSummaryAsync(full.segments, {
@@ -950,6 +1219,8 @@ export async function continueTrip(tripId) {
     if (!ok) releaseRecorderLock();
     return ok;
   } catch (e) {
+    stopQualityMonitoring();
+    rec.quality = null;
     releaseRecorderLock();
     throw e;
   }

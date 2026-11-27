@@ -6,8 +6,8 @@ import { sha256Hex, stableStringify } from './integrity';
 import { decryptBackupBytes, encryptBackupBlob, ENCRYPTED_BACKUP_EXT, isEncryptedBackupBytes } from './backupCrypto';
 
 const FORMAT = 'localtrace-backup';
-const VERSION = 3;
-const SUPPORTED_VERSIONS = new Set([1, 2, 3]);
+const VERSION = 4;
+const SUPPORTED_VERSIONS = new Set([1, 2, 3, 4]);
 
 const MAX_BACKUP_BYTES = 256 * 1024 * 1024;
 const MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024;
@@ -29,7 +29,7 @@ export interface BackupImportProgress {
 }
 
 export type BackupTarget = Pick<typeof db,
-  'trips' | 'segments' | 'trackChunks' | 'trackSnapshots' | 'waypoints' | 'media' | 'elevCache' | 'shareImports' | 'transaction'>;
+  'trips' | 'segments' | 'trackChunks' | 'trackSnapshots' | 'waypoints' | 'media' | 'elevCache' | 'shareImports' | 'quarantine' | 'transaction'>;
 
 export interface BackupImportOptions {
   signal?: AbortSignal;
@@ -63,10 +63,35 @@ interface ParsedZip {
   inspectionVersion: 2;
 }
 
-class ArchiveLimitError extends Error {}
+export class BackupLimitError extends Error {
+  readonly code = 'backup-limit-exceeded';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'BackupLimitError';
+  }
+}
+
+const RESTORE_LIMIT_GUIDANCE = 'Use a smaller full backup, or export selected trips to GPX from the source device and import them individually. GPX does not include media or share-import history.';
 
 function archiveLimit(message: string) {
-  return new ArchiveLimitError(message);
+  return new BackupLimitError(message);
+}
+
+function restoreLimit(message: string) {
+  return new BackupLimitError(`${message} ${RESTORE_LIMIT_GUIDANCE}`);
+}
+
+function exportLimit(message: string) {
+  return archiveLimit(`${message} ${RESTORE_LIMIT_GUIDANCE}`);
+}
+
+function backupSizeLimit() {
+  return restoreLimit(`backup file too large: the restore limit is 256 MiB (${MAX_BACKUP_BYTES} bytes)`);
+}
+
+function pointCountLimit() {
+  return restoreLimit(`backup contains more than ${MAX_POINTS.toLocaleString('en-US')} track and snapshot points, exceeding the restore limit`);
 }
 
 function abortError(signal: AbortSignal) {
@@ -222,33 +247,55 @@ function mediaFilesOf(files, manifest) {
 }
 
 export async function exportBackup({ password = '', target = db }: BackupExportOptions = {}) {
-  const [trips, segments, trackChunks, trackSnapshots, waypoints, media, elevCache] = await target.transaction(
+  const [trips, segments, trackChunks, trackSnapshots, waypoints, media, elevCache, shareImports, quarantine] = await target.transaction(
     'r',
-    [target.trips, target.segments, target.trackChunks, target.trackSnapshots, target.waypoints, target.media, target.elevCache],
+    [target.trips, target.segments, target.trackChunks, target.trackSnapshots, target.waypoints, target.media,
+      target.elevCache, target.shareImports, target.quarantine],
     () => Promise.all([
       target.trips.toArray(), target.segments.toArray(), target.trackChunks.toArray(), target.trackSnapshots.toArray(),
-      target.waypoints.toArray(), target.media.toArray(), target.elevCache.toArray()
+      target.waypoints.toArray(), target.media.toArray(), target.elevCache.toArray(),
+      target.shareImports.toArray(), target.quarantine.toArray()
     ])
   );
+  const pointCount = trackChunks.reduce((sum, chunk) => sum + (chunk.points?.length || 0), 0)
+    + trackSnapshots.reduce((sum, snapshot) => sum + (snapshot.points?.length || 0), 0);
+  if (pointCount > MAX_POINTS) throw exportLimit(`backup contains more than ${MAX_POINTS.toLocaleString('en-US')} track and snapshot points`);
+  const entryCount = 1 + media.reduce((sum, entry) => sum + (entry.thumb ? 2 : 1), 0);
+  if (entryCount > MAX_ARCHIVE_ENTRIES) throw exportLimit(`backup would contain ${entryCount} archive entries, exceeding the ${MAX_ARCHIVE_ENTRIES.toLocaleString('en-US')} entry limit`);
   const exportedAt = new Date().toISOString();
   const manifest: any = {
     format: FORMAT, version: VERSION, exportedAt, tripSchemaVersion: TRIP_SCHEMA_VERSION,
     counts: {
       trips: trips.length, segments: segments.length, trackChunks: trackChunks.length,
-      trackSnapshots: trackSnapshots.length, waypoints: waypoints.length, media: media.length
+      trackSnapshots: trackSnapshots.length, waypoints: waypoints.length, media: media.length,
+      elevCache: elevCache.length, shareImports: shareImports.length, quarantine: quarantine.length
     },
     trips, segments, trackChunks, trackSnapshots, waypoints,
     mediaMeta: media.map((m) => ({ id: m.id, tripId: m.tripId, width: m.width, height: m.height, createdAt: m.createdAt })),
-    elevCache
+    elevCache, shareImports, quarantine
   };
   const chunks: Uint8Array<ArrayBuffer>[] = [];
   const fileHashes = {};
   let zipError: unknown = null;
+  let zipBytes = 0;
+  let uncompressedBytes = 0;
+  let archiveEntries = 0;
   const zip = new Zip((error, chunk) => {
     if (error) zipError = error;
-    else if (chunk.byteLength) chunks.push(chunk);
+    else if (chunk.byteLength) {
+      zipBytes += chunk.byteLength;
+      if (zipBytes > MAX_BACKUP_BYTES) zipError = exportLimit('compressed backup exceeds the 256 MiB restore limit');
+      chunks.push(chunk);
+    }
   });
   const addEntry = (name: string, bytes: Uint8Array) => {
+    if (bytes.byteLength > MAX_ENTRY_BYTES) throw exportLimit(`archive entry ${name} exceeds the 20 MiB restore limit`);
+    if (name === 'manifest.json' && bytes.byteLength > MAX_MANIFEST_BYTES) {
+      throw exportLimit('backup manifest exceeds the 16 MiB restore limit');
+    }
+    archiveEntries++;
+    uncompressedBytes += bytes.byteLength;
+    if (uncompressedBytes > MAX_UNCOMPRESSED_BYTES) throw exportLimit('uncompressed backup exceeds the 512 MiB restore limit');
     const entry = new ZipDeflate(name, { level: 6 });
     zip.add(entry);
     for (let offset = 0; offset < bytes.byteLength; offset += 1024 * 1024) {
@@ -259,6 +306,9 @@ export async function exportBackup({ password = '', target = db }: BackupExportO
   };
   try {
     for (const m of media) {
+      if (m.blob?.size > MAX_ENTRY_BYTES || m.thumb?.size > MAX_ENTRY_BYTES) {
+        throw exportLimit(`media entry ${m.id} exceeds the 20 MiB restore limit`);
+      }
       const photo = await blobToU8(m.blob);
       const photoPath = `media/${m.id}.jpg`;
       fileHashes[photoPath] = { bytes: photo.byteLength, sha256: await sha256Hex(photo) };
@@ -287,6 +337,7 @@ export async function exportBackup({ password = '', target = db }: BackupExportO
   const stamp = exportedAt.slice(0, 10).replace(/-/g, '');
   const encrypted = !!password;
   const blob = encrypted ? await encryptBackupBlob(zipBlob, password) : zipBlob;
+  if (blob.size > MAX_BACKUP_BYTES) throw exportLimit('final backup envelope exceeds the 256 MiB restore limit');
   const filename = encrypted
     ? `roametch-backup-${stamp}${ENCRYPTED_BACKUP_EXT}`
     : `roametch-backup-${stamp}.trip`;
@@ -302,7 +353,7 @@ async function* byteChunks(data: Uint8Array, signal?: AbortSignal) {
 
 function normalizeZipError(error: unknown, signal?: AbortSignal): never {
   if (signal?.aborted) throw abortError(signal);
-  if (error instanceof ArchiveLimitError) throw error;
+  if (error instanceof BackupLimitError) throw error;
   throw new Error('not a zip');
 }
 
@@ -334,7 +385,7 @@ function validateZipDirectory(tail: Uint8Array, archiveBytes: number, entries: Z
   const directoryOffset = view.getUint32(eocd + 16, true);
   if (disk !== 0 || directoryDisk !== 0 || diskEntries !== totalEntries || totalEntries !== entries.length) throw new Error('not a zip');
   if (diskEntries === 0xffff || directorySize === 0xffffffff || directoryOffset === 0xffffffff) {
-    throw archiveLimit('zip64 directory is not supported');
+    throw restoreLimit('zip64 directory is not supported');
   }
   if (directorySize > MAX_CENTRAL_DIRECTORY_BYTES || directoryOffset + directorySize !== archiveBytes - tail.byteLength + eocd) {
     throw new Error('not a zip');
@@ -438,22 +489,22 @@ async function readZip(chunks: AsyncIterable<Uint8Array>, options: BackupImportO
     throwIfAborted(options.signal);
     archiveStarted = true;
     entryCount++;
-    if (entryCount > MAX_ARCHIVE_ENTRIES) throw archiveLimit('too many files');
+    if (entryCount > MAX_ARCHIVE_ENTRIES) throw restoreLimit(`too many files: the restore limit is ${MAX_ARCHIVE_ENTRIES.toLocaleString('en-US')} archive entries`);
     if (names.has(file.name)) throw archiveLimit('duplicate archive entry');
     names.add(file.name);
     if (file.name !== 'manifest.json' && !MEDIA_PATH.test(file.name)) throw archiveLimit('unsafe archive path');
 
     const declaredSize = file.originalSize;
+    const kind: 'manifest' | 'media' = file.name === 'manifest.json' ? 'manifest' : 'media';
     if (declaredSize != null && (!Number.isSafeInteger(declaredSize) || declaredSize < 0)) throw new Error('not a zip');
-    if ((declaredSize ?? 0) > MAX_ENTRY_BYTES) throw archiveLimit('archive entry too large');
+    if ((declaredSize ?? 0) > MAX_ENTRY_BYTES) throw restoreLimit(`archive entry too large: the restore limit is 20 MiB (${MAX_ENTRY_BYTES} bytes)`);
+    if (kind === 'manifest' && (declaredSize ?? 0) > MAX_MANIFEST_BYTES) throw restoreLimit(`manifest too large: the restore limit is 16 MiB (${MAX_MANIFEST_BYTES} bytes)`);
     if ((declaredSize ?? 0) > 8 * 1024 * 1024 && (file.size ?? 0) > 0 && declaredSize! / file.size! > 200) {
       throw archiveLimit('suspicious compression ratio');
     }
     totalUncompressed += declaredSize ?? 0;
-    if (totalUncompressed > MAX_UNCOMPRESSED_BYTES) throw archiveLimit('archive expands too large');
+    if (totalUncompressed > MAX_UNCOMPRESSED_BYTES) throw restoreLimit(`archive expands too large: the restore limit is 512 MiB (${MAX_UNCOMPRESSED_BYTES} bytes)`);
 
-    const kind: 'manifest' | 'media' = file.name === 'manifest.json' ? 'manifest' : 'media';
-    if (kind === 'manifest' && (declaredSize ?? 0) > MAX_MANIFEST_BYTES) throw archiveLimit('manifest too large');
     const entry = {
       file,
       name: file.name,
@@ -472,12 +523,12 @@ async function readZip(chunks: AsyncIterable<Uint8Array>, options: BackupImportO
       throwIfAborted(options.signal);
       if (data?.byteLength) {
         entry.bytes += data.byteLength;
-        if (entry.bytes > MAX_ENTRY_BYTES) throw archiveLimit('archive entry too large');
-        if (kind === 'manifest' && entry.bytes > MAX_MANIFEST_BYTES) throw archiveLimit('manifest too large');
+        if (entry.bytes > MAX_ENTRY_BYTES) throw restoreLimit(`archive entry too large: the restore limit is 20 MiB (${MAX_ENTRY_BYTES} bytes)`);
+        if (kind === 'manifest' && entry.bytes > MAX_MANIFEST_BYTES) throw restoreLimit(`manifest too large: the restore limit is 16 MiB (${MAX_MANIFEST_BYTES} bytes)`);
         const accounted = Math.max(entry.accounted, entry.bytes);
         totalUncompressed += accounted - entry.accounted;
         entry.accounted = accounted;
-        if (totalUncompressed > MAX_UNCOMPRESSED_BYTES) throw archiveLimit('archive expands too large');
+        if (totalUncompressed > MAX_UNCOMPRESSED_BYTES) throw restoreLimit(`archive expands too large: the restore limit is 512 MiB (${MAX_UNCOMPRESSED_BYTES} bytes)`);
         if (kind === 'manifest') manifestText += entry.decoder!.decode(data, { stream: true });
         else {
           entry.parts.push(data);
@@ -517,6 +568,7 @@ async function readZip(chunks: AsyncIterable<Uint8Array>, options: BackupImportO
       for (let offset = 0; offset < input.byteLength; offset += ZIP_INPUT_CHUNK_BYTES) {
         const chunk = input.subarray(offset, offset + ZIP_INPUT_CHUNK_BYTES);
         archiveBytes += chunk.byteLength;
+        if (archiveBytes > MAX_BACKUP_BYTES) throw backupSizeLimit();
         retainTail(chunk);
         try { unzip.push(chunk, false); } catch (error) { normalizeZipError(error, options.signal); }
       }
@@ -546,6 +598,33 @@ function checkId(value) {
   return value;
 }
 
+function repairMetadataSignature(snapshot) {
+  return stableStringify({
+    kind: snapshot.kind,
+    repairVersion: snapshot.repairVersion,
+    createdAt: snapshot.createdAt,
+    sourceUpdatedAt: snapshot.sourceUpdatedAt,
+    previewId: snapshot.previewId,
+    sourceFingerprint: snapshot.sourceFingerprint,
+    selectedCategories: snapshot.selectedCategories,
+    summary: snapshot.summary,
+    metrics: snapshot.metrics,
+    semantics: snapshot.semantics
+  });
+}
+
+function validateRepairSnapshot(snapshot) {
+  checkId(snapshot.snapshotId);
+  if (snapshot.kind !== 'repair' || !Number.isSafeInteger(snapshot.repairVersion) || snapshot.repairVersion < 1
+    || !Number.isFinite(snapshot.sourceUpdatedAt)
+    || typeof snapshot.previewId !== 'string' || !snapshot.previewId
+    || typeof snapshot.sourceFingerprint !== 'string' || !snapshot.sourceFingerprint
+    || !Array.isArray(snapshot.selectedCategories) || snapshot.selectedCategories.some((category) => typeof category !== 'string')
+    || !snapshot.summary || typeof snapshot.summary !== 'object' || Array.isArray(snapshot.summary)
+    || !snapshot.metrics || typeof snapshot.metrics !== 'object' || Array.isArray(snapshot.metrics)
+    || !snapshot.semantics || typeof snapshot.semantics !== 'object' || Array.isArray(snapshot.semantics)) invalidManifest();
+}
+
 function validateBackupSchemaVersion(value) {
   if (value == null) return;
   if (!Number.isSafeInteger(value) || value < 1) invalidManifest();
@@ -565,6 +644,9 @@ function validateManifest(manifest, files) {
   }
   if ((manifest.version === 3 && !Array.isArray(manifest.trackSnapshots))
     || (manifest.trackSnapshots != null && !Array.isArray(manifest.trackSnapshots))) invalidManifest();
+  if (manifest.version >= 4 && (!Array.isArray(manifest.shareImports) || !Array.isArray(manifest.quarantine))) invalidManifest();
+  if ((manifest.shareImports != null && !Array.isArray(manifest.shareImports))
+    || (manifest.quarantine != null && !Array.isArray(manifest.quarantine))) invalidManifest();
   if (manifest.version >= 2) {
     const integrity = manifest.integrity;
     if (!integrity || typeof integrity !== 'object' || Array.isArray(integrity)
@@ -574,6 +656,8 @@ function validateManifest(manifest, files) {
     }
   }
   const trackSnapshots = manifest.trackSnapshots || [];
+  const shareImports = manifest.shareImports || [];
+  const quarantine = manifest.quarantine || [];
 
   const countPairs = [
     ['trips', manifest.trips],
@@ -581,7 +665,10 @@ function validateManifest(manifest, files) {
     ['trackChunks', manifest.trackChunks],
     ['trackSnapshots', trackSnapshots],
     ['waypoints', manifest.waypoints],
-    ['media', manifest.mediaMeta]
+    ['media', manifest.mediaMeta],
+    ['elevCache', manifest.elevCache],
+    ['shareImports', shareImports],
+    ['quarantine', quarantine]
   ];
   if (manifest.counts != null) {
     if (typeof manifest.counts !== 'object') invalidManifest();
@@ -626,7 +713,7 @@ function validateManifest(manifest, files) {
     chunkSeqsBySegment.get(segmentId).push(c.seq);
     chunkIds.add(id);
     pointCount += c.points.length;
-    if (pointCount > MAX_POINTS) invalidManifest();
+    if (pointCount > MAX_POINTS) throw pointCountLimit();
     for (const p of c.points) {
       if (!p || !Number.isFinite(p.lat) || !Number.isFinite(p.lon)
         || Math.abs(p.lat) > 90 || Math.abs(p.lon) > 180) invalidManifest();
@@ -640,9 +727,8 @@ function validateManifest(manifest, files) {
   }
 
   const snapshotIds = new Set();
-  const snapshotSeqs = new Set();
-  const snapshotSegmentSeqs = new Map();
-  const snapshotSegmentIndexes = new Map();
+  const snapshotGroups = new Map();
+  const repairVersionOwners = new Map();
   for (const snapshot of trackSnapshots) {
     if (!snapshot || typeof snapshot !== 'object') invalidManifest();
     const id = checkId(snapshot.id);
@@ -652,27 +738,43 @@ function validateManifest(manifest, files) {
     if (!Number.isSafeInteger(snapshot.seq) || snapshot.seq < 0
       || !Number.isSafeInteger(snapshot.segmentIndex) || snapshot.segmentIndex < 0
       || segIndex.get(segmentId) !== snapshot.segmentIndex) invalidManifest();
-    const sequenceKey = `${segmentId}:${snapshot.seq}`;
-    if (snapshotSeqs.has(sequenceKey)) invalidManifest();
-    snapshotSeqs.add(sequenceKey);
-    if (snapshotSegmentIndexes.has(segmentId) && snapshotSegmentIndexes.get(segmentId) !== snapshot.segmentIndex) invalidManifest();
-    snapshotSegmentIndexes.set(segmentId, snapshot.segmentIndex);
-    if (!snapshotSegmentSeqs.has(segmentId)) snapshotSegmentSeqs.set(segmentId, []);
-    snapshotSegmentSeqs.get(segmentId).push(snapshot.seq);
     if (!Number.isFinite(snapshot.createdAt) || !Array.isArray(snapshot.points)) invalidManifest();
+    let groupId;
+    if (snapshot.snapshotId != null) {
+      validateRepairSnapshot(snapshot);
+      groupId = snapshot.snapshotId;
+      const versionKey = `${snapshot.tripId}:${snapshot.repairVersion}`;
+      const owner = repairVersionOwners.get(versionKey);
+      if (owner && owner !== groupId) invalidManifest();
+      repairVersionOwners.set(versionKey, groupId);
+    } else {
+      if (snapshot.kind != null || snapshot.repairVersion != null) invalidManifest();
+      groupId = `raw:${snapshot.tripId}`;
+    }
+    let group = snapshotGroups.get(groupId);
+    if (!group) snapshotGroups.set(groupId, group = {
+      signature: repairMetadataSignature(snapshot), sequences: new Map()
+    });
+    if (group.signature !== repairMetadataSignature(snapshot)) invalidManifest();
+    let sequences = group.sequences.get(segmentId);
+    if (!sequences) group.sequences.set(segmentId, sequences = new Set());
+    if (sequences.has(snapshot.seq)) invalidManifest();
+    sequences.add(snapshot.seq);
     snapshotIds.add(id);
     pointCount += snapshot.points.length;
-    if (pointCount > MAX_POINTS) invalidManifest();
+    if (pointCount > MAX_POINTS) throw pointCountLimit();
     for (const p of snapshot.points) {
       if (!p || !Number.isFinite(p.lat) || !Number.isFinite(p.lon)
-        || Math.abs(p.lat) > 90 || Math.abs(p.lon) > 180) invalidManifest();
-      if (p.t != null && !Number.isFinite(p.t)) invalidManifest();
+        || Math.abs(p.lat) > 90 || Math.abs(p.lon) > 180
+        || (p.t != null && !Number.isFinite(p.t))) invalidManifest();
     }
   }
 
-  for (const seqs of snapshotSegmentSeqs.values()) {
-    seqs.sort((a, b) => a - b);
-    if (seqs.some((seq, index) => seq !== index)) invalidManifest();
+  for (const group of snapshotGroups.values()) {
+    for (const sequences of group.sequences.values()) {
+      const seqs = [...sequences].sort((a, b) => a - b);
+      if (seqs.some((seq, index) => seq !== index)) invalidManifest();
+    }
   }
 
   const waypointIds = new Set();
@@ -697,6 +799,28 @@ function validateManifest(manifest, files) {
   for (const e of manifest.elevCache) {
     if (!e || typeof e !== 'object' || typeof e.key !== 'string') invalidManifest();
   }
+
+  const fingerprints = new Set();
+  for (const entry of shareImports) {
+    if (!entry || typeof entry !== 'object' || typeof entry.fingerprint !== 'string'
+      || !entry.fingerprint || entry.fingerprint.length > 16_384 || fingerprints.has(entry.fingerprint)
+      || !tripIds.has(entry.tripId) || !Number.isFinite(entry.createdAt)) invalidManifest();
+    fingerprints.add(entry.fingerprint);
+  }
+
+  const quarantineIds = new Set();
+  for (const entry of quarantine) {
+    if (!entry || typeof entry !== 'object') invalidManifest();
+    const id = checkId(entry.id);
+    checkId(entry.batchId);
+    checkId(entry.rowId);
+    if (quarantineIds.has(id) || !Number.isFinite(entry.createdAt) || entry.createdAt < 0
+      || !['segments', 'trackChunks', 'trackSnapshots'].includes(entry.sourceTable)
+      || typeof entry.reason !== 'string' || !entry.reason || entry.reason.length > 120
+      || (entry.tripId != null && (typeof entry.tripId !== 'string' || !entry.tripId))
+      || !entry.row || typeof entry.row !== 'object' || entry.row.id !== entry.rowId) invalidManifest();
+    quarantineIds.add(id);
+  }
 }
 
 async function finishInspection(parsed: ParsedZip, encrypted: boolean, options: BackupImportOptions) {
@@ -713,7 +837,7 @@ async function finishInspection(parsed: ParsedZip, encrypted: boolean, options: 
 }
 
 async function inspectStreamingFile(file, password: string, options: BackupImportOptions) {
-  const maxEnvelope = MAX_BACKUP_BYTES + 1024;
+  const maxEnvelope = MAX_BACKUP_BYTES;
   const reader = file.stream().getReader();
   const total = Number(file.size) || 0;
   let loaded = 0;
@@ -747,7 +871,7 @@ async function inspectStreamingFile(file, password: string, options: BackupImpor
     throwIfAborted(options.signal);
     if (!result.done && result.value?.byteLength) {
       loaded += result.value.byteLength;
-      if (loaded > maxEnvelope) throw new Error('backup file too large');
+      if (loaded > maxEnvelope) throw backupSizeLimit();
       options.onProgress?.({ phase: 'read', loaded, total });
     }
     return result;
@@ -781,10 +905,10 @@ async function inspectStreamingFile(file, password: string, options: BackupImpor
       // not streaming; only the ZIP/media handling below is bounded per entry.
       let wrapped = await blobToU8(file);
       throwIfAborted(options.signal);
-      if (wrapped.byteLength > maxEnvelope) throw new Error('backup file too large');
+      if (wrapped.byteLength > maxEnvelope) throw backupSizeLimit();
       let plain = await decryptBackupBytes(wrapped, password);
       throwIfAborted(options.signal);
-      if (plain.byteLength > MAX_BACKUP_BYTES) throw new Error('backup file too large');
+      if (plain.byteLength > MAX_BACKUP_BYTES) throw backupSizeLimit();
       wrapped = EMPTY_BYTES;
       const parsed = await readZip(byteChunks(plain, options.signal), options);
       plain = EMPTY_BYTES;
@@ -793,13 +917,15 @@ async function inspectStreamingFile(file, password: string, options: BackupImpor
       return inspected;
     }
 
+    const zipPrefix = header[0] === 0x50 && header[1] === 0x4b;
     const chunks = (async function* () {
-      for (const chunk of prefix) yield chunk;
+      if (zipPrefix) for (const chunk of prefix) yield chunk;
       if (eof) return;
       for (;;) {
         const result = await read();
         if (result.done) return;
-        if (result.value?.byteLength) yield result.value;
+        if (zipPrefix && result.value?.byteLength) yield result.value;
+        else yield EMPTY_BYTES;
       }
     })();
     const parsed = await readZip(chunks, options);
@@ -813,23 +939,23 @@ async function inspectStreamingFile(file, password: string, options: BackupImpor
 }
 
 async function inspectBufferedFile(file, password: string, options: BackupImportOptions) {
-  const maxEnvelope = MAX_BACKUP_BYTES + 1024;
+  const maxEnvelope = MAX_BACKUP_BYTES;
   let u8 = await blobToU8(file);
   throwIfAborted(options.signal);
-  if (u8.byteLength > maxEnvelope) throw new Error('backup file too large');
+  if (u8.byteLength > maxEnvelope) throw backupSizeLimit();
   const encrypted = isEncryptedBackupBytes(u8);
   if (encrypted) {
     u8 = await decryptBackupBytes(u8, password);
     throwIfAborted(options.signal);
-    if (u8.byteLength > MAX_BACKUP_BYTES) throw new Error('backup file too large');
+    if (u8.byteLength > MAX_BACKUP_BYTES) throw backupSizeLimit();
   }
   const parsed = await readZip(byteChunks(u8, options.signal), options);
   return await finishInspection(parsed, encrypted, options);
 }
 
 export async function inspectBackup(file, password = '', options: BackupImportOptions = {}) {
-  const maxEnvelope = MAX_BACKUP_BYTES + 1024;
-  if (Number(file?.size) > maxEnvelope) throw new Error('backup file too large');
+  const maxEnvelope = MAX_BACKUP_BYTES;
+  if (Number(file?.size) > maxEnvelope) throw backupSizeLimit();
   throwIfAborted(options.signal);
   // Blob/File inputs use their stream. The arrayBuffer fallback keeps older
   // non-streaming callers compatible, but cannot provide the streaming guarantee.
@@ -880,7 +1006,7 @@ export async function restoreBackup(file, strategy = 'skip', inspected = null, o
   throwIfAborted(options.signal);
   const target = options.target ?? db;
   const data = inspected || await inspectBackup(file, '', options);
-  const { manifest, files, conflicts } = data;
+  const { manifest, files } = data;
   validateBackupSchemaVersion(manifest.tripSchemaVersion);
   for (const trip of manifest.trips) validateBackupSchemaVersion(trip.schemaVersion);
   validateManifest(manifest, files);
@@ -889,39 +1015,48 @@ export async function restoreBackup(file, strategy = 'skip', inspected = null, o
     : data.integrity;
   if (integrity.ok === false) throw new Error('backup integrity check failed');
   throwIfAborted(options.signal);
-  const skipIds = new Set(strategy === 'skip' ? conflicts : []);
   const trackSnapshots = manifest.trackSnapshots || [];
+  const shareImports = manifest.shareImports || [];
+  const quarantine = manifest.quarantine || [];
   let restored = 0;
-  const noExisting = async (table, ids) => {
+  const noExisting = async (table, ids, tableName: string) => {
     if (!ids.length) return;
     const rows = await table.bulkGet(ids);
     throwIfAborted(options.signal);
-    if (rows.some(Boolean)) throw new Error('archive id collision');
+    if (rows.some(Boolean)) throw new Error(`archive id collision in ${tableName}`);
   };
   let detachAbort: (() => void) | undefined;
   try {
-    await target.transaction('rw', [target.trips, target.segments, target.trackChunks, target.trackSnapshots, target.waypoints, target.media, target.elevCache, target.shareImports], async (transaction) => {
+    await target.transaction('rw', [target.trips, target.segments, target.trackChunks, target.trackSnapshots,
+      target.waypoints, target.media, target.elevCache, target.shareImports, target.quarantine], async (transaction) => {
       detachAbort = abortTransactionOnSignal(transaction, options.signal);
       restored = 0;
       throwIfAborted(options.signal);
+      const archivedTripIds = manifest.trips.map((trip) => trip.id);
+      const currentTrips = await target.trips.bulkGet(archivedTripIds);
+      throwIfAborted(options.signal);
+      const liveConflicts = archivedTripIds.filter((_id, index) => !!currentTrips[index]);
+      const skipIds = new Set(strategy === 'skip' ? liveConflicts : []);
       if (strategy === 'overwrite') {
-        for (const id of conflicts) {
+        for (const id of liveConflicts) {
           throwIfAborted(options.signal);
           await target.trackChunks.where('tripId').equals(id).delete();
           await target.trackSnapshots.where('tripId').equals(id).delete();
           await target.segments.where('tripId').equals(id).delete();
           await target.waypoints.where('tripId').equals(id).delete();
           await target.media.where('tripId').equals(id).delete();
-          await target.shareImports.where('tripId').equals(id).delete();
+          await target.quarantine.where('tripId').equals(id).delete();
+          if (manifest.version >= 4) await target.shareImports.where('tripId').equals(id).delete();
           await target.trips.delete(id);
         }
       }
-      await noExisting(target.trips, manifest.trips.filter((t) => !skipIds.has(t.id)).map((t) => t.id));
-      await noExisting(target.segments, manifest.segments.filter((s) => !skipIds.has(s.tripId)).map((s) => s.id));
-      await noExisting(target.trackChunks, manifest.trackChunks.filter((c) => !skipIds.has(c.tripId)).map((c) => c.id));
-      await noExisting(target.trackSnapshots, trackSnapshots.filter((snapshot) => !skipIds.has(snapshot.tripId)).map((snapshot) => snapshot.id));
-      await noExisting(target.waypoints, manifest.waypoints.filter((w) => !skipIds.has(w.tripId)).map((w) => w.id));
-      await noExisting(target.media, manifest.mediaMeta.filter((m) => !skipIds.has(m.tripId)).map((m) => m.id));
+      await noExisting(target.trips, manifest.trips.filter((t) => !skipIds.has(t.id)).map((t) => t.id), 'trips');
+      await noExisting(target.segments, manifest.segments.filter((s) => !skipIds.has(s.tripId)).map((s) => s.id), 'segments');
+      await noExisting(target.trackChunks, manifest.trackChunks.filter((c) => !skipIds.has(c.tripId)).map((c) => c.id), 'trackChunks');
+      await noExisting(target.trackSnapshots, trackSnapshots.filter((snapshot) => !skipIds.has(snapshot.tripId)).map((snapshot) => snapshot.id), 'trackSnapshots');
+      await noExisting(target.waypoints, manifest.waypoints.filter((w) => !skipIds.has(w.tripId)).map((w) => w.id), 'waypoints');
+      await noExisting(target.media, manifest.mediaMeta.filter((m) => !skipIds.has(m.tripId)).map((m) => m.id), 'media');
+      await noExisting(target.quarantine, quarantine.filter((entry) => !skipIds.has(entry.tripId)).map((entry) => entry.id), 'quarantine');
       for (const t of manifest.trips) {
         if (skipIds.has(t.id)) continue;
         throwIfAborted(options.signal);
@@ -949,6 +1084,17 @@ export async function restoreBackup(file, strategy = 'skip', inspected = null, o
           ? thumbData instanceof Blob ? thumbData : new Blob([thumbData], { type: 'image/jpeg' })
           : null;
         await target.media.put({ ...m, blob, thumb });
+      }
+      for (const entry of shareImports) {
+        if (skipIds.has(entry.tripId)) continue;
+        throwIfAborted(options.signal);
+        if (await target.shareImports.get(entry.fingerprint)) continue;
+        await target.shareImports.put(entry);
+      }
+      for (const entry of quarantine) {
+        if (skipIds.has(entry.tripId)) continue;
+        throwIfAborted(options.signal);
+        await target.quarantine.put(entry);
       }
       throwIfAborted(options.signal);
     });

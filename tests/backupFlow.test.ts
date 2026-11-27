@@ -66,7 +66,7 @@ describe('backup flow history', () => {
     expect(mocks.appendBackupHistory).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'export', status: 'exported', createdAt: Date.parse('2026-11-26T10:00:00.000Z'),
       filename: 'roametch-backup-20261126.trip', bytes: 6, encrypted: false,
-      backupFormat: 'localtrace-backup', tripSchema: 7, appVersion: '3.5.0',
+      backupFormat: 'localtrace-backup', tripSchema: 7, appVersion: '3.6.0',
       trips: 2, segments: 3, chunks: 4, waypoints: 5, media: 6, source: 'manual'
     }));
     expect(mocks.set).toHaveBeenCalledWith('lastBackupAt', Date.parse('2026-11-26T10:00:00.000Z'));
@@ -120,5 +120,17 @@ describe('backup flow history', () => {
       kind: 'restore', status: 'failed', filename: 'broken.trip', mediaChecked: 6, mediaFailed: 0
     }));
     expect(mocks.emit).not.toHaveBeenCalledWith('backup:restored', expect.anything());
+  });
+
+  it('shows actionable restore-limit guidance instead of a generic error', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const error = Object.assign(new Error(
+      'backup file too large: the restore limit is 256 MiB. Export selected trips to GPX; GPX does not include media or share-import history.'
+    ), { code: 'backup-limit-exceeded' });
+    mocks.inspectBackup.mockRejectedValueOnce(error);
+
+    await expect(restoreBackupFlow(new File(['backup'], 'large.trip'))).resolves.toBe(false);
+    expect(mocks.toast).toHaveBeenCalledWith(error.message, 'err', 7000);
+    expect(mocks.restoreBackup).not.toHaveBeenCalled();
   });
 });

@@ -74,7 +74,7 @@ test('trip thumbnails retry their basemap when connectivity returns', async ({ p
   await expect.poll(() => thumbnail.getAttribute('src')).not.toBe(offlineSrc);
 });
 
-test('GPS cleaning previews anomalies and restores the persistent original snapshot', async ({ page }) => {
+test('GPS repair explains categories, versions changes, and restores the persistent original snapshot', async ({ page }) => {
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await blockExternal(page);
@@ -82,7 +82,7 @@ test('GPS cleaning previews anomalies and restores the persistent original snaps
   await expect.poll(() => page.evaluate(() => Boolean((window as any).__lt))).toBe(true);
   const id = await page.evaluate(async () => {
     const { store } = (window as any).__lt;
-    const trip = await store.createTrip({ name: '可逆清洗验收', activity: 'drive', status: 'finished' });
+    const trip = await store.createTrip({ name: '可逆修复验收', activity: 'drive', status: 'finished' });
     const segment = await store.addSegment(trip.id);
     const point = (lon: number, t: number) => ({ lat: 30, lon: 120 + lon / 95_600, t, acc: 5, alt: 100 });
     const forward = [0, -100, -200, -300, -400].map((lon, i) => point(lon, i * 5_000));
@@ -95,25 +95,38 @@ test('GPS cleaning previews anomalies and restores the persistent original snaps
   }, id);
 
   const quality = page.locator('#view-analysis .quality-card');
-  await expect(quality).toContainText('发现 3 个可清理的异常点');
-  await expect(quality.locator('.gps-issue')).toHaveCount(1);
+  const repair = quality.locator('.gps-repair');
+  await expect(quality).toContainText('可解释轨迹修复');
+  await expect(repair.locator('.repair-metrics')).toContainText('修复前');
+  await expect(repair.locator('.repair-metrics')).toContainText('修复后');
+  await expect(repair.locator('.repair-metrics').getByRole('row', { name: /轨迹点\s+9\s+6/ })).toBeVisible();
+  const speed = repair.locator('.repair-category').filter({ hasText: '速度跳变' });
+  await expect(speed).toContainText('3 项');
+  await expect(speed.getByRole('checkbox')).toBeChecked();
   await expect(page.locator('#trip-detail')).toHaveAttribute('data-section', 'data');
-  await quality.locator('.gps-issue').click();
+  await speed.locator('.repair-reasons summary').click();
+  await expect(speed.locator('.repair-reason')).toHaveCount(3);
+  await speed.locator('.repair-reason').first().click();
   await expect(page.locator('#trip-detail')).toHaveAttribute('data-section', 'overview');
   await expect(page.locator('.analysis-map canvas').first()).toBeVisible();
   await expect(page.locator('.analysis-map .chart-hover-dot')).toBeVisible();
   await page.locator('#trip-detail button[data-section="data"]').click();
   await expect(page.locator('#trip-detail')).toHaveAttribute('data-section', 'data');
-  await quality.getByRole('button', { name: '清洗异常定位', exact: true }).click();
-  const cleanDialog = page.getByRole('dialog', { name: '清洗异常定位' });
-  await expect(cleanDialog).toContainText('独立快照');
-  await cleanDialog.getByRole('button', { name: '清洗异常定位', exact: true }).click();
+  await repair.locator('.repair-semantics summary').click();
+  await expect(repair.locator('.repair-semantics')).toContainText('不生成或插值定位点');
+  await repair.getByRole('button', { name: '应用选中修复', exact: true }).click();
+  const repairDialog = page.getByRole('dialog', { name: '确认轨迹修复' });
+  await expect(repairDialog).toContainText('独立快照');
+  await expect(repairDialog).toContainText('断点只分类、不插值');
+  await repairDialog.getByRole('button', { name: '应用选中修复', exact: true }).click();
   await expect(quality).toContainText('已保留清洗前快照');
+  await expect(quality).toContainText('修复版本对比');
   await expect.poll(() => page.evaluate(async (tripId) => {
     const full = await (window as any).__lt.store.loadTripFull(tripId);
     const snapshot = await (window as any).__lt.store.getTrackSnapshotSummary(tripId);
-    return { points: full.segments[0].points.length, snapshotPoints: snapshot?.points };
-  }, id)).toEqual({ points: 6, snapshotPoints: 9 });
+    const versions = await (window as any).__lt.store.listTrackRepairVersions(tripId);
+    return { points: full.segments[0].points.length, snapshotPoints: snapshot?.points, versions: versions.length };
+  }, id)).toEqual({ points: 6, snapshotPoints: 9, versions: 1 });
 
   await quality.getByRole('button', { name: '恢复原始轨迹', exact: true }).click();
   const restoreDialog = page.getByRole('dialog', { name: '恢复清洗前轨迹' });
@@ -124,6 +137,16 @@ test('GPS cleaning previews anomalies and restores the persistent original snaps
     return full.segments[0].points.length;
   }, id)).toBe(9);
   await expect(quality).toContainText('已保留清洗前快照');
+
+  await quality.locator('.repair-version-saved').getByRole('button', { name: '恢复此版本', exact: true }).click();
+  const versionDialog = page.getByRole('dialog', { name: /恢复修复版本 1/ });
+  await expect(versionDialog).toContainText('后来新增的记录段保持不变');
+  await versionDialog.getByRole('button', { name: '恢复此版本', exact: true }).click();
+  await expect.poll(() => page.evaluate(async (tripId) => {
+    const full = await (window as any).__lt.store.loadTripFull(tripId);
+    return full.segments[0].points.length;
+  }, id)).toBe(6);
+  await expect(quality).toContainText('修复版本对比');
   expect(pageErrors).toEqual([]);
 });
 

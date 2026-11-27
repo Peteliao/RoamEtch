@@ -9,6 +9,7 @@ import { on as busOn } from './core/events';
 import { isolateDamaged, createTrip, addSegment, appendPoints, addWaypoint } from './core/store';
 import * as storeCore from './core/store';
 import * as migrationCore from './core/migrations';
+import * as databaseCheckpointCore from './core/databaseCheckpoint';
 import * as recorderCore from './core/recorder';
 import * as simulationCore from './core/simulation';
 import * as rewalkCore from './core/rewalk';
@@ -193,13 +194,13 @@ async function boot() {
     needsUpgrade: preflight.needsUpgrade, skipped: preflight.skipped,
     issues: preflight.issues.reduce((sum, issue) => sum + issue.count, 0)
   });
-  await storeCore.db.open();
-  const migration = await migrationCore.verifyDatabaseMigration(storeCore.db, preflight);
+  const startup = await databaseCheckpointCore.openDatabaseWithMigrationRecovery(storeCore.db, preflight);
+  const migration = startup.migration;
 
   // Theme initialization reads the latest trip reference, so it must follow migration checks.
   await themeCore.initTheme();
 
-  diag('store', migration.skipped ? 'database preflight skipped' : migration.needsUpgrade ? 'database migrated' : 'database current', {
+  diag('store', startup.rolledBack ? 'database migration rolled back' : migration.skipped ? 'database preflight skipped' : migration.needsUpgrade ? 'database migrated' : 'database current', {
     fromVersion: migration.fromVersion, toVersion: migration.toVersion, verified: migration.verified
   });
   if (preflight.issues.length) {
@@ -209,7 +210,10 @@ async function boot() {
   // integrity: isolate damaged rows before UI loads
   try {
     const removed = await isolateDamaged();
-    if (removed) { diag('store', 'damaged rows isolated', { removed }); }
+    if (removed) {
+      diag('store', 'damaged rows isolated', { removed });
+      toast(t('boot.damagedIsolated', { n: removed }), 'warn', 7000);
+    }
   } catch (e) { console.warn('integrity check failed', e); }
 
   // fixes spilled synchronously on pagehide that never reached IndexedDB
@@ -224,7 +228,7 @@ async function boot() {
   document.getElementById('boot-splash')?.remove();
   diag('boot', 'app ready', { lang: navigator.language });
   // debug handle for diagnostics & acceptance testing (spec: debuggability)
-  window.__lt = { recorder: recorderCore, simulation: simulationCore, store: storeCore, migration: migrationCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, backup: backupCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore, updates: { show: showUpdateNotice } };
+  window.__lt = { recorder: recorderCore, simulation: simulationCore, store: storeCore, migration: migrationCore, databaseCheckpoint: databaseCheckpointCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, backup: backupCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore, updates: { show: showUpdateNotice } };
 
   // Live fragment imports. A meet invite takes precedence when both coexist.
   const hasMeetFragment = /[#&]meet=/.test(location.hash);
@@ -304,7 +308,9 @@ boot().catch((e) => {
       : e.code === 'invalid-trip-schema-version'
         ? t('boot.migrationInvalid')
         : t('boot.migrationFailed');
-    sub.textContent = `${title}\n${t('boot.migrationRecovery')}`;
+    const actionable = e.code?.startsWith('migration-checkpoint-') || e.code?.startsWith('migration-rollback-')
+      ? `\n${e.message}` : '';
+    sub.textContent = `${title}${actionable}\n${t('boot.migrationRecovery')}`;
   } else {
     sub.textContent = 'Boot failed: ' + (e?.message || e);
   }

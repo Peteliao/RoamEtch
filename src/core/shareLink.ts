@@ -68,13 +68,24 @@ function buildTracks(segments, activity) {
   return tracks;
 }
 
+function sampleForPreview(points, limit) {
+  if (points.length <= limit) return points;
+  const sampled = [points[0]];
+  const step = (points.length - 1) / (limit - 1);
+  for (let i = 1; i < limit - 1; i++) sampled.push(points[Math.round(i * step)]);
+  sampled.push(points[points.length - 1]);
+  return sampled;
+}
+
 function capTracks(tracks) {
   const maxPoints = Math.max(260, tracks.length * 2);
+  const previewLimit = Math.max(256, Math.min(8192, maxPoints * 16));
+  const bounded = tracks.map((points) => sampleForPreview(points, previewLimit));
   let tolerance = 20;
-  let simplified = tracks.map((points) => simplify(points, tolerance));
+  let simplified = bounded.map((points) => simplify(points, tolerance));
   while (simplified.flat().length > maxPoints && tolerance < 1280) {
     tolerance *= 2;
-    simplified = tracks.map((points) => simplify(points, tolerance));
+    simplified = bounded.map((points) => simplify(points, tolerance));
   }
   if (simplified.flat().length <= maxPoints) return simplified;
   const capped = [];

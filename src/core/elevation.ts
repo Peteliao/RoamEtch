@@ -62,27 +62,40 @@ async function flushQueue() {
   if (queue.length) timer = setTimeout(flushQueue, BATCH_WINDOW);
 }
 
-async function fetchBatch(coords) {
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw signal.reason || new DOMException('Aborted', 'AbortError');
+}
+
+async function fetchBatch(coords, signal?: AbortSignal) {
+  throwIfAborted(signal);
   const ctrl = new AbortController();
+  const abort = () => ctrl.abort(signal?.reason);
+  signal?.addEventListener('abort', abort, { once: true });
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
   try {
     const base = elevationEndpoint();
     const sep = base.includes('?') ? '&' : '?';
     const url = `${base}${sep}latitude=${coords.map((c) => c[0].toFixed(5)).join(',')}&longitude=${coords.map((c) => c[1].toFixed(5)).join(',')}`;
     const res = await fetch(url, { signal: ctrl.signal });
+    throwIfAborted(signal);
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
+    throwIfAborted(signal);
     const arr = data.elevation;
     if (!Array.isArray(arr)) throw new Error('bad payload');
     return arr;
   } finally {
     clearTimeout(t);
+    signal?.removeEventListener('abort', abort);
   }
 }
 
-async function applyAltitudeFills(tripId, chunkId, fills) {
+async function applyAltitudeFills(tripId, chunkId, fills, signal?: AbortSignal) {
+  throwIfAborted(signal);
   return db.transaction('rw', [db.trackChunks, db.trips], async () => {
+    throwIfAborted(signal);
     const chunk = await db.trackChunks.get(chunkId);
+    throwIfAborted(signal);
     if (!chunk || chunk.tripId !== tripId || !Array.isArray(chunk.points)) return 0;
     let filled = 0;
     const points = chunk.points.map((point, index) => {
@@ -94,7 +107,9 @@ async function applyAltitudeFills(tripId, chunkId, fills) {
       return { ...point, alt: fill.alt, altSrc: fill.src };
     });
     if (!filled) return 0;
+    throwIfAborted(signal);
     await db.trackChunks.put({ ...chunk, points });
+    throwIfAborted(signal);
     await updateTrip(tripId, { statsCache: null });
     return filled;
   });
@@ -124,15 +139,19 @@ export async function patchFlushedAltitude(segmentId, point) {
 }
 
 /** Backfill null-altitude points of a trip in batches (after edits / back online). */
-export async function backfillTripAltitudes(tripId, { onProgress }: any = {}) {
+export async function backfillTripAltitudes(tripId, { onProgress, signal }: any = {}) {
+  throwIfAborted(signal);
   if (isServiceOffline() || !navigator.onLine) return 0;
   let filled = 0;
   const segments = await db.segments.where('tripId').equals(tripId).sortBy('index');
+  throwIfAborted(signal);
   for (const segment of segments) {
     let nextSeq = 0;
     while (true) {
+      throwIfAborted(signal);
       const chunk = await db.trackChunks.where('[segmentId+seq]')
         .between([segment.id, nextSeq], [segment.id, Number.MAX_SAFE_INTEGER]).first();
+      throwIfAborted(signal);
       if (!chunk) break;
       if (Array.isArray(chunk.points)) {
         const missing = chunk.points.map((p, i) => ({ p, i })).filter(({ p }) => p && p.alt == null);
@@ -141,14 +160,17 @@ export async function backfillTripAltitudes(tripId, { onProgress }: any = {}) {
           const fills = new Map();
           const needFetch = [];
           for (const m of slice) {
+            throwIfAborted(signal);
             const cached = await elevCacheGet(m.p.lat, m.p.lon);
+            throwIfAborted(signal);
             if (cached != null) {
               fills.set(m.i, { lat: m.p.lat, lon: m.p.lon, t: m.p.t, alt: cached, src: 'cache' });
             } else needFetch.push(m);
           }
           if (needFetch.length) {
             try {
-              const els = await fetchBatch(needFetch.map((m) => [m.p.lat, m.p.lon]));
+              const els = await fetchBatch(needFetch.map((m) => [m.p.lat, m.p.lon]), signal);
+              throwIfAborted(signal);
               needFetch.forEach((m, i) => {
                 const el = els[i];
                 if (el != null && isFinite(el)) {
@@ -156,15 +178,20 @@ export async function backfillTripAltitudes(tripId, { onProgress }: any = {}) {
                   elevCachePut(m.p.lat, m.p.lon, el);
                 }
               });
-            } catch { /* keep null — never fabricate */ }
+            } catch (error) {
+              if (signal?.aborted) throw error;
+            }
           }
-          if (fills.size) filled += await applyAltitudeFills(tripId, chunk.id, fills);
+          throwIfAborted(signal);
+          if (fills.size) filled += await applyAltitudeFills(tripId, chunk.id, fills, signal);
+          throwIfAborted(signal);
           onProgress?.(filled);
         }
       }
       nextSeq = chunk.seq + 1;
     }
   }
+  throwIfAborted(signal);
   if (filled) emit('elev:backfilled', { tripId, filled });
   return filled;
 }

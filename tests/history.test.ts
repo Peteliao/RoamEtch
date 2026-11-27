@@ -11,6 +11,14 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function scopedAction(label: string, tripId: string, session: number) {
+  return {
+    label, tripId, session,
+    undo: vi.fn().mockResolvedValue(undefined),
+    redo: vi.fn().mockResolvedValue(undefined)
+  };
+}
+
 beforeEach(() => {
   clearHistory();
   emit.mockClear();
@@ -147,5 +155,68 @@ describe('edit history', () => {
 
     expect(first.undo).toHaveBeenCalledTimes(1);
     expect(second.undo).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards stale undo actions from another trip or session without executing them', async () => {
+    const current = scopedAction('current', 'a', 2);
+    const staleSession = scopedAction('stale-session', 'a', 1);
+    const staleTrip = scopedAction('stale-trip', 'b', 2);
+    pushAction(current);
+    pushAction(staleSession);
+    pushAction(staleTrip);
+
+    await expect(undo({ tripId: 'a', session: 2 })).resolves.toBe(true);
+
+    expect(current.undo).toHaveBeenCalledTimes(1);
+    expect(staleSession.undo).not.toHaveBeenCalled();
+    expect(staleTrip.undo).not.toHaveBeenCalled();
+    expect(state()).toEqual({ canUndo: false, canRedo: true, depth: 0 });
+  });
+
+  it('clears an undo stack containing only actions outside the requested scope', async () => {
+    const staleSession = scopedAction('stale-session', 'a', 1);
+    const staleTrip = scopedAction('stale-trip', 'b', 2);
+    pushAction(staleSession);
+    pushAction(staleTrip);
+
+    await expect(undo({ tripId: 'a', session: 2 })).resolves.toBe(false);
+
+    expect(staleSession.undo).not.toHaveBeenCalled();
+    expect(staleTrip.undo).not.toHaveBeenCalled();
+    expect(state()).toEqual({ canUndo: false, canRedo: false, depth: 0 });
+  });
+
+  it('discards stale redo actions from another trip or session without executing them', async () => {
+    const current = scopedAction('current', 'a', 2);
+    const staleTrip = scopedAction('stale-trip', 'b', 2);
+    const staleSession = scopedAction('stale-session', 'a', 1);
+    for (const action of [staleSession, staleTrip, current]) pushAction(action);
+    await undo();
+    await undo();
+    await undo();
+    vi.clearAllMocks();
+
+    await expect(redo({ tripId: 'a', session: 2 })).resolves.toBe(true);
+
+    expect(current.redo).toHaveBeenCalledTimes(1);
+    expect(staleSession.redo).not.toHaveBeenCalled();
+    expect(staleTrip.redo).not.toHaveBeenCalled();
+    expect(state()).toEqual({ canUndo: true, canRedo: false, depth: 1 });
+  });
+
+  it('clears a redo stack containing only actions outside the requested scope', async () => {
+    const staleTrip = scopedAction('stale-trip', 'b', 2);
+    const staleSession = scopedAction('stale-session', 'a', 1);
+    pushAction(staleTrip);
+    pushAction(staleSession);
+    await undo();
+    await undo();
+    vi.clearAllMocks();
+
+    await expect(redo({ tripId: 'a', session: 2 })).resolves.toBe(false);
+
+    expect(staleSession.redo).not.toHaveBeenCalled();
+    expect(staleTrip.redo).not.toHaveBeenCalled();
+    expect(state()).toEqual({ canUndo: false, canRedo: false, depth: 0 });
   });
 });

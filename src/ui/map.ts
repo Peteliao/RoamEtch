@@ -7,11 +7,15 @@ import { toDisplay, fromDisplay } from '../core/coords';
 import { getBasemap, buildRasterStyle, buildVectorStyle, availableBasemaps, defaultBasemapId, vectorBgColor } from '../core/providers';
 import { isOfflineSim, regionState } from '../core/region';
 import { simplify, haversine } from '../core/geo';
+import { simplifyAsync } from '../core/workerBridge';
 import { on, emit } from '../core/events';
 import { diag } from '../core/diag';
 import { t } from '../core/i18n';
 import { WP_ICONS } from '../core/waypointMeta';
 import { meetProximityZoom, meetRoleColor } from '../core/meetVisuals';
+
+type RepairOverlayLine = [number, number][];
+type RepairOverlay = { before?: RepairOverlayLine[]; after?: RepairOverlayLine[] };
 
 const LIVE_FILL = 'rgba(90,167,240,0.14)';
 const LIVE_UPDATE_MS = 180;
@@ -25,6 +29,20 @@ function cssVar(name: string, fallback: string) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 }
 
+function freshMeetPosition(peer: any) {
+  return peer?.positionStatus === 'fresh' && peer?.networkStatus !== 'left';
+}
+
+function meetMarkerStatus(peer: any) {
+  const parts = [];
+  if (peer?.networkStatus === 'offline') parts.push(t('meet.networkOfflineShort'));
+  if (peer?.networkStatus === 'left') parts.push(t('meet.networkLeftShort'));
+  if (peer?.positionStatus === 'weak') parts.push(t('meet.positionWeakShort'));
+  else if (peer?.positionStatus === 'stale') parts.push(t('meet.positionStaleShort'));
+  else if (peer?.positionStatus === 'paused') parts.push(t('meet.positionPausedShort'));
+  return parts.join(' · ');
+}
+
 export class TrackMap {
   declare container: HTMLElement;
   declare opts: any;
@@ -32,6 +50,7 @@ export class TrackMap {
   declare basemapId: string | null;
   declare segments: any[];
   declare splitParts: any[];
+  declare repairOverlay: RepairOverlay | null;
   declare waypoints: any[];
   declare editMode: boolean;
   declare follow: boolean;
@@ -54,6 +73,10 @@ export class TrackMap {
   declare _moveTimer: any;
   declare destroyed: boolean;
   declare _renderingPaused: boolean;
+  declare _trackRenderSeq: number;
+  declare _trackDataVersion: number;
+  declare _trackRenderKey: string;
+  declare _trackRenderPromise: Promise<Array<{ id: any; points: any[] }>> | null;
   declare _pausedRepaintDescriptor: PropertyDescriptor | undefined;
   declare map: any;
   declare _offRegion: any;
@@ -83,6 +106,7 @@ export class TrackMap {
     this.basemapId = null;
     this.segments = [];          // [{id, points}] WGS-84
     this.splitParts = [];
+    this.repairOverlay = null;
     this.waypoints = [];
     this.editMode = false;
     this.follow = false;
@@ -107,6 +131,10 @@ export class TrackMap {
     this._liveDirty = false;
     this.destroyed = false;
     this._renderingPaused = false;
+    this._trackRenderSeq = 0;
+    this._trackDataVersion = 0;
+    this._trackRenderKey = '';
+    this._trackRenderPromise = null;
     this._pausedRepaintDescriptor = undefined;
     this._meetAutoZoomReady = false;
     this._meetManualCameraUntil = 0;
@@ -250,6 +278,9 @@ export class TrackMap {
       set('live-casing', 'line-color', cssVar('--track-casing', '#06251d'));
       set('meet-route-case', 'line-color', cssVar('--track-casing', '#06251d'));
       set('track-line', 'line-color', accent);
+      set('repair-before', 'line-color', cssVar('--warn', '#f2b14a'));
+      set('repair-after-case', 'line-color', cssVar('--info', '#5aa7f0'));
+      set('repair-after', 'line-color', cssVar('--info', '#5aa7f0'));
       set('split-highlight', 'line-color', cssVar('--warn', '#f2b14a'));
       set('live-line', 'line-color', accent);
       set('nav-line', 'line-color', cssVar('--warn', '#f2b14a'));
@@ -334,6 +365,9 @@ export class TrackMap {
     if (!m.getSource('split-highlight')) {
       m.addSource('split-highlight', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     }
+    for (const source of ['repair-before', 'repair-after']) {
+      if (!m.getSource(source)) m.addSource(source, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    }
     if (!m.getSource('live')) {
       m.addSource('live', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     }
@@ -355,6 +389,9 @@ export class TrackMap {
     if (!m.getLayer('gap-line')) m.addLayer({ id: 'gap-line', type: 'line', source: 'gaps', paint: { 'line-color': cssVar('--track-gap', '#93a1ac'), 'line-width': 1.6, 'line-dasharray': [2, 2.4], 'line-opacity': 0.65 } });
     if (!m.getLayer('track-casing')) m.addLayer({ id: 'track-casing', type: 'line', source: 'track', paint: { 'line-color': casing, 'line-width': 7, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('track-line')) m.addLayer({ id: 'track-line', type: 'line', source: 'track', paint: { 'line-color': accent, 'line-width': 4 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    if (!m.getLayer('repair-before')) m.addLayer({ id: 'repair-before', type: 'line', source: 'repair-before', paint: { 'line-color': cssVar('--warn', '#f2b14a'), 'line-width': 2.5, 'line-opacity': 0.95, 'line-dasharray': [1.2, 1.6] }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    if (!m.getLayer('repair-after-case')) m.addLayer({ id: 'repair-after-case', type: 'line', source: 'repair-after', paint: { 'line-color': cssVar('--info', '#5aa7f0'), 'line-width': 7, 'line-opacity': 0.28 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
+    if (!m.getLayer('repair-after')) m.addLayer({ id: 'repair-after', type: 'line', source: 'repair-after', paint: { 'line-color': cssVar('--info', '#5aa7f0'), 'line-width': 3.5, 'line-opacity': 0.95 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('split-highlight')) m.addLayer({ id: 'split-highlight', type: 'line', source: 'split-highlight', paint: { 'line-color': cssVar('--warn', '#f2b14a'), 'line-width': 7, 'line-opacity': 0.9 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('nav-line')) m.addLayer({ id: 'nav-line', type: 'line', source: 'nav', paint: { 'line-color': cssVar('--warn', '#f2b14a'), 'line-width': 3, 'line-opacity': 0.9, 'line-dasharray': [1.2, 1.6] }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('live-casing')) m.addLayer({ id: 'live-casing', type: 'line', source: 'live', paint: { 'line-color': casing, 'line-width': 7, 'line-opacity': 0.55 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
@@ -365,7 +402,10 @@ export class TrackMap {
         paint: {
           'line-color': ['coalesce', ['get', 'color'], accent],
           'line-width': 2,
-          'line-opacity': ['case', ['get', 'stale'], 0.35, 0.78],
+          'line-opacity': ['case',
+            ['==', ['get', 'positionStatus'], 'fresh'], 0.78,
+            ['==', ['get', 'positionStatus'], 'weak'], 0.58,
+            0.3],
           'line-dasharray': [2, 2.6]
         },
         layout: { 'line-cap': 'round', 'line-join': 'round' }
@@ -374,12 +414,17 @@ export class TrackMap {
     if (!m.getLayer('meet-route-case')) m.addLayer({ id: 'meet-route-case', type: 'line', source: 'meet-route', paint: { 'line-color': casing, 'line-width': 8, 'line-opacity': 0.65 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     if (!m.getLayer('meet-route-line')) m.addLayer({ id: 'meet-route-line', type: 'line', source: 'meet-route', paint: { 'line-color': cssVar('--info', '#5aa7f0'), 'line-width': 4.5, 'line-opacity': 0.95 }, layout: { 'line-cap': 'round', 'line-join': 'round' } });
     this._applyMeetData();
+    this.setRepairPreview(this.repairOverlay);
   }
 
   /** segments: [{id, points:[{lat,lon,...}]}] in WGS-84 */
   setTrackData(segments, waypoints = []) {
     this.segments = segments;
+    this._trackDataVersion++;
+    this._trackRenderKey = '';
+    this._trackRenderPromise = null;
     this.splitParts = [];
+    this.repairOverlay = null;
     this.waypoints = waypoints;
     this._indexMaps.clear();
     for (const s of segments) {
@@ -388,6 +433,23 @@ export class TrackMap {
       this._indexMaps.set(s.id, im);
     }
     this.redraw();
+    this.setRepairPreview(null);
+  }
+
+  setRepairPreview(overlay: RepairOverlay | null) {
+    this.repairOverlay = overlay || null;
+    const features = (lines: RepairOverlayLine[] = []) => lines
+      .filter((line) => Array.isArray(line) && line.length >= 2)
+      .map((line) => ({
+        type: 'Feature',
+        properties: {},
+        geometry: {
+          type: 'LineString',
+          coordinates: line.map(([lon, lat]) => toDisplay(lon, lat, this.coordSystem))
+        }
+      }));
+    this.map?.getSource('repair-before')?.setData({ type: 'FeatureCollection', features: features(overlay?.before) });
+    this.map?.getSource('repair-after')?.setData({ type: 'FeatureCollection', features: features(overlay?.after) });
   }
 
   _displayCoords(points) {
@@ -421,16 +483,29 @@ export class TrackMap {
 
   redraw() {
     if (!this.map || this.destroyed) return;
-    const doDraw = () => {
-      const zoom = this.map.getZoom();
-      const tol = Math.max(1.5, 360 / Math.pow(2, zoom) * 111320 / 256 * 1.2); // ~1.2 px in metres
+    const renderSeq = ++this._trackRenderSeq;
+    const segments = this.segments;
+    const zoom = this.map.getZoom();
+    const tol = Math.max(1.5, 360 / Math.pow(2, zoom) * 111320 / 256 * 1.2); // ~1.2 px in metres
+    const renderKey = `${this._trackDataVersion}:${tol.toFixed(6)}`;
+    let renderedPromise = this._trackRenderPromise;
+    if (!renderedPromise || this._trackRenderKey !== renderKey) {
+      this._trackRenderKey = renderKey;
+      renderedPromise = Promise.all(segments.map(async (seg) => ({
+        id: seg.id,
+        points: seg.points.length > 400 ? await simplifyAsync(seg.points, tol) : seg.points
+      })));
+      this._trackRenderPromise = renderedPromise;
+    }
+    const doDraw = async () => {
+      const rendered = await renderedPromise;
+      if (renderSeq !== this._trackRenderSeq || this.destroyed || !this.map.getSource('track')) return;
       const feats = [];
       const gapFeats = [];
       let prevEnd = null;
-      for (const seg of this.segments) {
+      for (const seg of rendered) {
         if (!seg.points.length) continue;
-        const pts = seg.points.length > 400 ? simplify(seg.points, tol) : seg.points;
-        const coords = this._displayCoords(pts);
+        const coords = this._displayCoords(seg.points);
         feats.push({ type: 'Feature', properties: { seg: seg.id }, geometry: { type: 'LineString', coordinates: coords } });
         const first = coords[0], last = coords[coords.length - 1];
         if (prevEnd) gapFeats.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [prevEnd, first] } });
@@ -442,8 +517,14 @@ export class TrackMap {
       this._renderWaypoints();
       if (this.editMode) this._scheduleVertices();
     };
-    if (this.map.isStyleLoaded()) doDraw();
-    else this.map.once('style.load', doDraw);
+    const runDraw = () => {
+      void doDraw().catch((error) => {
+        if (this._trackRenderKey === renderKey) this._trackRenderPromise = null;
+        diag('map', 'track render failed', { msg: String(error?.message || error).slice(0, 200) });
+      });
+    };
+    if (this.map.isStyleLoaded()) runDraw();
+    else this.map.once('style.load', runDraw);
   }
 
   /** Repaint waypoint markers only (mid-recording adds, without resetting the live track). */
@@ -620,8 +701,9 @@ export class TrackMap {
   clearPosition() {
     if (this.posMarker) {
       const node = this.posMarker.getElement();
-      node.classList.remove('meet-self');
+      node.classList.remove('meet-self', 'meet-self-stale', 'meet-self-weak', 'meet-self-paused');
       node.style.removeProperty('--self-color');
+      node.removeAttribute('title');
     }
     this.posMarker?.remove();
     this.posMarker = null;
@@ -630,6 +712,19 @@ export class TrackMap {
   }
 
   // ---------- live meetup ----------
+  _styleMeetSelf() {
+    const node = this.posMarker?.getElement();
+    if (!node || !this.meetSelf) return;
+    const status = this.meetSelf.positionStatus;
+    node.classList.toggle('meet-self-stale', status === 'stale');
+    node.classList.toggle('meet-self-weak', status === 'weak');
+    node.classList.toggle('meet-self-paused', status === 'paused');
+    if (status === 'stale') node.title = t('meet.positionStale');
+    else if (status === 'weak') node.title = t('meet.positionWeak');
+    else if (status === 'paused') node.title = t('meet.positionPaused');
+    else node.removeAttribute('title');
+  }
+
   setMeetData({ self = null, peers = [], route = null }: { self?: any; peers?: any[]; route?: any } = {}) {
     this.meetSelf = self;
     this.meetPeers = Array.isArray(peers) ? peers : [];
@@ -642,6 +737,7 @@ export class TrackMap {
       const node = this.posMarker?.getElement();
       node?.classList.add('meet-self');
       node?.style.setProperty('--self-color', color);
+      this._styleMeetSelf();
     } else {
       this.clearPosition();
     }
@@ -669,7 +765,7 @@ export class TrackMap {
     if (!this.map || this.destroyed) return;
     const alive = new Set<string>();
     for (const p of this.meetPeers) {
-      if (p.lat == null || p.lon == null) continue;
+      if (p.lat == null || p.lon == null || p.networkStatus === 'left') continue;
       alive.add(p.id);
       let entry = this.meetMarkers.get(p.id);
       if (!entry) {
@@ -692,8 +788,15 @@ export class TrackMap {
       }
       entry.peer = p;
       entry.node.classList.toggle('stale', !!p.stale);
+      entry.node.classList.toggle('network-offline', p.networkStatus === 'offline');
+      entry.node.classList.toggle('position-stale', p.positionStatus === 'stale');
+      entry.node.classList.toggle('position-weak', p.positionStatus === 'weak');
+      entry.node.classList.toggle('position-paused', p.positionStatus === 'paused');
       entry.node.style.setProperty('--peer', /^#[0-9a-f]{6}$/i.test(String(p.color)) ? p.color : '#2bcda7');
-      entry.tag.textContent = p.name || '';
+      const status = meetMarkerStatus(p);
+      entry.tag.textContent = p.name + (status ? ` · ${status}` : '');
+      entry.node.title = [p.name, status].filter(Boolean).join(' · ');
+      entry.node.setAttribute('aria-label', entry.node.title);
       const [lon, lat] = toDisplay(p.lon, p.lat, this.coordSystem);
       entry.marker.setLngLat([lon, lat] as [number, number]);
     }
@@ -707,14 +810,19 @@ export class TrackMap {
     if (!source) return;
     const s = this.meetSelf;
     const features = [];
-    if (s?.hasFix && s.lat != null && s.lon != null) {
+    if (freshMeetPosition(s)) {
       const [slon, slat] = toDisplay(s.lon, s.lat, this.coordSystem);
       for (const p of this.meetPeers) {
-        if (p.lat == null || p.lon == null) continue;
+        if (p.lat == null || p.lon == null || p.networkStatus === 'left') continue;
         const [plon, plat] = toDisplay(p.lon, p.lat, this.coordSystem);
         features.push({
           type: 'Feature',
-          properties: { color: /^#[0-9a-f]{6}$/i.test(String(p.color)) ? p.color : '#2bcda7', stale: !!p.stale },
+          properties: {
+            color: /^#[0-9a-f]{6}$/i.test(String(p.color)) ? p.color : '#2bcda7',
+            stale: !!p.stale,
+            networkStatus: p.networkStatus,
+            positionStatus: p.positionStatus
+          },
           geometry: { type: 'LineString', coordinates: [[slon, slat], [plon, plat]] }
         });
       }
@@ -740,6 +848,7 @@ export class TrackMap {
     if (!this.map || this.destroyed) return;
     if (this.meetSelf?.hasFix && this.meetSelf.lat != null) {
       this.updatePosition(this.meetSelf.lat, this.meetSelf.lon, this.meetSelf.acc, this.meetSelf.heading);
+      this._styleMeetSelf();
     }
     this._renderMeetMarkers();
     this._applyMeetLinks();
@@ -749,11 +858,9 @@ export class TrackMap {
   _updateMeetProximity() {
     if (!this.map || this.destroyed || !this._meetAutoZoomReady) return;
     const self = this.meetSelf;
-    if (!self?.hasFix || self.lat == null || self.lon == null) return;
+    if (!freshMeetPosition(self) || self.lat == null || self.lon == null) return;
     if (this.map.isMoving() || Date.now() < this._meetManualCameraUntil) return;
-    const candidates = this.meetPeers.filter((p) => !p.stale && p.lat != null && p.lon != null);
-    const allCandidates = this.meetPeers.filter((p) => p.lat != null && p.lon != null);
-    const pool = candidates.length ? candidates : allCandidates;
+    const pool = this.meetPeers.filter((p) => freshMeetPosition(p) && p.lat != null && p.lon != null);
     if (!pool.length) return;
     const nearest = (a, b) => haversine(self.lat, self.lon, a.lat, a.lon) - haversine(self.lat, self.lon, b.lat, b.lon);
     const target = self.isHost ? [...pool].sort(nearest)[0] : pool.find((p) => p.isHost) || [...pool].sort(nearest)[0];
@@ -782,9 +889,9 @@ export class TrackMap {
     this._meetLastDistance = Number.NaN;
     this._meetLastSelf = null;
     const pts = [];
-    if (this.meetSelf?.hasFix && this.meetSelf.lat != null) pts.push(toDisplay(this.meetSelf.lon, this.meetSelf.lat, this.coordSystem));
+    if (freshMeetPosition(this.meetSelf) && this.meetSelf.lat != null) pts.push(toDisplay(this.meetSelf.lon, this.meetSelf.lat, this.coordSystem));
     for (const p of this.meetPeers) {
-      if (p.lat != null && p.lon != null) pts.push(toDisplay(p.lon, p.lat, this.coordSystem));
+      if (freshMeetPosition(p) && p.lat != null && p.lon != null) pts.push(toDisplay(p.lon, p.lat, this.coordSystem));
     }
     if (!pts.length) return;
     this.follow = false;

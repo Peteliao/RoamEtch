@@ -1,10 +1,13 @@
+import 'fake-indexeddb/auto';
+import Dexie from 'dexie';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Zip, ZipDeflate, UnzipInflate, strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { sha256Hex, stableStringify } from '../src/core/integrity';
+import { DATABASE_MIGRATIONS } from '../src/core/migrations';
 
 const mock = vi.hoisted(() => {
-  const names = ['trips', 'segments', 'trackChunks', 'trackSnapshots', 'waypoints', 'media', 'elevCache', 'shareImports'];
-  const exportNames = names.slice(0, -1);
+  const names = ['trips', 'segments', 'trackChunks', 'trackSnapshots', 'waypoints', 'media', 'elevCache', 'shareImports', 'quarantine'];
+  const exportNames = names.slice();
   const initial = {
     trips: [{ id: 't1', name: 'Test trip' }],
     segments: [{ id: 's1', tripId: 't1', index: 0, points: [] }],
@@ -13,7 +16,8 @@ const mock = vi.hoisted(() => {
     waypoints: [],
     media: [{ id: 'm1', tripId: 't1', blob: new Blob([new Uint8Array([1, 2, 3])]) }],
     elevCache: [],
-    shareImports: []
+    shareImports: [],
+    quarantine: []
   };
   let state;
   let failPut = null;
@@ -41,6 +45,7 @@ const mock = vi.hoisted(() => {
         return [...state[name].values()];
       },
       bulkGet: async (ids) => ids.map((id) => state[name].get(id)),
+      get: async (id) => state[name].get(id),
       put: async (row) => {
         if (failPut && failPut.table === name && failPut.match(row)) {
           failPut = null;
@@ -157,22 +162,39 @@ function descriptorZipFile(files: Record<string, Uint8Array>) {
 }
 
 async function historicalManifest(version: number) {
+  const counts: Record<string, number> = { trips: 1, waypoints: 1, media: 1 };
+  if (version >= 2) Object.assign(counts, { segments: 1, trackChunks: 1 });
+  if (version >= 3) counts.trackSnapshots = 1;
+  if (version >= 4) Object.assign(counts, { elevCache: 1, shareImports: 1, quarantine: 1 });
   const manifest: any = validManifest({
     version,
+    exportedAt: '2024-01-02T03:04:05.000Z',
+    counts,
     trips: [{ id: 'legacy-trip', name: 'Legacy trip', activity: 'hike', status: 'finished' }],
     segments: [{ id: 'legacy-segment', tripId: 'legacy-trip', index: 0, startTime: 1000, endTime: 2000 }],
     trackChunks: [{
       id: 'legacy-chunk', tripId: 'legacy-trip', segmentId: 'legacy-segment', seq: 0,
       points: [{ lat: 30, lon: 120, t: 1000 }, { lat: 30.01, lon: 120.01, t: 2000 }]
     }],
-    waypoints: [{ id: 'legacy-waypoint', tripId: 'legacy-trip', lat: 30, lon: 120, time: 1500, mediaIds: [] }],
+    waypoints: [{
+      id: 'legacy-waypoint', tripId: 'legacy-trip', lat: 30, lon: 120, time: 1500, mediaIds: ['legacy-media']
+    }],
+    mediaMeta: [{ id: 'legacy-media', tripId: 'legacy-trip', width: 2, height: 2, createdAt: 1600 }],
     elevCache: [{ key: '30.000,120.000', elevation: 100, fetchedAt: 1 }],
-    ...(version === 3 ? {
+    ...(version >= 3 ? {
       tripSchemaVersion: 1,
       trackSnapshots: [{
         id: 'legacy-snapshot', tripId: 'legacy-trip', segmentId: 'legacy-segment', segmentIndex: 0,
         seq: 0, createdAt: 3000,
         points: [{ lat: 30, lon: 120, t: 1000 }, { lat: 30.01, lon: 120.01, t: 2000 }]
+      }]
+    } : {}),
+    ...(version >= 4 ? {
+      shareImports: [{ fingerprint: 'legacy-share', tripId: 'legacy-trip', createdAt: 4000 }],
+      quarantine: [{
+        id: 'legacy-quarantine', batchId: 'legacy-batch', createdAt: 4001, sourceTable: 'trackChunks',
+        rowId: 'lost-chunk', reason: 'orphan-track-chunk',
+        row: { id: 'lost-chunk', tripId: 'missing-trip', segmentId: 'missing-segment', seq: 0, points: [] }
       }]
     } : {})
   });
@@ -193,11 +215,7 @@ function patternedBytes(length: number, seed = 1) {
   return bytes;
 }
 
-async function archiveWithMedia(media: { id: string; data: Uint8Array; thumb?: Uint8Array }[]) {
-  const manifest: any = validManifest({
-    trips: [{ id: 't1' }],
-    mediaMeta: media.map(({ id }) => ({ id, tripId: 't1', width: 100, height: 80, createdAt: 1 }))
-  });
+async function archiveWithManifest(manifest: any, media: { id: string; data: Uint8Array; thumb?: Uint8Array }[]) {
   const entries: Record<string, Uint8Array> = {};
   const hashes = {};
   for (const item of media) {
@@ -210,10 +228,41 @@ async function archiveWithMedia(media: { id: string; data: Uint8Array; thumb?: U
       hashes[thumbPath] = { bytes: item.thumb.byteLength, sha256: await sha256Hex(item.thumb) };
     }
   }
-  const { integrity, ...payload } = manifest;
-  manifest.integrity = { algo: 'SHA-256', payload: await sha256Hex(stableStringify(payload)), files: hashes };
+  if (manifest.version >= 2) {
+    const { integrity, ...payload } = manifest;
+    manifest.integrity = {
+      algo: 'SHA-256',
+      payload: integrity?.payload ?? await sha256Hex(stableStringify(payload)),
+      files: hashes
+    };
+  }
   entries['manifest.json'] = strToU8(JSON.stringify(manifest));
   return new Blob([zipSync(entries, { level: 0 })]);
+}
+
+async function archiveWithMedia(media: { id: string; data: Uint8Array; thumb?: Uint8Array }[]) {
+  const manifest: any = validManifest({
+    trips: [{ id: 't1' }],
+    mediaMeta: media.map(({ id }) => ({ id, tripId: 't1', width: 100, height: 80, createdAt: 1 }))
+  });
+  return archiveWithManifest(manifest, media);
+}
+
+// Backup v1-v3 mirror released manifests; v4 is the current ledger/quarantine format.
+async function historicalArchive(version: number) {
+  const blob = await archiveWithManifest(await historicalManifest(version), [{
+    id: 'legacy-media', data: patternedBytes(257, 0x4a), thumb: patternedBytes(73, 0x54)
+  }]);
+  return asFile(blob);
+}
+
+function currentV4Database(name: string) {
+  const database = new Dexie(name) as any;
+  for (const migration of DATABASE_MIGRATIONS) {
+    const version = database.version(migration.version).stores(migration.stores);
+    if (migration.upgrade) version.upgrade(migration.upgrade);
+  }
+  return database;
 }
 
 function trackedFile(bytes: Uint8Array, { chunkSize = 4093, onRead = null } = {}) {
@@ -285,7 +334,7 @@ describe('backup integrity', () => {
     const backup = await exportBackup();
     expect(backup.tripCount).toBe(1);
     const inspected = await inspectBackup(asFile(backup.blob));
-    expect(inspected.manifest.version).toBe(3);
+    expect(inspected.manifest.version).toBe(4);
     expect(inspected.integrity.ok).toBe(true);
     expect(inspected.integrity.checked).toBe(1);
     expect(inspected.manifest.counts.media).toBe(1);
@@ -300,7 +349,7 @@ describe('backup integrity', () => {
     expect(mock.db.__readsInTransaction()).toHaveLength(tableNames.length);
   });
 
-  it('round-trips original track snapshots in version 3 backups', async () => {
+  it('round-trips original track snapshots in version 4 backups', async () => {
     mock.db.__state().trackSnapshots.set('snapshot-1', {
       id: 'snapshot-1', tripId: 't1', segmentId: 's1', segmentIndex: 0,
       seq: 0, createdAt: 123, points: [{ lat: 30, lon: 120, t: 1 }]
@@ -310,6 +359,150 @@ describe('backup integrity', () => {
     expect(inspected.manifest.trackSnapshots).toHaveLength(1);
     await restoreBackup(asFile(backup.blob), 'overwrite', inspected);
     expect(mock.db.__state().trackSnapshots.get('snapshot-1')?.points).toHaveLength(1);
+  });
+
+  it('round-trips raw and repair snapshots with independent sequence ledgers', async () => {
+    const analysis = {
+      snapshotId: 'repair-1', kind: 'repair', repairVersion: 1, createdAt: 123,
+      sourceUpdatedAt: 100, previewId: 'preview-1', sourceFingerprint: 'fingerprint-1',
+      selectedCategories: ['duplicates'], summary: { duplicates: 1 }, metrics: { points: 1 }, semantics: { duplicates: 'removed' }
+    };
+    mock.db.__state().trackSnapshots.set('raw-1', {
+      id: 'raw-1', tripId: 't1', segmentId: 's1', segmentIndex: 0,
+      seq: 0, createdAt: 123, points: [{ lat: 30, lon: 120, t: 1 }]
+    });
+    mock.db.__state().trackSnapshots.set('repair-chunk-0', {
+      id: 'repair-chunk-0', tripId: 't1', segmentId: 's1', segmentIndex: 0,
+      seq: 0, points: [{ lat: 30, lon: 120, t: 1 }], ...analysis
+    });
+    const backup = await exportBackup();
+    const inspected = await inspectBackup(asFile(backup.blob));
+    expect(inspected.manifest.trackSnapshots).toHaveLength(2);
+    await expect(restoreBackup(asFile(backup.blob), 'overwrite', inspected)).resolves.toBe(1);
+    expect(mock.db.__state().trackSnapshots.size).toBe(2);
+  });
+
+  it('rejects inconsistent metadata within one repair snapshot version', async () => {
+    const analysis = {
+      snapshotId: 'repair-1', kind: 'repair', repairVersion: 1, createdAt: 123,
+      sourceUpdatedAt: 100, previewId: 'preview-1', sourceFingerprint: 'fingerprint-1',
+      selectedCategories: [], summary: {}, metrics: {}, semantics: {}
+    };
+    for (const seq of [0, 1]) mock.db.__state().trackSnapshots.set(`repair-${seq}`, {
+      id: `repair-${seq}`, tripId: 't1', segmentId: 's1', segmentIndex: 0,
+      seq, points: [], ...analysis
+    });
+    const backup = await exportBackup();
+    const inspected = await inspectBackup(asFile(backup.blob));
+    inspected.manifest.trackSnapshots[1].metrics = { points: 99 };
+    await expect(restoreBackup(asFile(backup.blob), 'overwrite', inspected)).rejects.toThrow('invalid manifest');
+    expect(mock.db.__state().trackSnapshots.size).toBe(2);
+  });
+
+  it('replaces quarantine rows belonging to an overwritten trip without collisions', async () => {
+    mock.db.__state().quarantine.set('quarantine-1', {
+      id: 'quarantine-1', batchId: 'batch-1', createdAt: 2, sourceTable: 'trackChunks',
+      rowId: 'lost-chunk', tripId: 't1', reason: 'orphan-track-chunk',
+      row: { id: 'lost-chunk', tripId: 't1', segmentId: 's1', seq: 0, points: [] }
+    });
+    const backup = await exportBackup();
+    const inspected = await inspectBackup(asFile(backup.blob));
+    mock.db.__state().quarantine.get('quarantine-1').reason = 'local-newer-record';
+    mock.db.__state().quarantine.set('local-only', {
+      id: 'local-only', batchId: 'local-batch', createdAt: 3, sourceTable: 'trackChunks',
+      rowId: 'other-chunk', tripId: 'other-trip', reason: 'orphan-track-chunk', row: { id: 'other-chunk' }
+    });
+    await restoreBackup(asFile(backup.blob), 'overwrite', inspected);
+    await restoreBackup(asFile(backup.blob), 'overwrite', inspected);
+    expect(mock.db.__state().quarantine.get('quarantine-1')?.reason).toBe('orphan-track-chunk');
+    expect(mock.db.__state().quarantine.has('local-only')).toBe(true);
+  });
+
+  it('refuses to export more points than the importer accepts', async () => {
+    mock.db.__state().trackChunks.set('too-many', {
+      id: 'too-many', tripId: 't1', segmentId: 's1', seq: 0, points: new Array(3_000_001)
+    });
+    await expect(exportBackup()).rejects.toMatchObject({ name: 'BackupLimitError', code: 'backup-limit-exceeded' });
+  });
+
+  it('round-trips the share-import ledger and integrity quarantine', async () => {
+    mock.db.__state().shareImports.set('fingerprint-1', {
+      fingerprint: 'fingerprint-1', tripId: 't1', createdAt: 1
+    });
+    mock.db.__state().quarantine.set('quarantine-1', {
+      id: 'quarantine-1', batchId: 'batch-1', createdAt: 2, sourceTable: 'trackChunks',
+      rowId: 'lost-chunk', tripId: 'missing-trip', reason: 'orphan-track-chunk',
+      row: { id: 'lost-chunk', tripId: 'missing-trip', segmentId: 'missing-segment', seq: 0, points: [] }
+    });
+    const backup = await exportBackup();
+    const inspected = await inspectBackup(asFile(backup.blob));
+    expect(inspected.manifest.counts.shareImports).toBe(1);
+    expect(inspected.manifest.counts.quarantine).toBe(1);
+    mock.db.__state().shareImports.clear();
+    mock.db.__state().quarantine.clear();
+    await restoreBackup(asFile(backup.blob), 'overwrite', inspected);
+    expect(mock.db.__state().shareImports.get('fingerprint-1')?.tripId).toBe('t1');
+    expect(mock.db.__state().quarantine.get('quarantine-1')?.row.id).toBe('lost-chunk');
+  });
+
+  it('preserves local ledger mappings that are absent from a version 4 overwrite', async () => {
+    const backup = await exportBackup();
+    const inspected = await inspectBackup(asFile(backup.blob));
+    mock.db.__state().shareImports.set('local-only', {
+      fingerprint: 'local-only', tripId: 'local-trip', createdAt: 1
+    });
+    await restoreBackup(asFile(backup.blob), 'overwrite', inspected);
+    expect(mock.db.__state().shareImports.has('local-only')).toBe(true);
+  });
+
+  it('keeps an existing durable mapping when a version 4 backup repeats its fingerprint', async () => {
+    mock.db.__state().shareImports.set('fingerprint-1', {
+      fingerprint: 'fingerprint-1', tripId: 't1', createdAt: 1
+    });
+    const backup = await exportBackup();
+    const inspected = await inspectBackup(asFile(backup.blob));
+    mock.db.__state().trips.set('t2', { id: 't2', name: 'Already imported' });
+    mock.db.__state().shareImports.set('fingerprint-1', {
+      fingerprint: 'fingerprint-1', tripId: 't2', createdAt: 2
+    });
+    await restoreBackup(asFile(backup.blob), 'overwrite', inspected);
+    expect(mock.db.__state().shareImports.get('fingerprint-1')?.tripId).toBe('t2');
+  });
+
+  it('retains the durable ledger for a conflicting version 4 trip when skip is selected', async () => {
+    const archive = await historicalArchive(4);
+    const inspected = await inspectBackup(archive);
+    mock.db.__state().trips.set('legacy-trip', { id: 'legacy-trip', name: 'Local copy' });
+    mock.db.__state().shareImports.set('legacy-share', {
+      fingerprint: 'legacy-share', tripId: 'legacy-trip', createdAt: 1
+    });
+    await expect(restoreBackup(archive, 'skip', inspected)).resolves.toBe(0);
+    expect(mock.db.__state().trips.get('legacy-trip')?.name).toBe('Local copy');
+    expect(mock.db.__state().shareImports.get('legacy-share')?.tripId).toBe('legacy-trip');
+  });
+
+  it.each([1, 2, 3])('preserves the local ledger when overwriting from legacy v%i without ledger data', async (version) => {
+    const archive = await historicalArchive(version);
+    const inspected = await inspectBackup(archive);
+    mock.db.__state().shareImports.set('legacy-local', {
+      fingerprint: 'legacy-local', tripId: 'legacy-trip', createdAt: 1
+    });
+    await restoreBackup(archive, 'overwrite', inspected);
+    expect(mock.db.__state().shareImports.get('legacy-local')?.tripId).toBe('legacy-trip');
+  });
+
+  it('rejects malformed ledger and quarantine rows', async () => {
+    const cases = [
+      { shareImports: [{ fingerprint: 'fp', tripId: 'missing', createdAt: 1 }] },
+      { quarantine: [{ id: 'q', batchId: 'b', createdAt: 1, sourceTable: 'trips', rowId: 'r', reason: 'bad', row: { id: 'r' } }] }
+    ];
+    for (const extra of cases) {
+      const manifest = { ...await historicalManifest(4), ...extra };
+      const archive = asFile(await archiveWithManifest(manifest, [{
+        id: 'legacy-media', data: patternedBytes(257, 0x4a), thumb: patternedBytes(73, 0x54)
+      }]));
+      await expect(inspectBackup(archive)).rejects.toThrow('invalid manifest');
+    }
   });
 
   it('keeps encrypted backups compatible with one-shot AES-GCM decryption', async () => {
@@ -388,7 +581,7 @@ describe('backup integrity', () => {
   });
 
   it.each([2, 3])('rejects a prepared version %i inspection whose integrity metadata was removed', async (version) => {
-    const archive = manifestFile(await historicalManifest(version));
+    const archive = await historicalArchive(version);
     const inspected = await inspectBackup(archive);
     delete inspected.manifest.integrity;
     await expect(restoreBackup(archive, 'skip', inspected)).rejects.toThrow('invalid manifest');
@@ -396,7 +589,7 @@ describe('backup integrity', () => {
   });
 
   it.each([2, 3])('rechecks payload integrity when a prepared version %i manifest is mutated', async (version) => {
-    const archive = manifestFile(await historicalManifest(version));
+    const archive = await historicalArchive(version);
     const inspected = await inspectBackup(archive);
     inspected.manifest.trips[0].name = 'tampered after inspection';
     await expect(restoreBackup(archive, 'skip', inspected)).rejects.toThrow('backup integrity check failed');
@@ -425,19 +618,37 @@ describe('backup integrity', () => {
     expect([...new Uint8Array(await restored.arrayBuffer())]).toEqual([1, 2, 3]);
   });
 
-  it.each([1, 2, 3])('restores a complete version %i backup into the current schema', async (version) => {
-    const archive = manifestFile(await historicalManifest(version));
+  it.each([1, 2, 3, 4])('restores backup format v%i with media into a native current v4 database', async (version) => {
+    const archive = await historicalArchive(version);
     const inspected = await inspectBackup(archive);
-    expect(inspected.integrity.ok).toBe(version === 1 ? null : true);
-    await expect(restoreBackup(archive, 'skip', inspected)).resolves.toBe(1);
+    expect(inspected.manifest.version).toBe(version);
+    expect(inspected.integrity).toMatchObject({
+      ok: version === 1 ? null : true, checked: version === 1 ? 0 : 2, failed: []
+    });
+    const target = currentV4Database(`backup-format-v${version}-target`);
+    try {
+      await target.open();
+      expect(target.verno).toBe(4);
+      expect(target.backendDB().version).toBe(40);
+      await expect(restoreBackup(archive, 'skip', inspected, { target })).resolves.toBe(1);
+      target.close();
+      await target.open();
 
-    const state = mock.db.__state();
-    expect(state.trips.get('legacy-trip')).toMatchObject({ name: 'Legacy trip', schemaVersion: 1 });
-    expect(state.segments.get('legacy-segment')).toMatchObject({ tripId: 'legacy-trip', index: 0 });
-    expect(state.trackChunks.get('legacy-chunk')?.points).toHaveLength(2);
-    expect(state.waypoints.get('legacy-waypoint')?.time).toBe(1500);
-    expect(state.elevCache.get('30.000,120.000')?.elevation).toBe(100);
-    expect(state.trackSnapshots.size).toBe(version === 3 ? 1 : 0);
+      expect(await target.trips.get('legacy-trip')).toMatchObject({ name: 'Legacy trip', schemaVersion: 1 });
+      expect((await target.trackChunks.get('legacy-chunk')).points).toHaveLength(2);
+      expect(await target.trackSnapshots.count()).toBe(version >= 3 ? 1 : 0);
+      expect(await target.elevCache.count()).toBe(1);
+      const media = await target.media.get('legacy-media');
+      expect([...new Uint8Array(await media.blob.arrayBuffer())]).toEqual([...patternedBytes(257, 0x4a)]);
+      expect([...new Uint8Array(await media.thumb.arrayBuffer())]).toEqual([...patternedBytes(73, 0x54)]);
+      expect(await target.shareImports.toArray()).toEqual(version >= 4
+        ? [{ fingerprint: 'legacy-share', tripId: 'legacy-trip', createdAt: 4000 }]
+        : []);
+      expect(await target.quarantine.count()).toBe(version >= 4 ? 1 : 0);
+      expect(target.backendDB().version).toBe(40);
+    } finally {
+      await target.delete();
+    }
   });
 
   it('rejects future database and trip schema declarations before restore', async () => {
@@ -454,7 +665,7 @@ describe('backup integrity', () => {
   });
 
   it('revalidates trip schema versions when a prepared inspection is reused', async () => {
-    const archive = manifestFile(await historicalManifest(2));
+    const archive = await historicalArchive(2);
     const inspected = await inspectBackup(archive);
     inspected.manifest.trips[0].schemaVersion = 2;
     await expect(restoreBackup(archive, 'skip', inspected)).rejects.toMatchObject({ code: 'backup-trip-schema-unsupported' });
@@ -768,6 +979,125 @@ describe('backup archive hardening', () => {
       })))
     });
     await expect(inspectBackup(archive)).rejects.toThrow('invalid manifest');
+  });
+});
+
+describe('backup restore limits', () => {
+  it('rejects a declared backup above 256 MiB before opening its stream', async () => {
+    const stream = vi.fn(() => { throw new Error('stream must not be opened'); });
+    const arrayBuffer = vi.fn(() => { throw new Error('whole-file read is not allowed'); });
+    const file = { size: 256 * 1024 * 1024 + 1, stream, arrayBuffer };
+
+    await expect(inspectBackup(file)).rejects.toMatchObject({
+      name: 'BackupLimitError', code: 'backup-limit-exceeded',
+      message: expect.stringMatching(/256 MiB[\s\S]*GPX[\s\S]*media[\s\S]*share-import/)
+    });
+    expect(stream).not.toHaveBeenCalled();
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it('opens a declared backup at the exact 256 MiB boundary', async () => {
+    const stream = vi.fn(() => { throw new Error('stream opened'); });
+    const file = { size: 256 * 1024 * 1024, stream };
+
+    await expect(inspectBackup(file)).rejects.toThrow('stream opened');
+    expect(stream).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a plain streamed archive above 256 MiB without whole-file buffering', async () => {
+    const chunk = new Uint8Array(1024 * 1024);
+    const chunkCount = 256 * 1024 * 1024 / chunk.byteLength + 1;
+    let reads = 0;
+    const cancel = vi.fn(async () => {});
+    const releaseLock = vi.fn();
+    const arrayBuffer = vi.fn(() => { throw new Error('whole-file read is not allowed'); });
+    const file = {
+      size: 0,
+      arrayBuffer,
+      stream: () => ({
+        getReader: () => ({
+          read: async () => ++reads <= chunkCount
+            ? { done: false, value: chunk }
+            : { done: true, value: undefined },
+          cancel,
+          releaseLock
+        })
+      })
+    };
+
+    await expect(inspectBackup(file)).rejects.toMatchObject({
+      name: 'BackupLimitError', code: 'backup-limit-exceeded',
+      message: expect.stringMatching(/256 MiB[\s\S]*GPX/)
+    });
+    expect(reads).toBe(chunkCount);
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(releaseLock).toHaveBeenCalledOnce();
+  });
+
+  it('reports the actual 16 MiB manifest limit with the selective GPX alternative', async () => {
+    const archive = asFile(new Blob([zipSync({ 'manifest.json': new Uint8Array(16 * 1024 * 1024 + 1) }, { level: 0 })]));
+    await expect(inspectBackup(archive)).rejects.toMatchObject({
+      name: 'BackupLimitError', code: 'backup-limit-exceeded',
+      message: expect.stringMatching(/16 MiB[\s\S]*GPX[\s\S]*media[\s\S]*share-import/)
+    });
+  });
+
+  it.each(['trackChunks', 'trackSnapshots'] as const)('rejects more than 3,000,000 points in %s before writing', async (table) => {
+    const points = new Array(3_000_001);
+    const manifest: any = validManifest({
+      version: table === 'trackSnapshots' ? 3 : 1,
+      trips: [{ id: 't1' }],
+      segments: [{ id: 's1', tripId: 't1', index: 0 }],
+      ...(table === 'trackChunks'
+        ? { trackChunks: [{ id: 'c1', tripId: 't1', segmentId: 's1', seq: 0, points }] }
+        : {
+          tripSchemaVersion: 1,
+          integrity: { algo: 'SHA-256', payload: 'unused', files: {} },
+          trackSnapshots: [{
+            id: 'snap-1', tripId: 't1', segmentId: 's1', segmentIndex: 0,
+            seq: 0, createdAt: 1, points
+          }]
+        })
+    });
+    const transactionsBefore = mock.db.__txCalls();
+    const prepared = {
+      manifest, files: {}, conflicts: [], encrypted: false,
+      integrity: { ok: null, checked: 0, failed: [] }
+    };
+
+    await expect(restoreBackup(asFile(new Blob()), 'skip', prepared)).rejects.toMatchObject({
+      name: 'BackupLimitError', code: 'backup-limit-exceeded',
+      message: expect.stringMatching(/3,000,000[\s\S]*GPX[\s\S]*media[\s\S]*share-import/)
+    });
+    expect(mock.db.__txCalls()).toBe(transactionsBefore);
+  });
+
+  it('enforces the 3,000,000-point cap across chunks and snapshots together', async () => {
+    const point = { lat: 0, lon: 0 };
+    const manifest: any = validManifest({
+      version: 3,
+      trips: [{ id: 't1' }],
+      segments: [{ id: 's1', tripId: 't1', index: 0 }],
+      tripSchemaVersion: 1,
+      integrity: { algo: 'SHA-256', payload: 'unused', files: {} },
+      trackChunks: [{ id: 'c1', tripId: 't1', segmentId: 's1', seq: 0, points: new Array(2_000_000).fill(point) }],
+      trackSnapshots: [{
+        id: 'snap-1', tripId: 't1', segmentId: 's1', segmentIndex: 0,
+        seq: 0, createdAt: 1, points: new Array(1_000_001).fill(point)
+      }]
+    });
+    const transactionsBefore = mock.db.__txCalls();
+    const prepared = {
+      manifest, files: {}, conflicts: [], encrypted: false,
+      integrity: { ok: null, checked: 0, failed: [] }
+    };
+
+    await expect(restoreBackup(asFile(new Blob()), 'skip', prepared)).rejects.toMatchObject({
+      name: 'BackupLimitError', code: 'backup-limit-exceeded',
+      message: expect.stringMatching(/3,000,000[\s\S]*GPX[\s\S]*media[\s\S]*share-import/)
+    });
+    expect(mock.db.__txCalls()).toBe(transactionsBefore);
   });
 });
 

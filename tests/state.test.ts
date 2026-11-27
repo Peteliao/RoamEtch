@@ -23,7 +23,11 @@ vi.mock('../src/core/settings', () => ({
 vi.mock('../src/core/events', () => ({ emit: mocks.emit }));
 vi.mock('../src/core/elevation', () => ({ backfillTripAltitudes: mocks.backfillTripAltitudes }));
 
-import { appState, isTripSectionActive, recalcNow, refreshActiveTrip, scheduleRecalc, setActiveTrip } from '../src/ui/state';
+import { clearHistory, pushAction, undo } from '../src/core/history';
+import {
+  appState, cancelAltBackfill, isTripSectionActive, recalcNow, refreshActiveTrip,
+  scheduleAltBackfill, scheduleRecalc, setActiveTrip
+} from '../src/ui/state';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -42,10 +46,13 @@ function full(id: string, name: string, activity = 'hike', reportedDistance: num
 
 beforeEach(() => {
   vi.useFakeTimers();
+  cancelAltBackfill();
+  clearHistory();
   vi.clearAllMocks();
   appState.view = 'record';
   appState.activeTripId = null;
   appState.activeTripFull = null;
+  appState.tripSession = 0;
   appState.stats = null;
   appState.tripDetail = { open: false, tripId: null, section: 'overview' };
   mocks.updateTrip.mockResolvedValue(undefined);
@@ -54,6 +61,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cancelAltBackfill();
   vi.clearAllTimers();
   vi.useRealTimers();
 });
@@ -95,6 +103,38 @@ describe('active trip snapshots', () => {
     expect(appState.activeTripId).toBe('b');
     expect(appState.activeTripFull?.trip.name).toBe('New trip');
     expect(mocks.emit).not.toHaveBeenCalledWith('trip:active', expect.objectContaining({ trip: expect.objectContaining({ id: 'a' }) }));
+  });
+
+  it('does not execute an old session action after a rapid A-to-B-to-A selection', async () => {
+    const firstA = deferred<ReturnType<typeof full>>();
+    const b = deferred<ReturnType<typeof full>>();
+    const secondA = deferred<ReturnType<typeof full>>();
+    mocks.loadTripFull.mockReturnValueOnce(firstA.promise).mockReturnValueOnce(b.promise).mockReturnValueOnce(secondA.promise);
+
+    const pendingFirstA = setActiveTrip('a');
+    const oldSession = appState.tripSession;
+    const oldAction = {
+      label: 'old-a-edit', tripId: 'a', session: oldSession,
+      undo: vi.fn().mockResolvedValue(undefined), redo: vi.fn()
+    };
+    pushAction(oldAction);
+    const pendingB = setActiveTrip('b');
+    const pendingSecondA = setActiveTrip('a');
+    const currentSession = appState.tripSession;
+    expect(currentSession).toBe(oldSession + 2);
+
+    secondA.resolve(full('a', 'Newest A'));
+    await pendingSecondA;
+    b.resolve(full('b', 'B'));
+    firstA.resolve(full('a', 'Old A'));
+    await Promise.all([pendingFirstA, pendingB]);
+
+    expect(appState.activeTripId).toBe('a');
+    expect(appState.activeTripFull?.trip.name).toBe('Newest A');
+    expect(mocks.computeStatsAsync).toHaveBeenCalledTimes(1);
+    await expect(undo({ tripId: 'a', session: currentSession })).resolves.toBe(false);
+    expect(oldAction.undo).not.toHaveBeenCalled();
+    expect(oldAction.redo).not.toHaveBeenCalled();
   });
 
   it('keeps the newest same-trip refresh when loads finish out of order', async () => {
@@ -158,6 +198,20 @@ describe('active trip snapshots', () => {
     expect(mocks.computeStatsAsync).toHaveBeenCalledTimes(1);
   });
 
+  it('reuses completed statistics until the track version or metric inputs change', async () => {
+    appState.activeTripId = 'a';
+    appState.activeTripFull = full('a', 'Trip');
+
+    const first = await recalcNow();
+    await expect(recalcNow()).resolves.toBe(first);
+    expect(mocks.computeStatsAsync).toHaveBeenCalledTimes(1);
+
+    appState.activeTripFull = full('a', 'Edited trip');
+    appState.activeTripFull.trip.updatedAt = 2;
+    await recalcNow();
+    expect(mocks.computeStatsAsync).toHaveBeenCalledTimes(2);
+  });
+
   it('can load a recording trip without disturbing the selected trip', async () => {
     const selected = deferred<ReturnType<typeof full>>();
     const recording = deferred<ReturnType<typeof full>>();
@@ -205,5 +259,67 @@ describe('active trip snapshots', () => {
     expect(mocks.cacheTripStats).toHaveBeenCalledWith('a', 1, expect.objectContaining({ distance: 10 }));
     expect(appState.stats).toBeNull();
     expect(mocks.emit).not.toHaveBeenCalledWith('trip:stats', expect.anything());
+  });
+});
+
+describe('altitude backfill cancellation', () => {
+  it('cancels a scheduled backfill when the active trip changes', async () => {
+    appState.activeTripId = 'a';
+    mocks.loadTripFull.mockResolvedValueOnce(full('b', 'Next trip'));
+    scheduleAltBackfill('a');
+    await vi.advanceTimersByTimeAsync(799);
+
+    await setActiveTrip('b');
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(mocks.backfillTripAltitudes).not.toHaveBeenCalled();
+  });
+
+  it('cancels a scheduled backfill when leaving the view', async () => {
+    appState.activeTripId = 'a';
+    scheduleAltBackfill('a');
+    await vi.advanceTimersByTimeAsync(799);
+
+    cancelAltBackfill();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(mocks.backfillTripAltitudes).not.toHaveBeenCalled();
+  });
+
+  it('aborts an in-flight backfill and ignores its result after the active trip changes', async () => {
+    const filled = deferred<number>();
+    appState.activeTripId = 'a';
+    mocks.backfillTripAltitudes.mockReturnValueOnce(filled.promise);
+    scheduleAltBackfill('a');
+    vi.advanceTimersByTime(800);
+    const signal = mocks.backfillTripAltitudes.mock.calls[0][1].signal as AbortSignal;
+    expect(signal.aborted).toBe(false);
+    mocks.loadTripFull.mockResolvedValueOnce(full('b', 'Next trip'));
+
+    await setActiveTrip('b');
+    expect(signal.aborted).toBe(true);
+    filled.resolve(1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.loadTripFull).toHaveBeenCalledTimes(1);
+    expect(mocks.loadTripFull).toHaveBeenCalledWith('b');
+    expect(mocks.emit).not.toHaveBeenCalledWith('toast', expect.anything());
+  });
+
+  it('aborts an in-flight backfill and ignores its result when leaving the view', async () => {
+    const filled = deferred<number>();
+    appState.activeTripId = 'a';
+    mocks.backfillTripAltitudes.mockReturnValueOnce(filled.promise);
+    scheduleAltBackfill('a');
+    vi.advanceTimersByTime(800);
+    const signal = mocks.backfillTripAltitudes.mock.calls[0][1].signal as AbortSignal;
+
+    cancelAltBackfill();
+    expect(signal.aborted).toBe(true);
+    filled.resolve(1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.loadTripFull).not.toHaveBeenCalled();
+    expect(mocks.emit).not.toHaveBeenCalledWith('toast', expect.anything());
   });
 });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
   const waypoints: any[] = [];
@@ -49,6 +49,8 @@ beforeEach(() => {
   mocks.db.media.toArray.mockRejectedValue(new Error('preview must use cursors'));
 });
 
+afterEach(() => vi.restoreAllMocks());
+
 describe('media storage cleanup', () => {
   it('previews only valid unreferenced media with cursor reads and byte estimates', async () => {
     mocks.waypoints.push({ id: 'w1', mediaIds: ['keep'] });
@@ -89,6 +91,38 @@ describe('media storage cleanup', () => {
     mocks.media.push({ id: 'shared', tripId: 'missing', blob: new Blob(['1234']) });
     const preview = await previewMediaCleanup();
     expect(preview.count).toBe(0);
+  });
+
+  it('rejects an expired preview without deleting media', async () => {
+    mocks.media.push({ id: 'old-preview', blob: new Blob(['1234']) });
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const preview = await previewMediaCleanup();
+    now.mockReturnValue(1_000 + 5 * 60_000 + 1);
+    await expect(executeMediaCleanup(preview.token)).rejects.toBeInstanceOf(MediaCleanupTokenError);
+    expect(mocks.media.map((row) => row.id)).toEqual(['old-preview']);
+    now.mockRestore();
+  });
+
+  it('rechecks preview age after acquiring the cleanup lock', async () => {
+    mocks.media.push({ id: 'locked-preview', blob: new Blob(['1234']) });
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const preview = await previewMediaCleanup();
+    now.mockReturnValueOnce(1_000).mockReturnValue(1_000 + 5 * 60_000 + 1);
+    await expect(executeMediaCleanup(preview.token)).rejects.toBeInstanceOf(MediaCleanupTokenError);
+    expect(mocks.media.map((row) => row.id)).toEqual(['locked-preview']);
+    now.mockRestore();
+  });
+
+  it('invalidates the whole preview when a candidate blob is replaced', async () => {
+    mocks.media.push(
+      { id: 'changed', blob: new Blob(['old!']) },
+      { id: 'unchanged', blob: new Blob(['keep']) }
+    );
+    const preview = await previewMediaCleanup();
+    mocks.media[0].blob = new Blob(['new!']);
+    await expect(executeMediaCleanup(preview.token)).rejects.toBeInstanceOf(MediaCleanupTokenError);
+    expect(mocks.media.map((row) => row.id)).toEqual(['changed', 'unchanged']);
+    expect(mocks.db.media.bulkDelete).not.toHaveBeenCalled();
   });
 
   it('rolls back all deletions when a bulk delete fails', async () => {

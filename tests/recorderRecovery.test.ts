@@ -32,7 +32,6 @@ vi.mock('../src/core/locks', () => ({
 }));
 vi.mock('../src/core/wakelock', () => ({ requestWakeLock: vi.fn(), releaseWakeLock: vi.fn() }));
 vi.mock('../src/core/keepalive', () => ({ armKeepAlive: vi.fn(), disarmKeepAlive: vi.fn() }));
-vi.mock('../src/core/activity', () => ({ classifyActivity: vi.fn(() => 'hike') }));
 vi.mock('../src/core/storageKeys', () => ({ migrateLegacyKey: vi.fn() }));
 vi.mock('../src/core/workerBridge', () => ({ computeStatsSummaryAsync: mocks.computeStatsSummaryAsync }));
 
