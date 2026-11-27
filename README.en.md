@@ -26,7 +26,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 <table>
   <tr>
     <td align="center" width="50%"><img src="docs/screenshots/en/record.png" width="280" alt="Live GPS track recorder with distance, duration, speed, altitude, ascent, and GPS signal"><br><sub><b>Live recording</b> · track, altitude, ascent, GPS signal, activity detection</sub></td>
-    <td align="center" width="50%"><img src="docs/screenshots/en/meet.png" width="280" alt="Live meetup with an encrypted room, teammate positions, distance, and direction"><br><sub><b>Live meetup</b> · teammate positions, distance and bearing, encrypted chat</sub></td>
+    <td align="center" width="50%"><img src="docs/screenshots/en/meet.png" width="280" alt="Live meetup with an encrypted room, teammate positions, a rally point, team spread, and temporary markers"><br><sub><b>Live meetup</b> · teammate positions, rally point, team spread, encrypted markers</sub></td>
   </tr>
   <tr>
     <td align="center"><img src="docs/screenshots/en/trips.png" width="280" alt="Local trip library, yearly footprint, and illuminated city map"><br><sub><b>Trip library</b> · local tracks, yearly stats, city footprints, batch import and export</sub></td>

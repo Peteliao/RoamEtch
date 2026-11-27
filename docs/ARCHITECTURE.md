@@ -299,7 +299,13 @@ photos add MIME/base64/byte/dimension/coordinate validation, a 5-second sender
 cooldown, a 4.25-second receiver gap, a 56 KB raw-image cap, and a latest-20
 in-memory payload limit; encoded WebP/JPEG headers must match the declared size
 and stay within a 720 px edge / 518,400 pixel budget before decoding. The
-encrypted transport cap is 128 KB. Version
+encrypted transport cap is 128 KB. Temporary `mk` markers and the host-only
+`goal` rally point use the same envelope; marker expiry is anchored at receipt,
+capped per peer/session, and re-published on reconnect with remaining lifetime
+rather than extended. Sender-side sliding windows bound text, voice, markers, and
+rally updates. Optional signed invite expiry (`iexp`/`isig`) is verified by the
+joiner independently of the session timer, and an exchanged capability version
+marks legacy peers instead of silently changing packet semantics. Version
 1 invitations and packets are rejected explicitly, so an upgraded client cannot
 silently fall back to the old 60-bit protocol. Location publishing adapts to
 movement: roughly every 5 seconds while the device is moving and a 25-second

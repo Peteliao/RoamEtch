@@ -4,6 +4,50 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.8.0] - 2026-11-27
+
+### Added
+
+- Added temporary team markers with six types (here, rally, supply, danger, scenic,
+  parking), custom labels, and 15/30/60/120-minute choices. Markers carry creator,
+  coordinates, creation time, and expiry; they are capped at 8 per teammate and 48 per
+  session, expire on every device, and disappear on leave or removal. Reconnection
+  republishes remaining lifetime without extending older markers.
+- Added a host-only rally point with a label, clear action, map card, team distance, and
+  system-chat notice. Other members can view and fit to it but cannot move or clear it.
+- Added a team-spread view computed locally from fresh, unexpired positions, including
+  the farthest pair and a one-tap “fit team” action.
+- Added configurable local distance and rally-point drift alerts with a 100–5000 m
+  threshold, 1/3/5/10-minute cooldown, a near-to-far transition rule, and a global
+  on/off switch. Alerts use a local system notification and send no additional data.
+- Added signed invite lifetimes of 1 hour, 6 hours, 24 hours, or 7 days. The host signs
+  the expiry with HMAC-SHA-256 inside the link, and joiners reject expired, tampered, or
+  wrong-room expiry parameters with distinct errors. Link expiry stays independent of
+  the session auto-end timer and does not affect members already in the room.
+- Added teammate capability exchange and an explicit legacy badge/system notice so
+  older clients are visible without silently weakening the current packet format.
+- Added join, leave, removal, rally-point-set, and rally-point-cleared system chat rows,
+  plus sender-side sliding-window limits for text, voice, markers, and rally points.
+- Added Simplified Chinese and English copy, settings controls, map pins, sheet layouts,
+  and unit tests for collaboration helpers, signed invite expiry, marker lifecycle,
+  host-only goals, legacy notices, and sender limits.
+
+### Changed
+
+- The team panel now shows the rally point, temporary markers, team spread, invite
+  lifetime, and legacy teammates alongside existing location and chat controls; the
+  marker and rally-point tools remain usable while sharing is paused only where local
+  editing is safe.
+- Marker and rally-point data travel as encrypted `mk` and `goal` packets inside the
+  existing room protocol; the relay still receives only room-scoped ciphertext.
+
+### Not included
+
+- The raw TM2 invite remains a bearer secret: signed expiry prevents tampering and new
+  joins after expiry, but cannot revoke an already-copied key or force an active member
+  out. Key rotation/revocation on membership change, per-peer location visibility,
+  hard rejection of future protocol versions, and roadmap items 20–23 remain deferred.
+
 ## [3.7.1] - 2026-11-27
 
 ### Security

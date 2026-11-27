@@ -235,7 +235,20 @@ export function createSettingsView(navigate) {
       el('div', { class: 'txt' }, el('div', { class: 't' }, t('settings.meetP2P')), el('div', { class: 'd' }, t('settings.meetP2PHint'))),
       el('label', { class: 'switch' }, p2pToggle, el('span', { class: 'slider' }))),
     el('div', { class: 'small faint', style: { marginTop: '8px' } }, t('settings.meetP2PPrivacy')));
+  const alertSection = el('div', { class: 'relay-settings-block' },
+    el('div', { class: 'settings-subhead relay-subhead' }, icon('warn', 15), t('settings.meetAlerts')),
+    el('div', { class: 'small muted', style: { margin: '-2px 0 10px' } }, t('settings.meetAlertsHint')),
+    switchRow(t('settings.meetAlertEnabled'), t('settings.meetAlertEnabledHint'), 'meetAlertEnabled'),
+    numRow(t('settings.meetAlertDistance'), t('settings.meetAlertDistanceHint'), 'meetAlertDistance', { min: 100, max: 5000, step: 50, unit: 'm' }),
+    segRow(t('settings.meetAlertCooldown'), [
+      [1, t('settings.cooldownMinutes', { m: 1 })],
+      [3, t('settings.cooldownMinutes', { m: 3 })],
+      [5, t('settings.cooldownMinutes', { m: 5 })],
+      [10, t('settings.cooldownMinutes', { m: 10 })]
+    ], Number(get('meetAlertCooldownMin')) || 5, (v) => set('meetAlertCooldownMin', v), t('settings.meetAlertCooldownHint')),
+    switchRow(t('settings.meetAlertGoal'), t('settings.meetAlertGoalHint'), 'meetAlertGoal'));
   const meetAdvanced = collapsible(t('settings.meetAdvanced'),
+    alertSection,
     relaySection,
     p2pSection,
     el('div', { class: 'settings-subhead' }, icon('globe', 15), t('settings.meetIce')),

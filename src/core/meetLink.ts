@@ -13,8 +13,15 @@ const INVITE_RE = /^TM2\.([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/;
 
 export const MEET_PROTOCOL_VERSION = VERSION;
 export const MEET_MAX_PACKET_CHARS = 128 * 1024;
+export const MEET_INVITE_MAX_TTL_MS = 30 * 24 * 60 * 60_000;
+const INVITE_EXPIRY_SIG_RE = /^[A-Za-z0-9_-]{43}$/;
 
 export type MeetInviteParts = { invite: string; roomId: string; secret: Uint8Array<ArrayBuffer> };
+export type MeetInviteExpiry = { exp: number; sig: string };
+export type MeetInviteLink = MeetInviteExpiry & { invite: string };
+export type MeetInviteExpiryVerdict =
+  | { ok: true; legacy: boolean; expiresAt: number }
+  | { ok: false; reason: 'expired' | 'invalid' | 'signature' };
 
 export type MeetRoomKey = {
   invite: string;
@@ -178,10 +185,102 @@ export async function decryptMeetPacket(text: string, room: MeetRoomKey): Promis
   }
 }
 
-export function meetLinkFor(codeInput: string) {
+function inviteExpiryPayload(roomId: string, exp: number) {
+  return new TextEncoder().encode(`roametch-invite-expiry-v1|${roomId}|${exp}`);
+}
+
+async function inviteExpiryKey(parts: MeetInviteParts) {
+  const hkdf = await crypto.subtle.importKey('raw', parts.secret, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: SALT,
+      info: new TextEncoder().encode(`invite-expiry-v1|room:${parts.roomId}`)
+    },
+    hkdf,
+    { name: 'HMAC', hash: 'SHA-256', length: 256 },
+    false,
+    ['sign', 'verify']
+  );
+}
+
+/**
+ * Signs a link lifetime independently from the session countdown. The secret
+ * never leaves the fragment; only the derived HMAC travels with the link.
+ */
+export async function signMeetInviteExpiry(codeInput: string, exp: number) {
+  const parts = parseMeetInvite(codeInput);
+  if (!parts) throw new Error('invalid-meet-invite');
+  if (!Number.isSafeInteger(exp) || exp <= 0) throw new Error('invalid-invite-expiry');
+  if (!crypto?.subtle) throw new Error('crypto-unavailable');
+  const key = await inviteExpiryKey(parts);
+  const signature = await crypto.subtle.sign('HMAC', key, inviteExpiryPayload(parts.roomId, exp));
+  return b64urlEncode(new Uint8Array(signature));
+}
+
+export async function verifyMeetInviteExpiry(
+  codeInput: string,
+  exp: number,
+  sig: string,
+  now = Date.now()
+): Promise<MeetInviteExpiryVerdict> {
+  if (!exp && !sig) return { ok: true, legacy: true, expiresAt: 0 };
+  const parts = parseMeetInvite(codeInput);
+  if (!parts || !Number.isSafeInteger(exp) || exp <= 0 || exp > now + MEET_INVITE_MAX_TTL_MS
+    || !INVITE_EXPIRY_SIG_RE.test(String(sig || ''))) {
+    return { ok: false, reason: 'invalid' };
+  }
+  if (!crypto?.subtle) return { ok: false, reason: 'invalid' };
+  try {
+    const key = await inviteExpiryKey(parts);
+    const valid = await crypto.subtle.verify(
+      'HMAC',
+      key,
+      b64urlDecode(sig),
+      inviteExpiryPayload(parts.roomId, exp)
+    );
+    if (!valid) return { ok: false, reason: 'signature' };
+  } catch {
+    return { ok: false, reason: 'invalid' };
+  }
+  if (exp <= now) return { ok: false, reason: 'expired' };
+  return { ok: true, legacy: false, expiresAt: exp };
+}
+
+export function meetLinkFor(codeInput: string, expiry: MeetInviteExpiry | null = null) {
   const invite = normalizeMeetInvite(codeInput);
   if (!invite) throw new Error('invalid-meet-invite');
-  return `${location.origin}${location.pathname}${location.search}#meet=${invite}`;
+  let suffix = '';
+  if (expiry) {
+    if (!Number.isSafeInteger(expiry.exp) || expiry.exp <= 0 || !INVITE_EXPIRY_SIG_RE.test(expiry.sig)) {
+      throw new Error('invalid-invite-expiry');
+    }
+    suffix = `&iexp=${expiry.exp}&isig=${expiry.sig}`;
+  }
+  return `${location.origin}${location.pathname}${location.search}#meet=${invite}${suffix}`;
+}
+
+function linkParams(raw: string) {
+  const hashAt = raw.indexOf('#');
+  const queryAt = raw.indexOf('?');
+  const at = hashAt >= 0 ? hashAt : queryAt;
+  return at >= 0 ? new URLSearchParams(raw.slice(at + 1)) : null;
+}
+
+/** Reads the invite plus its optional signed lifetime from a link or fragment. */
+export function parseMeetLink(input: string): MeetInviteLink | null {
+  const raw = String(input ?? '').trim();
+  const invite = normalizeMeetInvite(raw);
+  if (!invite) return null;
+  const params = linkParams(raw);
+  const exp = Number(params?.get('iexp') || 0);
+  const sig = String(params?.get('isig') || '');
+  return {
+    invite,
+    exp: Number.isSafeInteger(exp) && exp > 0 ? exp : 0,
+    sig: INVITE_EXPIRY_SIG_RE.test(sig) ? sig : ''
+  };
 }
 
 export function parseMeetFragment(hash: string) {

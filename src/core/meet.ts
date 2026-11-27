@@ -13,9 +13,31 @@ import {
   meetLinkFor,
   randomMeetId,
   roomLabelFor,
+  signMeetInviteExpiry,
+  verifyMeetInviteExpiry,
   MEET_PROTOCOL_VERSION,
   MEET_MAX_PACKET_CHARS
 } from './meetLink';
+import {
+  MEET_FEATURE_VERSION,
+  MEET_MARKER_MAX_PER_PEER,
+  MEET_MARKER_SESSION_MAX,
+  MeetSendLimiter,
+  SEND_LIMITS,
+  alertCooldownElapsed,
+  cleanMarkerLabel,
+  clampAlertCooldown,
+  clampAlertDistance,
+  clampMarkerTtl,
+  computeMeetSpread,
+  goalZoneAfter,
+  isMeetMarkerType,
+  markerExpired,
+  sanitizeMeetGoal,
+  sanitizeMeetMarker,
+  type MeetGoal,
+  type MeetMarker
+} from './meetCollab';
 import { acceptMeetSequence, pruneMeetReplay } from './meetReplay';
 import { createMeetRelay } from './meetRelay';
 import { shouldPublishFix } from './meetCadence';
@@ -45,6 +67,7 @@ const REMOVE_MS = 10 * 60_000;
 const HEARTBEAT_MS = 20_000;
 const PACKET_CLOCK_TOLERANCE_MS = 5 * 60_000;
 const MAX_EXPIRY_MIN = 480;
+const MAX_INVITE_EXPIRY_MIN = 30 * 24 * 60;
 export const MEET_CHAT_MAX_LEN = 500;
 const MAX_CHAT_MESSAGES = 120;
 const CHAT_SEEN_LIMIT = 240;
@@ -115,6 +138,77 @@ function pushChatMessage(s: MeetSession, message: any) {
   }
 }
 
+function pushSystemChat(s: MeetSession, code: string, params: any = {}) {
+  pushChatMessage(s, {
+    id: randomMeetId(),
+    sys: code,
+    sysParams: params,
+    text: '',
+    ts: Date.now(),
+    self: false
+  });
+  emit('meet:chat', { unread: s.chatUnread });
+}
+
+function announceNewPeer(s: MeetSession, peer: any) {
+  publishOwnMarkers();
+  if (s.hostId === s.self.id) {
+    peer.hostId = s.self.id;
+    publishHi();
+    publishGoal();
+  }
+  pushSystemChat(s, 'join', { name: peer.name });
+  emit('meet:peerjoined', {
+    name: peer.name, id: peer.id,
+    legacy: peer.pv < MEET_FEATURE_VERSION
+  });
+}
+
+function markerKey(by: string, id: string) {
+  return `${by}:${id}`;
+}
+
+function removePeerMarkers(s: MeetSession, peerId: string) {
+  let changed = false;
+  for (const [key, marker] of s.markers) {
+    if (marker.by === peerId) {
+      s.markers.delete(key);
+      changed = true;
+    }
+  }
+  if (changed) emitState();
+}
+
+function activeMarkers(s: MeetSession, now: number) {
+  for (const [key, marker] of s.markers) {
+    if (markerExpired(marker, now)) s.markers.delete(key);
+  }
+  return [...s.markers.values()];
+}
+
+function markerRemainingTtl(marker: MeetMarker, now: number) {
+  return Math.max(1, Math.ceil((marker.expiresAt - now) / 60_000));
+}
+
+function trimPeerMarkers(s: MeetSession, peerId: string) {
+  const owned = [...s.markers.entries()]
+    .filter(([, marker]) => marker.by === peerId)
+    .sort((a, b) => a[1].createdAt - b[1].createdAt);
+  for (let i = 0; i < owned.length - MEET_MARKER_MAX_PER_PEER; i++) s.markers.delete(owned[i][0]);
+  const all = [...s.markers.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt);
+  for (let i = 0; i < all.length - MEET_MARKER_SESSION_MAX; i++) s.markers.delete(all[i][0]);
+}
+
+function sendLimitDenied(s: MeetSession, kind: keyof typeof SEND_LIMITS, now: number) {
+  const budget = SEND_LIMITS[kind];
+  if (s.sendLimiter.allow(kind, now, budget.limit, budget.windowMs)) return false;
+  emit('meet:ratelimited', {
+    kind,
+    retryAfterMs: s.sendLimiter.retryAfter(kind, now, budget.limit, budget.windowMs)
+  });
+  return true;
+}
+
 function chatRateOk(s: MeetSession, peerId: string, now: number) {
   const recent = (s.chatRate.get(peerId) || []).filter((at: number) => now - at < CHAT_RATE_WINDOW_MS);
   if (recent.length >= CHAT_RATE_LIMIT) {
@@ -152,9 +246,15 @@ function expiryMinutes() {
   return clampExpiry(get('meetExpiryMin'));
 }
 
-function setMeetFragment(code: string) {
+function inviteExpiryMinutes() {
+  const n = Number(get('meetInviteExpiryMin'));
+  return Math.min(MAX_INVITE_EXPIRY_MIN, Math.max(15, Number.isFinite(n) ? n : 1440));
+}
+
+function setMeetFragment(code: string, exp = 0, sig = '') {
   if (typeof location === 'undefined') return;
-  const hash = `#meet=${code}`;
+  const suffix = exp && sig ? `&iexp=${exp}&isig=${sig}` : '';
+  const hash = `#meet=${code}${suffix}`;
   if (location.hash !== hash) history.replaceState(history.state || {}, '', location.pathname + location.search + hash);
 }
 
@@ -228,9 +328,12 @@ function positionStatus(position: any, now: number, sharing = position.sharing) 
   return weakGpsReason(position.acc ?? null, position.accuracyHistory) ? 'weak' : 'fresh';
 }
 
-function peerView(p: any, self: any, hostId: string | null, now: number) {
+function peerView(p: any, self: any, hostId: string | null, now: number, goal: MeetGoal | null = null) {
   const distance = self.hasFix && p.lat != null && p.lon != null
     ? haversine(self.lat, self.lon, p.lat, p.lon)
+    : null;
+  const goalDistance = goal && p.lat != null && p.lon != null
+    ? haversine(goal.lat, goal.lon, p.lat, p.lon)
     : null;
   let bearingDeg: number | null = null;
   let clock: number | null = null;
@@ -255,8 +358,11 @@ function peerView(p: any, self: any, hostId: string | null, now: number) {
     heading: p.heading,
     speed: p.speed,
     distance,
+    goalDistance,
     bearing: bearingDeg,
     clock,
+    protocolVersion: Number(p.pv) || 2,
+    legacy: (Number(p.pv) || 2) < MEET_FEATURE_VERSION,
     sharing: p.sharing !== false,
     isHost: p.id === hostId,
     lastContactAt: p.lastContactAt,
@@ -278,7 +384,7 @@ function peerView(p: any, self: any, hostId: string | null, now: number) {
   };
 }
 
-function selfView(s: MeetSession, now: number) {
+function selfView(s: MeetSession, now: number, goal: MeetGoal | null = null) {
   const location = positionStatus(s.self, now, s.sharing);
   const sampledAge = fixAge(s.self, now);
   return {
@@ -291,6 +397,9 @@ function selfView(s: MeetSession, now: number) {
     acc: s.self.acc,
     heading: s.self.heading,
     speed: s.self.speed,
+    goalDistance: goal && s.self.lat != null && s.self.lon != null
+      ? haversine(goal.lat, goal.lon, s.self.lat, s.self.lon)
+      : null,
     hasFix: s.self.hasFix,
     fixAt: s.self.fixAt,
     lastFixAt: s.self.fixAt,
@@ -319,16 +428,42 @@ export function getMeetSnapshot() {
       self: null,
       route: null,
       messages: [],
+      markers: [],
+      goal: null,
+      spread: null,
+      lastAlert: null,
+      inviteExpiresAt: 0,
+      inviteExpired: false,
       chatUnread: 0,
       expiresAt: 0,
       now: Date.now()
     };
   }
   const now = Date.now();
-  const self = selfView(s, now);
-  const peers = [...s.peers.values()].map((p) => peerView(p, self, s.hostId, now));
+  const goal: MeetGoal | null = s.goal ? { ...s.goal } : null;
+  const self = selfView(s, now, goal);
+  const peers = [...s.peers.values()].map((p) => peerView(p, self, s.hostId, now, goal));
   const peerRank = (p: any) => p.networkStatus === 'left' ? 3 : p.stale ? 2 : p.positionStatus === 'fresh' ? 0 : 1;
   peers.sort((a, b) => peerRank(a) - peerRank(b) || (a.distance ?? Infinity) - (b.distance ?? Infinity));
+  const markers = activeMarkers(s, now)
+    .map((m) => ({
+      ...m,
+      byName: m.by === s.self.id ? s.self.name : (s.peers.get(m.by)?.name || t('meet.unnamedPeer')),
+      mine: m.by === s.self.id,
+      remainingMs: Math.max(0, m.expiresAt - now),
+      distance: s.self.hasFix ? haversine(s.self.lat, s.self.lon, m.lat, m.lon) : null
+    }))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const goalView = goal ? {
+    ...goal,
+    mine: goal.by === s.self.id,
+    byName: goal.by === s.self.id ? s.self.name : (s.peers.get(goal.by)?.name || t('meet.unnamedPeer')),
+    distance: self.goalDistance
+  } : null;
+  const spread = computeMeetSpread([
+    ...(self.hasFix && self.positionStatus === 'fresh' ? [self] : []),
+    ...peers.filter((p) => p.networkStatus !== 'left' && p.positionStatus === 'fresh')
+  ]);
   return {
     active: true,
     status: relayStatus(s),
@@ -344,11 +479,24 @@ export function getMeetSnapshot() {
     self,
     peers,
     messages: s.messages.map((m: any) => ({ ...m })),
+    markers,
+    goal: goalView,
+    spread,
+    legacyPeers: peers.filter((p) => p.legacy && p.networkStatus !== 'left').length,
+    lastAlert: s.lastAlert,
+    inviteExpiresAt: s.inviteExpiresAt || 0,
+    inviteExpired: !!s.inviteExpiresAt && now >= s.inviteExpiresAt,
     chatUnread: s.chatUnread,
     hostId: s.hostId,
     isHost: s.hostId === s.self.id,
     sharing: s.sharing,
     geoError: s.geoError,
+    alerts: {
+      enabled: get('meetAlertEnabled') !== false,
+      distance: clampAlertDistance(get('meetAlertDistance')),
+      cooldownMin: clampAlertCooldown(get('meetAlertCooldownMin')),
+      goal: get('meetAlertGoal') !== false
+    },
     startedAt: s.startedAt,
     expiresAt: s.expiresAt,
     now,
@@ -573,9 +721,15 @@ function hiPacket() {
   const s = session;
   const body: any = {
     k: 'hi', id: s.self.id, name: s.self.name,
-    c: s.self.color, hostId: s.hostId || undefined
+    c: s.self.color, hostId: s.hostId || undefined, pv: MEET_FEATURE_VERSION
   };
-  if (s.hostId === s.self.id) body.exp = s.expiresAt;
+  if (s.hostId === s.self.id) {
+    body.exp = s.expiresAt;
+    if (s.inviteExpiresAt && s.inviteSig) {
+      body.iexp = s.inviteExpiresAt;
+      body.isig = s.inviteSig;
+    }
+  }
   return body;
 }
 
@@ -603,10 +757,37 @@ function publishState() {
   });
 }
 
+function publishGoal() {
+  const s = session;
+  if (!s || s.hostId !== s.self.id) return Promise.resolve(false);
+  if (!s.goal) return publishPacket({ k: 'goal', id: s.self.id, del: true });
+  return publishPacket({
+    k: 'goal', id: s.self.id,
+    la: s.goal.lat, lo: s.goal.lon, tx: s.goal.label
+  });
+}
+
+function publishOwnMarkers() {
+  const s = session;
+  if (!s) return;
+  const now = Date.now();
+  for (const marker of activeMarkers(s, now)) {
+    if (marker.by !== s.self.id) continue;
+    void publishPacket({
+      k: 'mk', id: s.self.id,
+      mkid: marker.id, mtyp: marker.type,
+      la: marker.lat, lo: marker.lon, tx: marker.label,
+      ttl: markerRemainingTtl(marker, now)
+    });
+  }
+}
+
 function sendPresence() {
   const s = session;
   if (!s) return;
   publishHi();
+  if (s.hostId === s.self.id) publishGoal();
+  publishOwnMarkers();
   if (s.sharing && s.self.hasFix) {
     s.lastPublish = { lat: s.self.lat, lon: s.self.lon, at: Date.now() };
     publishLoc();
@@ -631,12 +812,13 @@ function touchPeer(msg: any, now: number, ts: number) {
       sharing: true, ts: 0, lastSeen: 0, lastContactAt: 0, lastLocAt: 0,
       lastFixAt: 0, fixApprox: false, clockOffsetMs: null,
       left: false, leftAt: 0, accuracyHistory: [], viewState: '',
-      hostId: null, locSeq: 0, hiSeq: 0, stateSeq: 0
+      hostId: null, locSeq: 0, hiSeq: 0, stateSeq: 0, pv: 2
     };
     s.peers.set(id, p);
   }
   if (msg.name) p.name = cleanName(msg.name) || p.name;
   if (/^#[0-9a-f]{6}$/i.test(String(msg.c))) p.color = msg.c;
+  if (msg.pv != null) p.pv = Math.max(1, Math.min(99, Math.round(Number(msg.pv)) || 2));
   observePeerClock(p, ts, now);
   p.lastContactAt = now;
   p.lastSeen = now;
@@ -663,6 +845,10 @@ function markPeerLeft(s: MeetSession, id: string, now: number) {
   s.p2p?.closePeer(id);
   if (s.hostId === id) s.hostId = null;
   if (s.route?.peerId === id) s.route = null;
+  s.alertNear.delete(id);
+  for (const [key, marker] of s.markers) {
+    if (marker.by === id) s.markers.delete(key);
+  }
   return true;
 }
 
@@ -708,8 +894,28 @@ async function handleIncoming(text: string) {
       }
     }
     if (s.hostId === s.self.id) touched.peer.hostId = s.self.id;
-    if (touched.isNew || wasLeft) emit('meet:peerjoined', { name: touched.peer.name, id: touched.peer.id });
-    if (touched.isNew && s.hostId === s.self.id) publishHi();
+    if (s.hostId === msg.id) {
+      const iexp = Number(msg.iexp);
+      const isig = String(msg.isig || '');
+      if (Number.isSafeInteger(iexp) && iexp > now && /^[A-Za-z0-9_-]{43}$/.test(isig)) {
+        s.inviteExpiresAt = iexp;
+        s.inviteSig = isig;
+        try {
+          s.link = meetLinkFor(s.invite, { exp: iexp, sig: isig });
+          setMeetFragment(s.invite, iexp, isig);
+        } catch { /* keep the previous share link */ }
+      }
+    }
+    if (touched.isNew) {
+      announceNewPeer(s, touched.peer);
+    } else if (wasLeft) {
+      publishOwnMarkers();
+      pushSystemChat(s, 'join', { name: touched.peer.name });
+      emit('meet:peerjoined', {
+        name: touched.peer.name, id: touched.peer.id,
+        legacy: touched.peer.pv < MEET_FEATURE_VERSION
+      });
+    }
     emitState();
     return;
   }
@@ -730,11 +936,7 @@ async function handleIncoming(text: string) {
     if (!touched) return;
     if (touched.peer.left) return;
     if (touched.isNew) {
-      if (s.hostId === s.self.id) {
-        touched.peer.hostId = s.self.id;
-        publishHi();
-      }
-      emit('meet:peerjoined', { name: touched.peer.name, id: touched.peer.id });
+      announceNewPeer(s, touched.peer);
       emitState();
     }
     rememberChatId(s, mid);
@@ -799,7 +1001,7 @@ async function handleIncoming(text: string) {
     p.ts = ts;
     if (s.hostId === s.self.id) p.hostId = s.self.id;
     if (p.lastFixAt && sampleAt <= p.lastFixAt) {
-      if (touched.isNew) emit('meet:peerjoined', { name: p.name, id: p.id });
+      if (touched.isNew) announceNewPeer(s, p);
       emitState();
       return;
     }
@@ -812,7 +1014,7 @@ async function handleIncoming(text: string) {
     p.lastFixAt = sampleAt;
     p.fixApprox = fixApprox;
     rememberAccuracy(p, p.acc, sampleAt);
-    if (touched.isNew) emit('meet:peerjoined', { name: p.name, id: p.id });
+    if (touched.isNew) announceNewPeer(s, p);
     emitState();
     return;
   }
@@ -841,6 +1043,63 @@ async function handleIncoming(text: string) {
     return;
   }
 
+  if (msg.k === 'goal') {
+    if (senderId !== s.hostId) return;
+    if (msg.del) {
+      if (!s.goal) return;
+      s.goal = null;
+      s.alertNear.clear();
+      pushSystemChat(s, 'goalCleared', { name: s.peers.get(senderId)?.name || t('meet.hostBadge') });
+      emit('meet:goal', { action: 'clear', by: senderId });
+      emitState();
+      return;
+    }
+    const goal = sanitizeMeetGoal(msg, now);
+    if (!goal) return;
+    s.goal = { ...goal, by: senderId };
+    s.alertNear.clear();
+    pushSystemChat(s, 'goalSet', {
+      name: s.peers.get(senderId)?.name || t('meet.hostBadge'),
+      label: goal.label || t('meet.goalDefault')
+    });
+    emit('meet:goal', { action: 'set', goal: { ...s.goal }, by: s.goal.by });
+    emitState();
+    return;
+  }
+
+  if (msg.k === 'mk') {
+    const peer = s.peers.get(senderId);
+    if (!peer || peer.left) return;
+    const mkid = String(msg.mkid || '');
+    if (!/^[A-Za-z0-9_-]{8,32}$/.test(mkid)) return;
+    const key = markerKey(senderId, mkid);
+    if (msg.del) {
+      if (s.markers.delete(key)) {
+        emit('meet:marker', { action: 'delete', id: mkid, by: senderId });
+        emitState();
+      }
+      return;
+    }
+    const candidate = sanitizeMeetMarker(msg, now);
+    if (!candidate) return;
+    const existing = s.markers.get(key);
+    if (existing) {
+      existing.label = candidate.label;
+      existing.expiresAt = Math.min(existing.expiresAt, candidate.expiresAt);
+      existing.updatedAt = now;
+    } else {
+      s.markers.set(key, {
+        ...candidate,
+        by: senderId,
+        byName: peer.name
+      } as any);
+      trimPeerMarkers(s, senderId);
+      emit('meet:marker', { action: 'add', marker: { ...s.markers.get(key) } });
+    }
+    emitState();
+    return;
+  }
+
   if (msg.k === 'bye') {
     const peer = s.peers.get(senderId);
     if (!peer) return;
@@ -848,7 +1107,8 @@ async function handleIncoming(text: string) {
     peer.lastContactAt = now;
     peer.lastSeen = now;
     markPeerLeft(s, senderId, now);
-    emit('meet:peerleft', { id: senderId });
+    pushSystemChat(s, 'leave', { name: peer.name });
+    emit('meet:peerleft', { id: senderId, name: peer.name });
     emitState();
     return;
   }
@@ -863,8 +1123,60 @@ async function handleIncoming(text: string) {
       await leaveMeet('kicked');
       return;
     }
+    const targetName = s.peers.get(target)?.name;
     markPeerLeft(s, target, now);
+    if (targetName) {
+      pushSystemChat(s, 'kick', { name: targetName });
+      emit('meet:peerleft', { id: target, name: targetName, kicked: true });
+    }
     emitState();
+  }
+}
+
+function evaluateMeetAlerts(s: MeetSession, now: number) {
+  if (get('meetAlertEnabled') === false) return;
+  if (positionStatus(s.self, now, s.sharing) !== 'fresh' || s.self.lat == null || s.self.lon == null) return;
+  const threshold = clampAlertDistance(get('meetAlertDistance'));
+  const cooldown = clampAlertCooldown(get('meetAlertCooldownMin')) * 60_000;
+  const fire = (key: string, alert: any) => {
+    if (!alertCooldownElapsed(s.alertCooldown.get(key), now, cooldown)) return;
+    s.alertCooldown.set(key, now);
+    s.lastAlert = alert;
+    emit('meet:alert', alert);
+  };
+  for (const [id, p] of s.peers) {
+    if (p.left || p.lat == null || p.lon == null) continue;
+    if (networkStatus(p, now) !== 'online' || positionStatus(p, now) !== 'fresh') continue;
+    const distance = haversine(s.self.lat, s.self.lon, p.lat, p.lon);
+    if (distance >= threshold) {
+      fire(`distance:${id}`, {
+        kind: 'distance', peerId: id, name: p.name, distance, at: now
+      });
+    }
+  }
+  if (!s.goal || get('meetAlertGoal') === false) return;
+  const selfGoalDistance = haversine(s.goal.lat, s.goal.lon, s.self.lat, s.self.lon);
+  const selfZone = goalZoneAfter(s.alertNear.get('self'), selfGoalDistance, threshold);
+  s.alertNear.set('self', selfZone.near);
+  if (selfZone.deviated) {
+    fire('goal:self', {
+      kind: 'goal-self', name: s.self.name, distance: selfGoalDistance, at: now
+    });
+  }
+  for (const [id, p] of s.peers) {
+    if (p.left || p.lat == null || p.lon == null) continue;
+    if (networkStatus(p, now) !== 'online' || positionStatus(p, now) !== 'fresh') continue;
+    const zone = goalZoneAfter(
+      s.alertNear.get(id),
+      haversine(s.goal.lat, s.goal.lon, p.lat, p.lon),
+      threshold
+    );
+    s.alertNear.set(id, zone.near);
+    if (zone.deviated) {
+      fire(`goal:${id}`, {
+        kind: 'goal-peer', peerId: id, name: p.name, distance: haversine(s.goal.lat, s.goal.lon, p.lat, p.lon), at: now
+      });
+    }
   }
 }
 
@@ -881,6 +1193,9 @@ function tick() {
   }
   s.tickCount++;
   let changed = false;
+  const markersBefore = s.markers.size;
+  activeMarkers(s, now);
+  if (s.markers.size !== markersBefore) changed = true;
   const selfState = `${positionStatus(s.self, now, s.sharing)}:${weakGpsReason(s.self.acc ?? null, s.self.accuracyHistory) || ''}`;
   if (s.self.viewState !== selfState) {
     s.self.viewState = selfState;
@@ -893,6 +1208,10 @@ function tick() {
       s.p2p?.closePeer(id);
       if (s.hostId === id) s.hostId = null;
       if (s.route?.peerId === id) s.route = null;
+      s.alertNear.delete(id);
+      for (const [key, marker] of s.markers) {
+        if (marker.by === id) s.markers.delete(key);
+      }
       changed = true;
       continue;
     }
@@ -906,14 +1225,22 @@ function tick() {
     }
   }
   if (changed) emitState();
-  if (s.tickCount % 5 === 0) pruneMeetReplay(s.replay, new Set(s.peers.keys()), now, REMOVE_MS);
+  if (s.tickCount % 5 === 0) {
+    evaluateMeetAlerts(s, now);
+    pruneMeetReplay(s.replay, new Set(s.peers.keys()), now, REMOVE_MS);
+  }
   if (s.tickCount % Math.round(HEARTBEAT_MS / 1000) === 0) {
     publishState();
     if (s.hostId === s.self.id && s.tickCount % 36 === 0) publishHi();
   }
 }
 
-async function beginSession({ invite, name, host, expiryMin }: { invite: string; name?: string; host: boolean; expiryMin?: number }) {
+async function beginSession({
+  invite, name, host, expiryMin, inviteExpiresAt = 0, inviteSig = ''
+}: {
+  invite: string; name?: string; host: boolean; expiryMin?: number;
+  inviteExpiresAt?: number; inviteSig?: string;
+}) {
   if (session) await leaveMeet('switch');
   const room = await deriveMeetRoom(invite);
   const selfName = resolveName(name);
@@ -921,12 +1248,28 @@ async function beginSession({ invite, name, host, expiryMin }: { invite: string;
   const selfId = randomMeetId();
   const now = Date.now();
   const mins = clampExpiry(host ? (expiryMin ?? expiryMinutes()) : (expiryMin ?? 120));
+  let signedExpiry = 0;
+  let signedSig = '';
+  if (host) {
+    signedExpiry = now + inviteExpiryMinutes() * 60_000;
+    signedSig = await signMeetInviteExpiry(room.invite, signedExpiry);
+  } else if (inviteExpiresAt || inviteSig) {
+    const verdict = await verifyMeetInviteExpiry(room.invite, inviteExpiresAt, inviteSig, now);
+    if (verdict.ok === false) throw new Error(`meet-invite-${verdict.reason}`);
+    signedExpiry = verdict.legacy ? 0 : verdict.expiresAt;
+    signedSig = signedExpiry ? inviteSig : '';
+  }
+  const link = signedExpiry && signedSig
+    ? meetLinkFor(room.invite, { exp: signedExpiry, sig: signedSig })
+    : meetLinkFor(room.invite);
   session = {
     invite: room.invite,
     room,
     roomId: room.roomId,
     roomLabel: roomLabelFor(room.roomId),
-    link: meetLinkFor(room.invite),
+    link,
+    inviteExpiresAt: signedExpiry,
+    inviteSig: signedSig,
     self: {
       id: selfId,
       name: selfName,
@@ -938,6 +1281,12 @@ async function beginSession({ invite, name, host, expiryMin }: { invite: string;
     hostId: host ? selfId : null,
     peers: new Map(),
     messages: [],
+    markers: new Map(),
+    goal: null,
+    alertNear: new Map(),
+    alertCooldown: new Map(),
+    lastAlert: null,
+    sendLimiter: new MeetSendLimiter(),
     chatUnread: 0,
     chatSeen: new Set(),
     chatRate: new Map(),
@@ -973,7 +1322,7 @@ async function beginSession({ invite, name, host, expiryMin }: { invite: string;
     onOnline: null
   };
   const s = session;
-  setMeetFragment(s.invite);
+  setMeetFragment(s.invite, s.inviteExpiresAt, s.inviteSig);
   s.onVisible = () => {
     if (document.visibilityState !== 'visible' || session !== s) return;
     startWatch();
@@ -997,8 +1346,11 @@ export async function createMeetSession({ name, expiryMin }: { name?: string; ex
   return beginSession({ invite: generateMeetInvite(), name, host: true, expiryMin });
 }
 
-export async function joinMeetSession(invite: string, { name }: { name?: string } = {}) {
-  return beginSession({ invite, name, host: false, expiryMin: 120 });
+export async function joinMeetSession(
+  invite: string,
+  { name, inviteExpiresAt = 0, inviteSig = '' }: { name?: string; inviteExpiresAt?: number; inviteSig?: string } = {}
+) {
+  return beginSession({ invite, name, host: false, expiryMin: 120, inviteExpiresAt, inviteSig });
 }
 
 export async function leaveMeet(reason = 'manual') {
@@ -1030,6 +1382,12 @@ function cleanupSession(s: MeetSession) {
   s.relay = null;
   s.peers.clear();
   s.messages.length = 0;
+  s.markers.clear();
+  s.goal = null;
+  s.alertNear.clear();
+  s.alertCooldown.clear();
+  s.lastAlert = null;
+  s.sendLimiter.clear();
   s.chatUnread = 0;
   s.chatSeen.clear();
   s.chatRate.clear();
@@ -1053,6 +1411,12 @@ export async function resetMeetCode() {
   s.relay = null;
   s.peers.clear();
   s.messages.length = 0;
+  s.markers.clear();
+  s.goal = null;
+  s.alertNear.clear();
+  s.alertCooldown.clear();
+  s.lastAlert = null;
+  s.sendLimiter.clear();
   s.chatUnread = 0;
   s.chatSeen.clear();
   s.chatRate.clear();
@@ -1070,12 +1434,16 @@ export async function resetMeetCode() {
   const invite = generateMeetInvite();
   const room = await deriveMeetRoom(invite);
   if (session !== s) return null;
+  const inviteExpiresAt = Date.now() + inviteExpiryMinutes() * 60_000;
+  const inviteSig = await signMeetInviteExpiry(room.invite, inviteExpiresAt);
   s.invite = room.invite;
   s.room = room;
   s.roomId = room.roomId;
   s.roomLabel = roomLabelFor(room.roomId);
-  s.link = meetLinkFor(room.invite);
-  setMeetFragment(s.invite);
+  s.inviteExpiresAt = inviteExpiresAt;
+  s.inviteSig = inviteSig;
+  s.link = meetLinkFor(room.invite, { exp: inviteExpiresAt, sig: inviteSig });
+  setMeetFragment(s.invite, inviteExpiresAt, inviteSig);
   s.hostId = s.self.id;
   s.startedAt = Date.now();
   s.expiresAt = Date.now() + expiryMinutes() * 60_000;
@@ -1108,8 +1476,9 @@ export async function sendMeetMessage(raw: string) {
   if (!s) return false;
   const text = cleanChatText(raw);
   if (!text) return false;
-  const mid = randomMeetId();
   const now = Date.now();
+  if (sendLimitDenied(s, 'text', now)) return false;
+  const mid = randomMeetId();
   const ok = await publishPacket({
     k: 'msg', id: s.self.id, name: s.self.name, c: s.self.color,
     mid, tx: text
@@ -1135,8 +1504,9 @@ export async function sendMeetVoice(raw: any) {
   const voice = sanitizeChatVoicePacket(raw);
   if (!voice) return false;
   const epoch = s.epoch;
-  const mid = randomMeetId();
   const now = Date.now();
+  if (sendLimitDenied(s, 'voice', now)) return false;
+  const mid = randomMeetId();
   const ok = await publishPacket({
     k: 'msg', id: s.self.id, name: s.self.name, c: s.self.color,
     mid, au: voice.base64, aut: voice.mime, aud: voice.duration, auw: voice.waveform
@@ -1259,6 +1629,83 @@ export async function sendMeetImage({ base64, mime, width, height, caption = '',
   return true;
 }
 
+export async function sendMeetMarker(input: { type?: string; label?: string; ttlMin?: number } = {}) {
+  const s = session;
+  if (!s) return false;
+  const now = Date.now();
+  if (positionStatus(s.self, now, s.sharing) !== 'fresh' || s.self.lat == null || s.self.lon == null) return false;
+  if (!isMeetMarkerType(input.type)) return false;
+  if (sendLimitDenied(s, 'marker', now)) return false;
+  const ttlMin = clampMarkerTtl(input.ttlMin ?? get('meetMarkerTtlMin'));
+  const marker = sanitizeMeetMarker({
+    mkid: randomMeetId(),
+    mtyp: input.type,
+    la: s.self.lat,
+    lo: s.self.lon,
+    tx: cleanMarkerLabel(input.label),
+    ttl: ttlMin
+  }, now);
+  if (!marker) return false;
+  const ok = await publishPacket({
+    k: 'mk', id: s.self.id,
+    mkid: marker.id, mtyp: marker.type,
+    la: marker.lat, lo: marker.lon, tx: marker.label, ttl: ttlMin
+  });
+  if (session !== s || !ok) return false;
+  const stored = { ...marker, by: s.self.id, byName: s.self.name };
+  s.markers.set(markerKey(s.self.id, marker.id), stored);
+  trimPeerMarkers(s, s.self.id);
+  set('meetMarkerTtlMin', ttlMin);
+  emit('meet:marker', { action: 'add', marker: stored });
+  emitState();
+  return true;
+}
+
+export async function deleteMeetMarker(id: string) {
+  const s = session;
+  if (!s) return false;
+  const key = markerKey(s.self.id, String(id || ''));
+  if (!s.markers.has(key)) return false;
+  const ok = await publishPacket({ k: 'mk', id: s.self.id, del: true, mkid: id });
+  if (session !== s || !ok) return false;
+  s.markers.delete(key);
+  emit('meet:marker', { action: 'delete', id, by: s.self.id });
+  emitState();
+  return true;
+}
+
+export async function sendMeetGoal({ label = '' }: { label?: string } = {}) {
+  const s = session;
+  if (!s || s.hostId !== s.self.id) return false;
+  const now = Date.now();
+  if (positionStatus(s.self, now, s.sharing) !== 'fresh' || s.self.lat == null || s.self.lon == null) return false;
+  if (sendLimitDenied(s, 'goal', now)) return false;
+  const goal = sanitizeMeetGoal({ la: s.self.lat, lo: s.self.lon, tx: label }, now);
+  if (!goal) return false;
+  const ok = await publishPacket({ k: 'goal', id: s.self.id, la: goal.lat, lo: goal.lon, tx: goal.label });
+  if (session !== s || !ok) return false;
+  s.goal = { ...goal, by: s.self.id };
+  s.alertNear.clear();
+  pushSystemChat(s, 'goalSet', { name: s.self.name, label: goal.label || t('meet.goalDefault') });
+  emit('meet:goal', { action: 'set', goal: { ...s.goal }, by: s.goal.by });
+  emitState();
+  return true;
+}
+
+export async function clearMeetGoal() {
+  const s = session;
+  if (!s || s.hostId !== s.self.id || !s.goal) return false;
+  if (sendLimitDenied(s, 'goal', Date.now())) return false;
+  const ok = await publishPacket({ k: 'goal', id: s.self.id, del: true });
+  if (session !== s || !ok) return false;
+  s.goal = null;
+  s.alertNear.clear();
+  pushSystemChat(s, 'goalCleared', { name: s.self.name });
+  emit('meet:goal', { action: 'clear', by: s.self.id });
+  emitState();
+  return true;
+}
+
 export async function sendMeetNow() {
   if (!session) return false;
   await Promise.race([sendPresence(), sleep(500)]);
@@ -1277,9 +1724,14 @@ export function retryMeetGeolocation() {
 export async function kickMeetPeer(peerId: string) {
   const s = session;
   if (!s || s.hostId !== s.self.id || !peerId || peerId === s.self.id) return false;
+  const target = s.peers.get(peerId);
   await publishPacket({ k: 'kick', id: s.self.id, target: peerId, by: s.self.id });
   if (session !== s) return false;
   markPeerLeft(s, peerId, Date.now());
+  if (target) {
+    pushSystemChat(s, 'kick', { name: target.name });
+    emit('meet:peerleft', { id: peerId, name: target.name, kicked: true });
+  }
   emitState();
   return true;
 }
@@ -1392,6 +1844,10 @@ export const meet = {
   sendMessage: sendMeetMessage,
   sendVoice: sendMeetVoice,
   sendImage: sendMeetImage,
+  sendMarker: sendMeetMarker,
+  deleteMarker: deleteMeetMarker,
+  setGoal: sendMeetGoal,
+  clearGoal: clearMeetGoal,
   originalBlob: getMeetOriginalBlob,
   requestOriginal: requestMeetOriginal,
   cancelOriginal: cancelMeetOriginal,

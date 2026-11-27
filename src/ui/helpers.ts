@@ -111,12 +111,14 @@ on('toast', ({ msg, type }) => toast(msg, type));
 const modalStack = [];
 let modalSequence = 0;
 
-onUIPop((state) => {
-  const top = modalStack[modalStack.length - 1];
-  if (!top || (state?.type === 'modal' && state.modalId === top.id)) return false;
-  top.closeFromHistory();
-  return true;
-});
+if (typeof window !== 'undefined') {
+  onUIPop((state) => {
+    const top = modalStack[modalStack.length - 1];
+    if (!top || (state?.type === 'modal' && state.modalId === top.id)) return false;
+    top.closeFromHistory();
+    return true;
+  });
+}
 
 export function hasOpenOverlay() {
   return !!document.querySelector('.modal-backdrop, .cam-overlay, .qr-scan-overlay, .record-result-sheet, #oled-dash.active');

@@ -7,18 +7,20 @@ let queuedWrites: Array<() => void> = [];
 let skipPopHandlers = false;
 const overlayStack: Array<{ id: number; closeFromHistory: () => void }> = [];
 
-window.addEventListener('popstate', () => {
-  if (!pendingBacks) return;
-  pendingBacks--;
-  if (pendingBacks) return;
-  const writes = queuedWrites;
-  queuedWrites = [];
-  skipPopHandlers = writes.length > 0;
-  for (const write of writes) write();
-  const resolvers = pendingBackResolvers;
-  pendingBackResolvers = [];
-  for (const resolve of resolvers) resolve();
-});
+if (typeof window !== 'undefined') {
+  window.addEventListener('popstate', () => {
+    if (!pendingBacks) return;
+    pendingBacks--;
+    if (pendingBacks) return;
+    const writes = queuedWrites;
+    queuedWrites = [];
+    skipPopHandlers = writes.length > 0;
+    for (const write of writes) write();
+    const resolvers = pendingBackResolvers;
+    pendingBackResolvers = [];
+    for (const resolve of resolvers) resolve();
+  });
+}
 
 function writeState(state: Omit<UIState, 'id'>, replace: boolean) {
   const entry = { ...state, id: ++sequence };
@@ -86,10 +88,12 @@ export function removeOverlayState(id: number, { history = true } = {}) {
   return history ? backFromUIState(id) : Promise.resolve();
 }
 
-onUIPop((state) => {
-  const top = overlayStack[overlayStack.length - 1];
-  if (!top || (state?.type === 'overlay' && state.id === top.id)) return false;
-  overlayStack.pop();
-  top.closeFromHistory();
-  return true;
-});
+if (typeof window !== 'undefined') {
+  onUIPop((state) => {
+    const top = overlayStack[overlayStack.length - 1];
+    if (!top || (state?.type === 'overlay' && state.id === top.id)) return false;
+    overlayStack.pop();
+    top.closeFromHistory();
+    return true;
+  });
+}

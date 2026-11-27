@@ -13,6 +13,7 @@ import { diag } from '../core/diag';
 import { t } from '../core/i18n';
 import { WP_ICONS } from '../core/waypointMeta';
 import { meetProximityZoom, meetRoleColor } from '../core/meetVisuals';
+import { el, icon } from './helpers';
 
 type RepairOverlayLine = [number, number][];
 type RepairOverlay = { before?: RepairOverlayLine[]; after?: RepairOverlayLine[] };
@@ -36,6 +37,10 @@ function cssVar(name: string, fallback: string) {
 function freshMeetPosition(peer: any) {
   return peer?.positionStatus === 'fresh' && peer?.networkStatus !== 'left';
 }
+
+const MEET_PIN_ICONS: Record<string, string> = {
+  here: 'pin', gather: 'flag', supply: 'batch', danger: 'warn', scenic: 'mountain', parking: 'tag'
+};
 
 function meetMarkerStatus(peer: any) {
   const parts = [];
@@ -70,9 +75,13 @@ export class TrackMap {
   declare navMarker: any;
   declare photoRefMarker: any;
   declare meetMarkers: Map<string, any>;
+  declare meetPins: Map<string, any>;
+  declare meetGoalMarker: any;
   declare meetSelf: any;
   declare meetPeers: any[];
   declare meetRoute: any;
+  declare meetGoal: any;
+  declare meetPinsList: any[];
   declare tileErrors: number;
   declare tileLoaded: boolean;
   declare vectorFallback: boolean;
@@ -131,9 +140,13 @@ export class TrackMap {
     this.navMarker = null;
     this.photoRefMarker = null;
     this.meetMarkers = new Map();
+    this.meetPins = new Map();
+    this.meetGoalMarker = null;
     this.meetSelf = null;
     this.meetPeers = [];
     this.meetRoute = null;
+    this.meetGoal = null;
+    this.meetPinsList = [];
     this.tileErrors = 0;
     this.tileLoaded = false;
     this.vectorFallback = false;
@@ -906,10 +919,14 @@ export class TrackMap {
     else node.removeAttribute('title');
   }
 
-  setMeetData({ self = null, peers = [], route = null }: { self?: any; peers?: any[]; route?: any } = {}) {
+  setMeetData({ self = null, peers = [], route = null, markers = [], goal = null }: {
+    self?: any; peers?: any[]; route?: any; markers?: any[]; goal?: any;
+  } = {}) {
     this.meetSelf = self;
     this.meetPeers = Array.isArray(peers) ? peers : [];
     this.meetRoute = route;
+    this.meetPinsList = Array.isArray(markers) ? markers : [];
+    this.meetGoal = goal;
     if (!this.map || this.destroyed) return;
     if (self?.hasFix && self.lat != null && self.lon != null) {
       this.updatePosition(self.lat, self.lon, self.acc, self.heading);
@@ -923,6 +940,8 @@ export class TrackMap {
       this.clearPosition();
     }
     this._renderMeetMarkers();
+    this._renderMeetPins();
+    this._renderMeetGoal();
     this._applyMeetLinks();
     this._applyMeetRoute();
     this._updateMeetProximity();
@@ -932,12 +951,18 @@ export class TrackMap {
     this.meetSelf = null;
     this.meetPeers = [];
     this.meetRoute = null;
+    this.meetGoal = null;
+    this.meetPinsList = [];
     this._meetAutoZoomReady = false;
     this._meetLastDistance = Number.NaN;
     this._meetLastSelf = null;
     this._meetCameraAnimating = false;
     for (const [, entry] of this.meetMarkers) entry.marker.remove();
     this.meetMarkers.clear();
+    for (const [, entry] of this.meetPins) entry.marker.remove();
+    this.meetPins.clear();
+    this.meetGoalMarker?.remove();
+    this.meetGoalMarker = null;
     this.map?.getSource('meet-links')?.setData({ type: 'FeatureCollection', features: [] });
     this.map?.getSource('meet-route')?.setData({ type: 'FeatureCollection', features: [] });
   }
@@ -986,6 +1011,86 @@ export class TrackMap {
     }
   }
 
+  _renderMeetPins() {
+    if (!this.map || this.destroyed) return;
+    const alive = new Set<string>();
+    for (const pin of this.meetPinsList) {
+      if (pin.lat == null || pin.lon == null) continue;
+      const key = `${pin.by}:${pin.id}`;
+      alive.add(key);
+      let entry = this.meetPins.get(key);
+      if (!entry) {
+        const node = document.createElement('div');
+        node.className = `meet-pin meet-pin-${pin.type}`;
+        const bubble = el('span', { class: 'meet-pin-bubble' });
+        bubble.append(icon(MEET_PIN_ICONS[pin.type] || 'pin', 14));
+        const tag = document.createElement('span');
+        tag.className = 'meet-pin-tag';
+        node.append(bubble, tag);
+        const marker = new maplibregl.Marker({ element: node, anchor: 'bottom' })
+          .setLngLat(toDisplay(pin.lon, pin.lat, this.coordSystem) as [number, number]).addTo(this.map);
+        entry = { node, tag, marker };
+        node.addEventListener('click', (event) => {
+          event.stopPropagation();
+          this.flyTo(pin.lat, pin.lon, Math.max(this.map?.getZoom?.() || 14, 15));
+        });
+        this.meetPins.set(key, entry);
+      }
+      const typeLabel = t(`meet.markerType.${pin.type}`);
+      const label = pin.label || typeLabel;
+      entry.node.classList.toggle('mine', !!pin.mine);
+      entry.tag.textContent = label;
+      const remaining = Math.max(1, Math.ceil((pin.remainingMs || 0) / 60_000));
+      entry.node.title = [
+        typeLabel,
+        pin.label,
+        t('meet.markerBy', { name: pin.byName || '' }),
+        t('meet.markerRemaining', { m: remaining })
+      ].filter(Boolean).join(' · ');
+      entry.node.setAttribute('aria-label', entry.node.title);
+      const [lon, lat] = toDisplay(pin.lon, pin.lat, this.coordSystem);
+      entry.marker.setLngLat([lon, lat] as [number, number]);
+    }
+    for (const [key, entry] of this.meetPins) {
+      if (!alive.has(key)) { entry.marker.remove(); this.meetPins.delete(key); }
+    }
+  }
+
+  _renderMeetGoal() {
+    if (!this.map || this.destroyed) return;
+    const goal = this.meetGoal;
+    if (!goal || goal.lat == null || goal.lon == null) {
+      this.meetGoalMarker?.remove();
+      this.meetGoalMarker = null;
+      return;
+    }
+    if (!this.meetGoalMarker) {
+      const node = document.createElement('div');
+      node.className = 'meet-goal-marker';
+      const bubble = el('span', { class: 'meet-goal-bubble' });
+      bubble.append(icon('flag', 15));
+      const tag = document.createElement('span');
+      tag.className = 'meet-goal-tag';
+      node.append(bubble, tag);
+      this.meetGoalMarker = new maplibregl.Marker({ element: node, anchor: 'bottom' })
+        .setLngLat(toDisplay(goal.lon, goal.lat, this.coordSystem) as [number, number]).addTo(this.map);
+      node.addEventListener('click', (event) => {
+        event.stopPropagation();
+        this.flyTo(goal.lat, goal.lon, Math.max(this.map?.getZoom?.() || 14, 15));
+      });
+    }
+    const label = goal.label || t('meet.goalDefault');
+    const tag = this.meetGoalMarker.getElement().querySelector('.meet-goal-tag');
+    if (tag) tag.textContent = label;
+    this.meetGoalMarker.getElement().title = [
+      t('meet.goalTitle'),
+      label,
+      goal.byName ? t('meet.goalSetBy', { name: goal.byName }) : ''
+    ].filter(Boolean).join(' · ');
+    const [lon, lat] = toDisplay(goal.lon, goal.lat, this.coordSystem);
+    this.meetGoalMarker.setLngLat([lon, lat] as [number, number]);
+  }
+
   _applyMeetLinks() {
     const source = this.map?.getSource('meet-links');
     if (!source) return;
@@ -1032,6 +1137,8 @@ export class TrackMap {
       this._styleMeetSelf();
     }
     this._renderMeetMarkers();
+    this._renderMeetPins();
+    this._renderMeetGoal();
     this._applyMeetLinks();
     this._applyMeetRoute();
   }
@@ -1073,6 +1180,12 @@ export class TrackMap {
     if (freshMeetPosition(this.meetSelf) && this.meetSelf.lat != null) pts.push(toDisplay(this.meetSelf.lon, this.meetSelf.lat, this.coordSystem));
     for (const p of this.meetPeers) {
       if (freshMeetPosition(p) && p.lat != null && p.lon != null) pts.push(toDisplay(p.lon, p.lat, this.coordSystem));
+    }
+    if (this.meetGoal?.lat != null && this.meetGoal?.lon != null) {
+      pts.push(toDisplay(this.meetGoal.lon, this.meetGoal.lat, this.coordSystem));
+    }
+    for (const pin of this.meetPinsList) {
+      if (pin.lat != null && pin.lon != null) pts.push(toDisplay(pin.lon, pin.lat, this.coordSystem));
     }
     if (!pts.length) return;
     this.follow = false;

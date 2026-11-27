@@ -110,16 +110,18 @@ describe('meetup voice and emoji chat', () => {
       sq: 1, ts: Date.now(), ...voicePacket()
     };
     harness.relayOptions.onMessage(JSON.stringify({ ...base, mid: 'incoming01' }));
-    await vi.waitFor(() => expect(meetModule.getMeetSnapshot().messages).toHaveLength(1));
-    expect(meetModule.getMeetSnapshot().messages[0]).toMatchObject({
+    await vi.waitFor(() => expect(meetModule.getMeetSnapshot().messages.some((m: any) => m.voice)).toBe(true));
+    const voiceMessage = meetModule.getMeetSnapshot().messages.find((m: any) => m.voice);
+    expect(voiceMessage).toMatchObject({
       fromId: 'bob', name: 'Bob', self: false, voice: { duration: 1200 }
     });
+    const count = meetModule.getMeetSnapshot().messages.length;
 
     harness.relayOptions.onMessage(JSON.stringify({
       ...base, mid: 'incoming02', sq: 2, au: 'invalid!'
     }));
     await Promise.resolve();
-    expect(meetModule.getMeetSnapshot().messages).toHaveLength(1);
+    expect(meetModule.getMeetSnapshot().messages).toHaveLength(count);
   });
 
   it('notifies only for a valid remote message and ignores duplicates', async () => {
@@ -149,13 +151,21 @@ describe('meetup voice and emoji chat', () => {
   });
 
   it('expires voice payloads beyond the bounded in-memory window', async () => {
-    await setup();
-    for (let i = 0; i < CHAT_VOICE_KEEP + 1; i++) expect(await meetModule.sendMeetVoice(voicePacket())).toBe(true);
-    const messages = meetModule.getMeetSnapshot().messages;
-    expect(messages).toHaveLength(CHAT_VOICE_KEEP + 1);
-    expect(messages[0].voice.data).toBeNull();
-    expect(messages[0].voiceExpired).toBe(true);
-    expect(messages.at(-1).voice.data).toBe(voicePacket().au);
+    vi.useFakeTimers();
+    try {
+      await setup();
+      for (let i = 0; i < CHAT_VOICE_KEEP + 1; i++) {
+        expect(await meetModule.sendMeetVoice(voicePacket())).toBe(true);
+        await vi.advanceTimersByTimeAsync(30_100);
+      }
+      const messages = meetModule.getMeetSnapshot().messages;
+      expect(messages).toHaveLength(CHAT_VOICE_KEEP + 1);
+      expect(messages[0].voice.data).toBeNull();
+      expect(messages[0].voiceExpired).toBe(true);
+      expect(messages.at(-1).voice.data).toBe(voicePacket().au);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('preserves emoji in ordinary encrypted text messages', async () => {

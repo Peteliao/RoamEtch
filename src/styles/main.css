@@ -1850,6 +1850,7 @@ html.oled-lock { color-scheme: dark; }
 .meet-badge.bad, .meet-badge.offline, .meet-badge.left { color: var(--danger); background: rgba(242, 109, 109, 0.12); }
 .meet-badge.weak, .meet-badge.stale, .meet-badge.paused { color: var(--warn); background: rgba(245, 185, 66, 0.12); }
 .meet-badge.approx { padding: 0 4px; font-family: var(--mono); }
+.meet-badge.legacy { color: var(--info); background: rgba(90, 167, 240, 0.12); }
 .meet-peer-empty {
   display: flex; flex-direction: column; align-items: center; gap: 3px;
   padding: 15px 10px 13px; text-align: center; color: var(--text-faint);
@@ -1879,6 +1880,73 @@ html.oled-lock { color-scheme: dark; }
 .meet-route-note .mr-txt { flex: 1; min-width: 0; line-height: 1.45; }
 .meet-route-note .mr-d { margin-top: 2px; color: var(--text-faint); font-size: 12px; }
 
+.meet-goal-card, .meet-spread-card {
+  display: flex; align-items: center; gap: 9px; margin: 8px 4px 0; padding: 8px 9px;
+  border-radius: 12px; border: 1px solid var(--border); background: var(--bg-input);
+  cursor: pointer; text-align: left;
+}
+.meet-spread-card { cursor: default; }
+.meet-goal-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mcg-ic, .msc-ic {
+  width: 30px; height: 30px; flex: none; border-radius: 9px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.mcg-ic { color: var(--accent); background: var(--accent-soft); }
+.msc-ic { color: var(--info); background: rgba(90, 167, 240, 0.12); }
+.mcg-main, .msc-main { flex: 1; min-width: 0; }
+.mcg-t, .msc-t {
+  color: var(--text); font-size: 12.5px; font-weight: 650;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mcg-d, .msc-d {
+  margin-top: 1px; color: var(--text-faint); font-size: 12px; line-height: 1.4;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mcg-fit { display: inline-flex; flex: none; color: var(--text-faint); }
+
+.meet-marker-section { margin: 8px 4px 2px; }
+.mms-head {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 3px;
+  color: var(--text-faint); font-size: 12px; font-weight: 650;
+}
+.mms-head svg { flex: none; }
+.meet-marker-list { display: flex; flex-direction: column; }
+.meet-marker-row {
+  display: flex; align-items: center; gap: 8px; padding: 6px 4px;
+  border-top: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+}
+.meet-marker-row:first-child { border-top: none; }
+.meet-marker-row:hover { background: var(--bg-input); }
+.meet-marker-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
+.mmr-ic {
+  width: 26px; height: 26px; flex: none; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--marker-tone, var(--text-dim));
+  background: var(--bg-elev); border: 1px solid var(--border);
+}
+.mmr-main { flex: 1; min-width: 0; }
+.mmr-t {
+  color: var(--text); font-size: 12.5px; font-weight: 650;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mmr-d {
+  margin-top: 1px; color: var(--text-faint); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.marker-here { --marker-tone: var(--accent); }
+.marker-gather { --marker-tone: var(--info); }
+.marker-supply { --marker-tone: #8bd17c; }
+.marker-danger { --marker-tone: var(--danger); }
+.marker-scenic { --marker-tone: #b394f5; }
+.marker-parking { --marker-tone: var(--text-dim); }
+
+.meet-invite-expiry {
+  display: flex; align-items: center; gap: 5px;
+  color: var(--text-faint); font-size: 12px; line-height: 1.4;
+}
+.meet-invite-expiry svg { flex: none; }
+.meet-invite-expiry.expired { color: var(--warn); font-weight: 600; }
+
 .meet-peer-marker { position: relative; width: 16px; height: 16px; cursor: pointer; z-index: 4; }
 .meet-peer-marker .mp-dot {
   display: block; width: 16px; height: 16px; border-radius: 50%;
@@ -1901,6 +1969,41 @@ html.oled-lock { color-scheme: dark; }
 .meet-peer-marker.position-weak .mp-dot { box-shadow: 0 0 0 2px var(--warn), 0 2px 8px rgba(0, 0, 0, 0.38); }
 .meet-peer-marker.position-paused { opacity: 0.68; }
 .meet-peer-marker.position-paused .mp-dot { outline: 1px dashed var(--text-faint); outline-offset: 3px; }
+
+.meet-pin, .meet-goal-marker { position: relative; cursor: pointer; z-index: 3; }
+.meet-pin-bubble, .meet-goal-bubble {
+  display: flex; align-items: center; justify-content: center;
+  width: 27px; height: 27px; border-radius: 50% 50% 50% 5px;
+  transform: rotate(-45deg); color: #fff;
+  background: var(--marker-tone, var(--text-dim));
+  border: 2px solid var(--bg-elev);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.36);
+}
+.meet-pin-bubble > svg, .meet-goal-bubble > svg { transform: rotate(45deg); }
+.meet-pin.mine .meet-pin-bubble { box-shadow: 0 0 0 2px var(--accent), 0 2px 8px rgba(0, 0, 0, 0.36); }
+.meet-pin-tag, .meet-goal-tag {
+  position: absolute; left: 30px; bottom: 3px;
+  max-width: 138px; padding: 2px 6px; border-radius: 6px;
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-left: 3px solid var(--marker-tone, var(--text-dim));
+  color: var(--text); font-size: 12px; font-weight: 650; line-height: 1.35;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  box-shadow: var(--shadow-1); pointer-events: none;
+}
+.meet-pin-here { --marker-tone: var(--accent); }
+.meet-pin-gather { --marker-tone: var(--info); }
+.meet-pin-supply { --marker-tone: #8bd17c; }
+.meet-pin-danger { --marker-tone: var(--danger); }
+.meet-pin-scenic { --marker-tone: #b394f5; }
+.meet-pin-parking { --marker-tone: var(--text-dim); }
+.meet-goal-marker { --marker-tone: var(--accent); }
+.meet-goal-bubble {
+  width: 29px; height: 29px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink);
+  box-shadow: 0 0 0 2px var(--bg-elev), 0 0 0 4px var(--accent-soft), 0 2px 10px rgba(0, 0, 0, 0.36);
+}
+.meet-goal-bubble > svg { transform: none; }
+.meet-goal-tag { border-left-color: var(--accent); font-weight: 700; }
 
 .meet-share { padding: 4px 0 2px; text-align: center; }
 .meet-room-label {
@@ -1951,6 +2054,55 @@ html.oled-lock { color-scheme: dark; }
   font-size: 12px; line-height: 1.5;
 }
 .meet-create-note svg { flex: none; margin-top: 1px; color: var(--accent); }
+
+.meet-sheet-note {
+  display: flex; align-items: flex-start; gap: 7px; margin-bottom: 10px; padding: 9px 10px;
+  border-radius: 10px; background: var(--bg-input); color: var(--text-dim);
+  font-size: 12px; line-height: 1.5;
+}
+.meet-sheet-note svg { flex: none; margin-top: 1px; color: var(--accent); }
+.meet-sheet-note.faint svg { color: var(--text-faint); }
+.meet-inline-warn {
+  display: flex; align-items: flex-start; gap: 7px; margin: -2px 0 10px; padding: 8px 10px;
+  border-radius: 10px; border: 1px solid rgba(245, 185, 66, 0.35);
+  background: rgba(245, 185, 66, 0.1); color: var(--text); font-size: 12px; line-height: 1.45;
+}
+.meet-inline-warn svg { flex: none; margin-top: 1px; color: var(--warn); }
+.meet-marker-grid {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px; margin-top: 10px;
+}
+.meet-marker-choice {
+  display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 9px 10px;
+  border-radius: 12px; border: 1px solid var(--border); background: var(--bg-input);
+  color: var(--text); font-size: 13px; font-weight: 650; cursor: pointer; text-align: left;
+}
+.meet-marker-choice:hover { border-color: var(--marker-tone); }
+.meet-marker-choice:focus-visible { outline: 2px solid var(--marker-tone); outline-offset: 1px; }
+.meet-marker-choice:disabled { opacity: .6; cursor: wait; }
+.mmc-ic { display: inline-flex; flex: none; color: var(--marker-tone, var(--text-dim)); }
+.mmc-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meet-goal-summary {
+  display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; padding: 9px 10px;
+  border-radius: 10px; background: var(--accent-soft); color: var(--text);
+}
+.mgs-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.mgs-head svg { flex: none; color: var(--accent); }
+.mgs-t { font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mgs-d { padding-left: 23px; color: var(--text-faint); font-size: 12px; line-height: 1.45; }
+.meet-goal-actions { display: flex; margin-top: 12px; }
+.meet-goal-actions .btn { flex: 1; }
+
+.meet-invite-note {
+  display: flex; align-items: flex-start; gap: 7px; margin: 0 0 10px; padding: 8px 10px;
+  border-radius: 10px; background: var(--accent-soft); color: var(--text-dim);
+  font-size: 12px; line-height: 1.5; text-align: left;
+}
+.meet-invite-note svg { flex: none; margin-top: 1px; color: var(--accent); }
+.meet-invite-note .min { margin-top: 2px; color: var(--text-faint); font-size: 12px; }
+.meet-invite-note.expired { background: rgba(245, 185, 66, 0.1); color: var(--warn); font-weight: 600; }
+.meet-invite-note.expired svg { color: var(--warn); }
+.meet-invite-note.expired .min { color: var(--text-faint); font-weight: 400; }
 
 .meet-chat { display: flex; flex-direction: column; gap: 10px; }
 .meet-chat-audio-host {
@@ -2074,6 +2226,12 @@ html.oled-lock { color-scheme: dark; }
 .mc-caption { max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.45; }
 .meet-chat-row.self .mc-caption { text-align: right; }
 .mc-time { padding: 0 2px; color: var(--text-faint); font-size: 12px; }
+.meet-chat-system {
+  align-self: center; display: inline-flex; align-items: center; gap: 5px; max-width: 92%;
+  padding: 4px 9px; border-radius: 999px; background: var(--bg-input);
+  color: var(--text-faint); font-size: 12px; line-height: 1.4; text-align: center;
+}
+.meet-chat-system .mcs-ic { display: inline-flex; flex: none; }
 .meet-chat-emoji-panel {
   display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 4px;
   padding: 8px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-elev);

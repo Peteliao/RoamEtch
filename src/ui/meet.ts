@@ -4,7 +4,8 @@ import { t } from '../core/i18n';
 import { get, set } from '../core/settings';
 import { on } from '../core/events';
 import { meet, getMeetSnapshot, MEET_CHAT_MAX_LEN } from '../core/meet';
-import { normalizeMeetInvite, isLegacyMeetCode } from '../core/meetLink';
+import { normalizeMeetInvite, isLegacyMeetCode, parseMeetLink } from '../core/meetLink';
+import { MEET_MARKER_TTL_OPTIONS, MEET_MARKER_TYPES, MEET_MARKER_LABEL_MAX } from '../core/meetCollab';
 import { fmtDistance, fmtDuration } from '../core/geo';
 import { regionState } from '../core/region';
 import { drawQr } from '../core/brand';
@@ -24,6 +25,10 @@ const CHAT_EMOJIS = [
   '🥰', '😘', '😎', '🤔', '😐', '😴', '😭', '😡', '👍', '👎', '👏', '🙌',
   '💪', '🤝', '✌️', '👌', '🙏', '🎉', '❤️', '🔥', '✅', '⭐', '🚀', '🌈'
 ];
+
+const MARKER_ICONS = {
+  here: 'pin', gather: 'flag', supply: 'batch', danger: 'warn', scenic: 'mountain', parking: 'tag'
+} as const;
 
 function emojiOnly(text: string) {
   return /^(?:\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic})*\s*){1,12}$/u.test(text);
@@ -61,7 +66,15 @@ export function createMeetView(navigate) {
     class: 'iconbtn meet-chat-btn', type: 'button', title: t('meet.chat'), 'aria-label': t('meet.chat'),
     onclick: () => openChatSheet()
   }, icon('chat'), chatBadge);
-  tools.append(chatBtn, followBtn, fitBtn, shareBtn);
+  const markerBtn = el('button', {
+    class: 'iconbtn', type: 'button', title: t('meet.markerTool'), 'aria-label': t('meet.markerTool'),
+    onclick: () => openMarkerSheet()
+  }, icon('pin'));
+  const goalBtn = el('button', {
+    class: 'iconbtn', type: 'button', title: t('meet.goalTool'), 'aria-label': t('meet.goalTool'),
+    onclick: () => openGoalSheet()
+  }, icon('flag'));
+  tools.append(chatBtn, markerBtn, goalBtn, followBtn, fitBtn, shareBtn);
 
   const empty = el('div', { class: 'meet-empty' });
   const panel = el('div', { class: 'meet-panel' });
@@ -85,6 +98,7 @@ export function createMeetView(navigate) {
   let lastCode = '';
   let panelCollapsed = false;
   let lastTickRender = 0;
+  let rateLimitedUntil = 0;
   let chatModal = null;
   let chatPingTimer = 0;
   let chatDraft = '';
@@ -572,7 +586,21 @@ export function createMeetView(navigate) {
     });
   }
 
+  function systemChatText(msg) {
+    const params = msg.sysParams || {};
+    const key = {
+      join: 'join', leave: 'leave', kick: 'kick',
+      goalSet: 'goalSet', goalCleared: 'goalCleared'
+    }[msg.sys];
+    return key ? t(`meet.system.${key}`, params) : '';
+  }
+
   function chatRow(s, msg) {
+    if (msg.sys) {
+      return el('div', { class: 'meet-chat-system' },
+        el('span', { class: 'mcs-ic' }, icon(msg.sys === 'join' ? 'meet' : msg.sys === 'kick' ? 'shield' : 'info', 13)),
+        el('span', {}, systemChatText(msg)));
+    }
     const own = !!msg.self || msg.fromId === s.self?.id;
     const time = new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
     let bubble;
@@ -832,7 +860,7 @@ export function createMeetView(navigate) {
         input.focus();
       } else {
         syncSend();
-        toast(t('meet.chatSendFail'), 'err');
+        if (Date.now() >= rateLimitedUntil) toast(t('meet.chatSendFail'), 'err');
       }
     };
 
@@ -932,7 +960,7 @@ export function createMeetView(navigate) {
           render(true);
           meet.markChatRead();
           toast(t('meet.chatVoiceSent'), 'ok', 1800);
-        } else {
+        } else if (Date.now() >= rateLimitedUntil) {
           toast(t('meet.chatVoiceFailed'), 'err');
         }
       } catch (error) {
@@ -1100,6 +1128,7 @@ export function createMeetView(navigate) {
     else if (p?.positionStatus === 'stale') badges.push(badge(t('meet.positionStaleShort'), 'stale'));
     else if (p?.positionStatus === 'paused') badges.push(badge(t('meet.positionPausedShort'), 'paused'));
     if (p?.fixApprox) badges.push(el('span', { class: 'meet-badge approx', title: t('meet.fixApprox') }, '~'));
+    if (p?.legacy) badges.push(badge(t('meet.legacyPeerShort'), 'legacy'));
     return badges;
   }
 
@@ -1109,6 +1138,7 @@ export function createMeetView(navigate) {
     if (updated) bits.push(updated);
     if (p.fixApprox) bits.push(t('meet.fixApprox'));
     if (p.distance != null) bits.push(fmtDist(p.distance));
+    if (p.goalDistance != null) bits.push(t('meet.goalDistanceShort', { dist: fmtDist(p.goalDistance) }));
     const b = bearingText(p);
     if (b) bits.push(b);
     return bits.join(' · ');
@@ -1121,6 +1151,7 @@ export function createMeetView(navigate) {
     else sub.push(positionLabel(self));
     const updated = fixUpdateText(self);
     if (updated) sub.push(updated);
+    if (self.goalDistance != null) sub.push(t('meet.goalDistanceShort', { dist: fmtDist(self.goalDistance) }));
     return el('div', { class: 'meet-peer-row self' },
       el('span', { class: 'meet-peer-dot', style: { background: self.color || 'var(--accent)' } }),
       el('div', { class: 'meet-peer-main' },
@@ -1180,6 +1211,100 @@ export function createMeetView(navigate) {
       action || null);
   }
 
+  function flyPoint(lat, lon) {
+    if (lat == null || lon == null) return;
+    map?.flyTo(lat, lon, Math.max(map.map?.getZoom?.() || 14, 15));
+  }
+
+  function goalCard(s) {
+    const goal = s.goal;
+    if (!goal) return null;
+    const label = goal.label || t('meet.goalDefault');
+    const clearBtn = s.isHost ? el('button', {
+      class: 'iconbtn meet-row-btn danger', type: 'button',
+      title: t('meet.goalClear'), 'aria-label': t('meet.goalClear'),
+      onclick: async (event) => {
+        event.stopPropagation();
+        const ok = await confirmModal({
+          title: t('meet.goalClear'),
+          message: t('meet.goalClearConfirm'),
+          confirmText: t('meet.goalClear'),
+          danger: true
+        });
+        if (!ok) return;
+        const done = await meet.clearGoal();
+        toast(t(done ? 'meet.goalClearedDone' : 'meet.goalClearFail'), done ? 'ok' : 'err');
+      }
+    }, icon('x', 15)) : null;
+    return el('div', {
+      class: 'meet-goal-card', role: 'button', tabindex: '0',
+      onclick: () => flyPoint(goal.lat, goal.lon),
+      onkeydown: (event) => { if (event.key === 'Enter') flyPoint(goal.lat, goal.lon); }
+    },
+    el('span', { class: 'mcg-ic' }, icon('flag', 17)),
+    el('div', { class: 'mcg-main' },
+      el('div', { class: 'mcg-t' }, t('meet.goalCardTitle', { label })),
+      el('div', { class: 'mcg-d' },
+        [t('meet.goalSetBy', { name: goal.byName }), goal.distance != null ? fmtDist(goal.distance) : '']
+          .filter(Boolean).join(' · '))),
+    el('span', { class: 'mcg-fit' }, icon('fit', 15)),
+    clearBtn);
+  }
+
+  function spreadCard(s) {
+    if (!s.spread || s.spread.count < 2) return null;
+    return el('div', { class: 'meet-spread-card' },
+      el('span', { class: 'msc-ic' }, icon('meet', 16)),
+      el('div', { class: 'msc-main' },
+        el('div', { class: 'msc-t' }, t('meet.spreadValue', {
+          dist: fmtDist(s.spread.maxMeters), n: s.spread.count
+        })),
+        el('div', { class: 'msc-d' }, t('meet.spreadHint'))),
+      el('button', {
+        class: 'iconbtn meet-row-btn', type: 'button',
+        title: t('meet.spreadFit'), 'aria-label': t('meet.spreadFit'),
+        onclick: () => map?.fitMeet()
+      }, icon('fit', 15)));
+  }
+
+  function markerSection(s) {
+    if (!s.markers.length) return null;
+    const list = el('div', { class: 'meet-marker-list' });
+    for (const marker of s.markers) {
+      const typeLabel = t(`meet.markerType.${marker.type}`);
+      const remaining = Math.max(1, Math.ceil((marker.remainingMs || 0) / 60_000));
+      const sub = [
+        marker.label ? typeLabel : '',
+        t('meet.markerBy', { name: marker.byName }),
+        marker.distance != null ? fmtDist(marker.distance) : '',
+        t('meet.markerRemaining', { m: remaining })
+      ].filter(Boolean).join(' · ');
+      const row = el('div', {
+        class: `meet-marker-row marker-${marker.type}`,
+        role: 'button', tabindex: '0',
+        onclick: () => flyPoint(marker.lat, marker.lon),
+        onkeydown: (event) => { if (event.key === 'Enter') flyPoint(marker.lat, marker.lon); }
+      },
+      el('span', { class: 'mmr-ic' }, icon(MARKER_ICONS[marker.type] || 'pin', 15)),
+      el('div', { class: 'mmr-main' },
+        el('div', { class: 'mmr-t' }, marker.label || typeLabel),
+        el('div', { class: 'mmr-d' }, sub)),
+      marker.mine ? el('button', {
+        class: 'iconbtn meet-row-btn danger', type: 'button',
+        title: t('meet.markerDelete'), 'aria-label': t('meet.markerDelete'),
+        onclick: async (event) => {
+          event.stopPropagation();
+          const done = await meet.deleteMarker(marker.id);
+          toast(t(done ? 'meet.markerDeleted' : 'meet.markerDeleteFail'), done ? 'ok' : 'err');
+        }
+      }, icon('trash', 14)) : null);
+      list.append(row);
+    }
+    return el('div', { class: 'meet-marker-section' },
+      el('div', { class: 'mms-head' }, icon('pin', 14), t('meet.markersTitle', { n: s.markers.length })),
+      list);
+  }
+
   function renderPanel(s) {
     if (!s.active) {
       panel.classList.remove('show');
@@ -1192,7 +1317,7 @@ export function createMeetView(navigate) {
     panel.classList.toggle('collapsed', panelCollapsed);
     panelHead.setAttribute('aria-expanded', panelCollapsed ? 'false' : 'true');
     const activeCount = s.peers.filter((p) => p.networkStatus !== 'left').length;
-    peerCountEl.textContent = t('meet.peerCount', { n: activeCount });
+    peerCountEl.textContent = t('meet.peerCount', { n: activeCount, count: activeCount });
     const nearest = s.self?.positionStatus === 'fresh'
       ? s.peers.find((p) => p.networkStatus !== 'left' && p.positionStatus === 'fresh' && p.distance != null)
       : null;
@@ -1211,6 +1336,9 @@ export function createMeetView(navigate) {
         el('div', { class: 'me-d' }, t('meet.noPeersHint')),
         el('button', { class: 'btn sm primary', onclick: openShareSheet }, icon('share', 15), t('meet.copyLink'))
       ));
+    }
+    for (const card of [goalCard(s), spreadCard(s), markerSection(s)]) {
+      if (card) panelBody.append(card);
     }
     if (s.relayState === 'error' || s.relayState === 'reconnecting') {
       panelBody.append(warningBanner('warn', t('meet.relayErrorHint'),
@@ -1257,7 +1385,20 @@ export function createMeetView(navigate) {
     const leaveBtn = el('button', {
       class: 'btn sm ghost meet-leave', onclick: leaveMeetFlow
     }, icon('x', 14), t('meet.leave'));
-    panelFoot.append(footTop, el('div', { class: 'mp-foot-actions' }, pauseBtn, leaveBtn));
+    const expiry = s.inviteExpiresAt
+      ? el('div', {
+        class: 'meet-invite-expiry' + (s.inviteExpired ? ' expired' : ''),
+        title: new Date(s.inviteExpiresAt).toLocaleString()
+      }, icon(s.inviteExpired ? 'warn' : 'clock', 13),
+      s.inviteExpired
+        ? t('meet.inviteExpired')
+        : t('meet.inviteExpiresAt', {
+          time: new Date(s.inviteExpiresAt).toLocaleString([], {
+            month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
+          })
+        }))
+      : null;
+    panelFoot.append(footTop, expiry, el('div', { class: 'mp-foot-actions' }, pauseBtn, leaveBtn));
   }
 
   function updateCountdown(remaining?: number) {
@@ -1283,7 +1424,7 @@ export function createMeetView(navigate) {
     let text = t('meet.statusConnecting');
     if (s.relayState === 'connected') {
       cls = 'ok';
-      text = t('meet.statusLive') + (n ? ` · ${t('meet.peerCount', { n })}` : '');
+      text = t('meet.statusLive') + (n ? ` · ${t('meet.peerCount', { n, count: n })}` : '');
     } else if (s.relayState === 'reconnecting') {
       cls = 'probing';
       text = t('meet.statusReconnecting');
@@ -1314,7 +1455,7 @@ export function createMeetView(navigate) {
       if (!view.classList.contains('active')) return;
       ensureMap();
     }
-    map.setMeetData({ self: s.self, peers: s.peers, route: s.route });
+    map.setMeetData({ self: s.self, peers: s.peers, route: s.route, markers: s.markers, goal: s.goal });
     if (s.self?.positionStatus === 'fresh') maybeAutoFit();
   }
 
@@ -1428,10 +1569,20 @@ export function createMeetView(navigate) {
       if (ok) toast(t('meet.shareNotSupported'), 'info', 3000);
       else toast(t('meet.copyFail'), 'err');
     };
+    const expiryNote = s.inviteExpiresAt
+      ? el('div', { class: 'meet-invite-note' + (s.inviteExpired ? ' expired' : '') },
+        icon(s.inviteExpired ? 'warn' : 'clock', 14),
+        el('div', {},
+          s.inviteExpired
+            ? t('meet.inviteExpired')
+            : t('meet.inviteExpiresAt', { time: new Date(s.inviteExpiresAt).toLocaleString() }),
+          el('div', { class: 'min' }, t('meet.inviteExpiryHint'))))
+      : null;
     const body = el('div', { class: 'meet-share' },
       el('div', { class: 'meet-room-label' }, t('meet.roomLabel', { room: s.roomLabel })),
       el('div', { class: 'meet-code-big' }, s.invite),
       el('div', { class: 'meet-share-code-actions' }, copyCodeBtn),
+      expiryNote,
       el('div', { class: 'meet-code-key-note' }, t('meet.codeAsKey')),
       el('div', { class: 'meet-qr-frame' }, canvas, el('div', { class: 'meet-qr-hint' }, t('meet.qrHint'))),
       el('div', { class: 'meet-share-actions' }, copyLinkBtn, nativeBtn),
@@ -1468,6 +1619,124 @@ export function createMeetView(navigate) {
     drawShareQr(canvas, s.link);
   }
 
+  function openMarkerSheet() {
+    const s = getMeetSnapshot();
+    if (!s.active) return;
+    let m;
+    let busy = false;
+    const labelInp = el('input', {
+      type: 'text', maxlength: String(MEET_MARKER_LABEL_MAX),
+      placeholder: t('meet.markerLabelPlaceholder'), 'aria-label': t('meet.markerLabel')
+    });
+    const ttlSel = el('select', { style: { width: '130px' } });
+    for (const mins of MEET_MARKER_TTL_OPTIONS) {
+      ttlSel.append(el('option', { value: mins }, t('meet.markerTtlOption', { m: mins })));
+    }
+    ttlSel.value = String(get('meetMarkerTtlMin') || 30);
+    const grid = el('div', { class: 'meet-marker-grid' });
+    for (const type of MEET_MARKER_TYPES) {
+      const btn = el('button', {
+        class: `meet-marker-choice marker-${type}`, type: 'button'
+      }, el('span', { class: 'mmc-ic' }, icon(MARKER_ICONS[type], 18)),
+      el('span', { class: 'mmc-label' }, t(`meet.markerType.${type}`)));
+      btn.onclick = async () => {
+        if (busy) return;
+        const current = getMeetSnapshot();
+        if (current.self?.positionStatus !== 'fresh') {
+          toast(t('meet.markerNoFix'), 'warn', 3000);
+          return;
+        }
+        busy = true;
+        btn.classList.add('busy');
+        btn.disabled = true;
+        const ok = await meet.sendMarker({
+          type,
+          label: labelInp.value,
+          ttlMin: Number(ttlSel.value) || 30
+        });
+        busy = false;
+        btn.classList.remove('busy');
+        btn.disabled = false;
+        if (ok) {
+          m?.close();
+          toast(t('meet.markerAdded'), 'ok');
+        } else if (Date.now() >= rateLimitedUntil) {
+          toast(t('meet.markerAddFail'), 'err', 3200);
+        }
+      };
+      grid.append(btn);
+    }
+    const fresh = s.self?.positionStatus === 'fresh';
+    const body = el('div', { class: 'meet-marker-sheet' },
+      el('div', { class: 'meet-sheet-note' }, icon('pin', 16), el('div', {}, t('meet.markerSubtitle'))),
+      fresh ? null : el('div', { class: 'meet-inline-warn' }, icon('warn', 15), t('meet.markerNoFix')),
+      el('div', { class: 'field' },
+        el('label', {}, t('meet.markerLabel')), labelInp,
+        el('div', { class: 'hint' }, t('meet.markerLabelHint', { n: MEET_MARKER_LABEL_MAX }))),
+      el('div', { class: 'field' },
+        el('label', {}, t('meet.markerTtl')), ttlSel,
+        el('div', { class: 'hint' }, t('meet.markerTtlHint'))),
+      grid);
+    m = modal({
+      title: t('meet.markerTitle'),
+      body,
+      footer: [el('button', { class: 'btn ghost', onclick: () => m.close() }, t('common.close'))]
+    });
+    setTimeout(() => labelInp.focus(), 80);
+  }
+
+  function openGoalSheet() {
+    const s = getMeetSnapshot();
+    if (!s.active) return;
+    let m;
+    const labelInp = el('input', {
+      type: 'text', maxlength: String(MEET_MARKER_LABEL_MAX),
+      value: s.goal?.label || '', placeholder: t('meet.goalLabelPlaceholder'),
+      'aria-label': t('meet.goalLabel')
+    });
+    const setBtn = el('button', { class: 'btn primary' }, icon('flag', 16), t('meet.goalSetHere'));
+    setBtn.onclick = async () => {
+      const current = getMeetSnapshot();
+      if (current.self?.positionStatus !== 'fresh') {
+        toast(t('meet.goalNoFix'), 'warn', 3000);
+        return;
+      }
+      setBtn.disabled = true;
+      setBtn.replaceChildren(icon('clock', 16), t('meet.settingGoal'));
+      const ok = await meet.setGoal({ label: labelInp.value });
+      setBtn.disabled = false;
+      setBtn.replaceChildren(icon('flag', 16), t('meet.goalSetHere'));
+      if (ok) {
+        m?.close();
+        toast(t('meet.goalSetDone'), 'ok');
+      } else if (Date.now() >= rateLimitedUntil) {
+        toast(t('meet.goalSetFail'), 'err', 3200);
+      }
+    };
+    const goalSummary = s.goal ? el('div', { class: 'meet-goal-summary' },
+      el('div', { class: 'mgs-head' }, icon('flag', 17), el('div', { class: 'mgs-t' }, s.goal.label || t('meet.goalDefault'))),
+      el('div', { class: 'mgs-d' },
+        [t('meet.goalSetBy', { name: s.goal.byName }),
+        s.goal.distance != null ? t('meet.goalDistanceShort', { dist: fmtDist(s.goal.distance) }) : '']
+          .filter(Boolean).join(' · '))) : null;
+    const body = el('div', { class: 'meet-goal-sheet' },
+      goalSummary,
+      s.isHost
+        ? el('div', {},
+          el('div', { class: 'meet-sheet-note' }, icon('flag', 16), el('div', {}, t('meet.goalSubtitle'))),
+          s.self?.positionStatus === 'fresh' ? null : el('div', { class: 'meet-inline-warn' }, icon('warn', 15), t('meet.goalNoFix')),
+          el('div', { class: 'field' },
+            el('label', {}, t('meet.goalLabel')), labelInp,
+            el('div', { class: 'hint' }, t('meet.goalLabelHint'))),
+          el('div', { class: 'meet-goal-actions' }, setBtn))
+        : el('div', { class: 'meet-sheet-note faint' }, icon('info', 16), el('div', {}, t('meet.goalHostOnly'))));
+    m = modal({
+      title: t('meet.goalTitle'),
+      body,
+      footer: [el('button', { class: 'btn ghost', onclick: () => m.close() }, t('common.close'))]
+    });
+  }
+
   function openCreate() {
     let m;
     const nameInp = el('input', { type: 'text', value: get('meetName') || '', placeholder: t('meet.namePlaceholder'), maxlength: '20' });
@@ -1476,6 +1745,11 @@ export function createMeetView(navigate) {
       expSel.append(el('option', { value: v }, t(`meet.${key}`)));
     }
     expSel.value = String(get('meetExpiryMin') || 120);
+    const inviteSel = el('select', { style: { width: '120px' } });
+    for (const [v, key] of [[60, 'inviteExpiry1h'], [360, 'inviteExpiry6h'], [1440, 'inviteExpiry24h'], [10080, 'inviteExpiry7d']]) {
+      inviteSel.append(el('option', { value: v }, t(`meet.${key}`)));
+    }
+    inviteSel.value = String(get('meetInviteExpiryMin') || 1440);
     const startBtn = el('button', { class: 'btn primary' }, icon('meet', 16), t('meet.start'));
     const cancelBtn = el('button', { class: 'btn ghost', onclick: () => m.close() }, t('common.cancel'));
     const body = el('div', {},
@@ -1484,6 +1758,10 @@ export function createMeetView(navigate) {
         el('label', {}, t('meet.expiryLabel')),
         expSel,
         el('div', { class: 'hint' }, t('meet.expiryNote'))),
+      el('div', { class: 'field' },
+        el('label', {}, t('meet.inviteExpiryLabel')),
+        inviteSel,
+        el('div', { class: 'hint' }, t('meet.inviteExpiryNote'))),
       el('div', { class: 'meet-create-note' }, icon('shield', 15),
         el('div', {}, t('meet.expiryWarning') + ' · ' + t('meet.publicNote')))
     );
@@ -1495,6 +1773,7 @@ export function createMeetView(navigate) {
       try {
         const expiryMin = Number(expSel.value) || 120;
         set('meetExpiryMin', expiryMin);
+        set('meetInviteExpiryMin', Number(inviteSel.value) || 1440);
         await meet.create({ name: nameInp.value, expiryMin });
         m.close();
         openShareSheet();
@@ -1531,7 +1810,7 @@ export function createMeetView(navigate) {
         toast(legacy ? t('meet.legacyCode') : t('meet.scanInvalid'), legacy ? 'warn' : 'err', legacy ? 5200 : 3500);
         return false;
       }
-      codeInp.value = invite;
+      codeInp.value = raw.trim();
       codeInp.classList.add('scan-ok');
       setTimeout(() => codeInp.classList.remove('scan-ok'), 1200);
       toast(t('meet.scanOk'), 'ok', 2200);
@@ -1563,7 +1842,8 @@ export function createMeetView(navigate) {
         el('div', {}, t('meet.expiryWarning') + ' · ' + t('meet.publicNote')))
     );
     joinBtn.onclick = async () => {
-      const invite = normalizeMeetInvite(codeInp.value);
+      const link = parseMeetLink(codeInp.value);
+      const invite = link?.invite || normalizeMeetInvite(codeInp.value);
       if (!invite) {
         const legacy = isLegacyMeetCode(codeInp.value);
         toast(legacy ? t('meet.legacyCode') : t('meet.invalidCode'), 'warn', legacy ? 5200 : 3000);
@@ -1574,12 +1854,26 @@ export function createMeetView(navigate) {
       joinBtn.innerHTML = '';
       joinBtn.append(icon('clock', 16), t('meet.starting'));
       try {
-        await meet.join(invite, { name: nameInp.value });
+        await meet.join(invite, {
+          name: nameInp.value,
+          inviteExpiresAt: link?.exp || 0,
+          inviteSig: link?.sig || ''
+        });
         m.close();
       } catch (e: any) {
         console.warn('meet join failed', e);
-        const legacy = e?.message === 'legacy-meet-invite';
-        toast(legacy ? t('meet.legacyCode') : t('meet.joinFailed'), legacy ? 'warn' : 'err', legacy ? 5200 : 4000);
+        const reason = e?.message;
+        const legacy = reason === 'legacy-meet-invite';
+        const expired = reason === 'meet-invite-expired';
+        const badSig = reason === 'meet-invite-signature' || reason === 'meet-invite-invalid';
+        toast(
+          legacy ? t('meet.legacyCode')
+            : expired ? t('meet.inviteExpiredJoin')
+              : badSig ? t('meet.inviteBadSignature')
+                : t('meet.joinFailed'),
+          legacy || expired ? 'warn' : 'err',
+          legacy || expired ? 5200 : 4000
+        );
         joinBtn.disabled = false;
         joinBtn.innerHTML = '';
         joinBtn.append(icon('meet', 16), t('meet.join'));
@@ -1654,6 +1948,40 @@ export function createMeetView(navigate) {
       originalTransfers.set(key, { ...transfer, status: 'error', progress: 0, code });
       updateOriginalControl(key);
     }
+  });
+  on('meet:peerjoined', ({ name, legacy }) => {
+    if (!name) return;
+    toast(t(legacy ? 'meet.peerJoinedLegacy' : 'meet.peerJoined', { name }), legacy ? 'warn' : 'info', 3400);
+  });
+  on('meet:peerleft', ({ name, kicked }) => {
+    if (!name) return;
+    toast(t(kicked ? 'meet.peerKicked' : 'meet.peerLeft', { name }), 'info', 3000);
+  });
+  on('meet:ratelimited', ({ kind, retryAfterMs }) => {
+    rateLimitedUntil = Date.now() + Math.max(0, Number(retryAfterMs) || 0);
+    toast(t(`meet.rateLimited.${kind}`, { s: Math.max(1, Math.ceil((retryAfterMs || 0) / 1000)) }), 'warn', 2800);
+  });
+  on('meet:marker', ({ action, marker }) => {
+    if (action !== 'add' || !marker || marker.by === getMeetSnapshot().self?.id) return;
+    toast(t('meet.markerAddedBy', { name: marker.byName || '—' }), 'info', 2600);
+  });
+  on('meet:goal', ({ action, goal, by }) => {
+    if (by === getMeetSnapshot().self?.id) return;
+    if (action === 'set') toast(t('meet.goalSetByToast', { label: goal?.label || t('meet.goalDefault') }), 'info', 3000);
+    else if (action === 'clear') toast(t('meet.goalClearedToast'), 'info', 2600);
+  });
+  on('meet:alert', (alert) => {
+    let text = '';
+    if (alert.kind === 'distance') {
+      text = t('meet.alertDistance', { name: alert.name, dist: fmtDist(alert.distance) });
+    } else if (alert.kind === 'goal-self') {
+      text = t('meet.alertGoalSelf', { dist: fmtDist(alert.distance) });
+    } else if (alert.kind === 'goal-peer') {
+      text = t('meet.alertGoalPeer', { name: alert.name, dist: fmtDist(alert.distance) });
+    }
+    if (!text) return;
+    toast(text, 'warn', 4800);
+    try { navigator.vibrate?.(alert.kind === 'distance' ? [70, 60, 70] : [90]); } catch { /* ignore */ }
   });
   on('meet:ended', ({ reason }) => {
     chatDraft = '';

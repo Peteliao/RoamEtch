@@ -34,6 +34,12 @@ const DEFAULTS = {
   elevationEndpoint: '',       // advanced override, must accept ?latitude=&longitude=
   meetName: '',                // default display name in live meetups
   meetExpiryMin: 120,          // self-destruct timer; host advertises it to the room
+  meetInviteExpiryMin: 1440,   // signed invite-link lifetime, independent of the session
+  meetMarkerTtlMin: 30,        // default temporary-marker lifetime
+  meetAlertEnabled: true,
+  meetAlertDistance: 500,      // metres from a teammate or the assembly goal
+  meetAlertCooldownMin: 5,
+  meetAlertGoal: true,
   meetRelayMode: 'mqtt',       // mqtt | ws (webrtc reserved)
   meetMqttUrl: '',             // blank = auto-select public WSS nodes
   meetMqttPrefix: 'roametch/v2/meet',

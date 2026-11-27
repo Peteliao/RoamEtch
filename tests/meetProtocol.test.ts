@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MEET_FEATURE_VERSION } from '../src/core/meetCollab';
 
 const harness = vi.hoisted(() => ({
   relay: { send: vi.fn(), close: vi.fn() },
@@ -290,6 +291,151 @@ describe('meetup network and GPS freshness protocol', () => {
 
     expect(meetModule.getMeetSnapshot().self).toEqual(before);
     expect(harness.relay.send).toHaveBeenCalledTimes(sends);
+  });
+
+  it('shares temporary markers with bounded TTL and never revives or extends one', async () => {
+    const snapshot = await setup();
+    await deliver(base(snapshot.protocol, 1, { k: 'hi' }));
+    await deliver(base(snapshot.protocol, 2, {
+      k: 'mk', mkid: 'markerAA', mtyp: 'supply', tx: ' Water ', ttl: 999
+    }));
+    const created = meetModule.getMeetSnapshot().markers[0];
+    expect(created).toMatchObject({
+      id: 'markerAA', type: 'supply', label: 'Water', by: 'bob', byName: 'Bob', mine: false, ttlMin: 480
+    });
+    expect(created.remainingMs).toBe(480 * 60_000);
+
+    await deliver(base(snapshot.protocol, 3, {
+      k: 'mk', mkid: 'markerBB', mtyp: 'danger', ttl: 5
+    }));
+    await deliver(base(snapshot.protocol, 4, {
+      k: 'mk', mkid: 'markerBB', mtyp: 'danger', ttl: 480
+    }));
+    const shortLived = meetModule.getMeetSnapshot().markers.find((m: any) => m.id === 'markerBB');
+    expect(shortLived.remainingMs).toBe(5 * 60_000);
+
+    await deliver(base(snapshot.protocol, 5, { k: 'mk', mkid: 'markerAA', del: true }));
+    expect(meetModule.getMeetSnapshot().markers.map((m: any) => m.id)).toEqual(['markerBB']);
+
+    advance(6 * 60_000);
+    expect(meetModule.getMeetSnapshot().markers).toEqual([]);
+
+    await deliver(base(snapshot.protocol, 6, {
+      k: 'mk', id: 'nobody', name: 'Nobody', mkid: 'markerCC', mtyp: 'scenic', ttl: 30
+    }));
+    expect(meetModule.getMeetSnapshot().markers).toEqual([]);
+  });
+
+  it('lets only the host set the assembly goal and announces it in system chat', async () => {
+    const snapshot = await setup();
+    meetModule.injectMeetFix({ lat: 30.1, lon: 120.2, acc: 8, ts: now });
+    await flush();
+    const sendsBefore = harness.relay.send.mock.calls.length;
+    expect(await meetModule.sendMeetGoal({ label: ' Ridge ' })).toBe(true);
+    const goal = meetModule.getMeetSnapshot().goal;
+    expect(goal).toMatchObject({ lat: 30.1, lon: 120.2, label: 'Ridge', by: snapshot.self.id, mine: true });
+    const goalPacket = harness.relay.send.mock.calls.slice(sendsBefore)
+      .map(([text]) => JSON.parse(text))
+      .find((packet) => packet.k === 'goal');
+    expect(goalPacket).toMatchObject({ k: 'goal', la: 30.1, lo: 120.2, tx: 'Ridge' });
+    expect(meetModule.getMeetSnapshot().messages.at(-1)).toMatchObject({
+      sys: 'goalSet', sysParams: { name: 'Alice', label: 'Ridge' }
+    });
+
+    await deliver(base(snapshot.protocol, 1, { k: 'hi' }));
+    await deliver(base(snapshot.protocol, 2, {
+      k: 'goal', id: 'bob', name: 'Bob', la: 31.9, lo: 121.9, tx: 'Hijack'
+    }));
+    expect(meetModule.getMeetSnapshot().goal).toMatchObject({ label: 'Ridge' });
+
+    expect(await meetModule.clearMeetGoal()).toBe(true);
+    expect(meetModule.getMeetSnapshot().goal).toBeNull();
+    expect(meetModule.getMeetSnapshot().messages.at(-1)).toMatchObject({
+      sys: 'goalCleared', sysParams: { name: 'Alice' }
+    });
+  });
+
+  it('annotates legacy peers with capability versions and member notices', async () => {
+    const snapshot = await setup();
+    const events = await import('../src/core/events');
+    const joined = vi.fn();
+    const left = vi.fn();
+    const offJoined = events.on('meet:peerjoined', joined);
+    const offLeft = events.on('meet:peerleft', left);
+    try {
+      await deliver(base(snapshot.protocol, 1, { k: 'hi' }));
+      expect(joined).toHaveBeenLastCalledWith({ name: 'Bob', id: 'bob', legacy: true });
+      expect(peer()).toMatchObject({ protocolVersion: 2, legacy: true });
+      expect(meetModule.getMeetSnapshot().legacyPeers).toBe(1);
+      expect(meetModule.getMeetSnapshot().messages.at(-1)).toMatchObject({
+        sys: 'join', sysParams: { name: 'Bob' }
+      });
+
+      await deliver(base(snapshot.protocol, 2, { k: 'bye' }));
+      expect(left).toHaveBeenLastCalledWith({ id: 'bob', name: 'Bob' });
+      expect(meetModule.getMeetSnapshot().messages.at(-1)).toMatchObject({
+        sys: 'leave', sysParams: { name: 'Bob' }
+      });
+
+      await deliver(base(snapshot.protocol, 3, { k: 'hi' }));
+      await meetModule.kickMeetPeer('bob');
+      expect(left).toHaveBeenLastCalledWith({ id: 'bob', name: 'Bob', kicked: true });
+      expect(meetModule.getMeetSnapshot().messages.at(-1)).toMatchObject({
+        sys: 'kick', sysParams: { name: 'Bob' }
+      });
+    } finally {
+      offJoined();
+      offLeft();
+    }
+  });
+
+  it('rate-limits outgoing text and marks the peer capability version as current', async () => {
+    const snapshot = await setup();
+    await deliver(base(snapshot.protocol, 1, { k: 'hi', pv: MEET_FEATURE_VERSION }));
+    expect(peer()).toMatchObject({ protocolVersion: MEET_FEATURE_VERSION, legacy: false });
+    const events = await import('../src/core/events');
+    const limited = vi.fn();
+    const off = events.on('meet:ratelimited', limited);
+    try {
+      for (let i = 0; i < 8; i++) expect(await meetModule.sendMeetMessage(`m${i}`)).toBe(true);
+      expect(await meetModule.sendMeetMessage('blocked')).toBe(false);
+      expect(limited).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'text', retryAfterMs: expect.any(Number)
+      }));
+    } finally {
+      off();
+    }
+  });
+
+  it('publishes a signed invite lifetime and reports its expiry without ending the session', async () => {
+    const snapshot = await setup();
+    expect(snapshot.inviteExpiresAt).toBe(now + 24 * 60 * 60_000);
+    expect(snapshot.inviteExpired).toBe(false);
+    expect(snapshot.link).toMatch(/&iexp=\d+&isig=[A-Za-z0-9_-]{43}$/);
+    advance(24 * 60 * 60_000);
+    expect(meetModule.getMeetSnapshot().inviteExpired).toBe(true);
+    expect(meetModule.getMeetSnapshot().active).toBe(true);
+  });
+
+  it('rejects expired or tampered signed invites before creating a session', async () => {
+    const settings = await import('../src/core/settings');
+    settings.set('meetP2PEnabled', false);
+    meetModule = await import('../src/core/meet');
+    const link = await import('../src/core/meetLink');
+    const invite = link.generateMeetInvite();
+    const past = now - 1_000;
+    const expiredSig = await link.signMeetInviteExpiry(invite, past);
+    await expect(meetModule.joinMeetSession(invite, {
+      inviteExpiresAt: past, inviteSig: expiredSig
+    })).rejects.toThrow('meet-invite-expired');
+
+    const future = now + 60 * 60_000;
+    const otherInvite = link.generateMeetInvite();
+    const wrongSig = await link.signMeetInviteExpiry(otherInvite, future);
+    await expect(meetModule.joinMeetSession(invite, {
+      inviteExpiresAt: future, inviteSig: wrongSig
+    })).rejects.toThrow('meet-invite-signature');
+    expect(meetModule.getMeetSnapshot().active).toBe(false);
   });
 
   it('flags poor accuracy and sustained deterioration at explicit boundaries', async () => {

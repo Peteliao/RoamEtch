@@ -6,11 +6,15 @@ import {
   generateMeetInvite,
   isLegacyMeetCode,
   meetLinkFor,
+  MEET_INVITE_MAX_TTL_MS,
   MEET_MAX_PACKET_CHARS,
   normalizeMeetInvite,
   parseMeetFragment,
   parseMeetInvite,
-  roomLabelFor
+  parseMeetLink,
+  roomLabelFor,
+  signMeetInviteExpiry,
+  verifyMeetInviteExpiry
 } from '../src/core/meetLink';
 
 function b64urlEncode(u8: Uint8Array) {
@@ -88,6 +92,49 @@ describe('meetup invites', () => {
 
   it('derives a public room label without exposing the secret', () => {
     expect(roomLabelFor('abcdefghijklmnopqrstuv')).toBe('ABCD-EFGH');
+  });
+
+  it('signs and verifies a invite lifetime independently from the session', async () => {
+    const now = Date.UTC(2026, 10, 27, 8, 0, 0);
+    const exp = now + 6 * 60 * 60_000;
+    const sig = await signMeetInviteExpiry(DEMO_INVITE, exp);
+    expect(sig).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    await expect(verifyMeetInviteExpiry(DEMO_INVITE, exp, sig, now)).resolves.toEqual({
+      ok: true, legacy: false, expiresAt: exp
+    });
+    await expect(verifyMeetInviteExpiry(DEMO_INVITE, 0, '', now)).resolves.toEqual({
+      ok: true, legacy: true, expiresAt: 0
+    });
+
+    const otherInvite = `TM2.${DEMO_ROOM}.${b64urlEncode(new Uint8Array(32).fill(0x11))}`;
+    const badSig = `${sig.slice(0, -1)}${sig.endsWith('A') ? 'B' : 'A'}`;
+    await expect(verifyMeetInviteExpiry(DEMO_INVITE, exp, badSig, now))
+      .resolves.toEqual({ ok: false, reason: 'signature' });
+    await expect(verifyMeetInviteExpiry(otherInvite, exp, sig, now))
+      .resolves.toEqual({ ok: false, reason: 'signature' });
+    await expect(verifyMeetInviteExpiry(DEMO_INVITE, exp, sig, exp))
+      .resolves.toEqual({ ok: false, reason: 'expired' });
+    await expect(verifyMeetInviteExpiry(DEMO_INVITE, now + MEET_INVITE_MAX_TTL_MS + 1, sig, now))
+      .resolves.toEqual({ ok: false, reason: 'invalid' });
+    await expect(verifyMeetInviteExpiry(DEMO_INVITE, exp, 'bad', now))
+      .resolves.toEqual({ ok: false, reason: 'invalid' });
+  });
+
+  it('appends optional signed expiry parameters and parses them from links', () => {
+    vi.stubGlobal('location', {
+      origin: 'https://example.com',
+      pathname: '/RoamEtch/',
+      search: ''
+    });
+    const exp = Date.UTC(2026, 10, 28);
+    const sig = b64urlEncode(new Uint8Array(32).fill(0x7e));
+    const link = meetLinkFor(DEMO_INVITE, { exp, sig });
+    expect(link).toBe(`https://example.com/RoamEtch/#meet=${DEMO_INVITE}&iexp=${exp}&isig=${sig}`);
+    expect(parseMeetLink(link)).toEqual({ invite: DEMO_INVITE, exp, sig });
+    expect(parseMeetLink(`#meet=${DEMO_INVITE}`)).toEqual({ invite: DEMO_INVITE, exp: 0, sig: '' });
+    expect(parseMeetLink(DEMO_INVITE)).toEqual({ invite: DEMO_INVITE, exp: 0, sig: '' });
+    expect(parseMeetLink(`#meet=${DEMO_INVITE}&iexp=0&isig=bad`))
+      .toEqual({ invite: DEMO_INVITE, exp: 0, sig: '' });
   });
 });
 

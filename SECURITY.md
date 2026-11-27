@@ -84,11 +84,15 @@ hosted demo is served from GitHub Pages and is rebuilt on every push to `main`.
 
 Live meetups use protocol v2. The invite is a bearer capability that contains a
 public room id and a high-entropy secret; only the room id reaches the relay.
-Version 1 invites and packets are rejected rather than downgraded.
+Version 1 invites and packets are rejected rather than downgraded. Temporary
+markers, rally points, positions, and chat share the same encrypted envelope.
+Link expiry is signed by the host but does not turn the underlying invite into a
+revocable credential.
 
 | Item | Design |
 | --- | --- |
 | Invite | `TM2.<roomId>.<secret>`; both components are base64url and live only in the URL `#` fragment / QR code |
+| Invite expiry | Optional `&iexp=<ms>&isig=<hmac>` suffix. The host derives an HMAC-SHA-256 key via HKDF (same invite secret and room binding) and signs `roametch-invite-expiry-v1\|<roomId>\|<exp>`. Joiners reject expired, over-30-day, tampered, or wrong-room parameters. This is advisory link metadata, not revocation: a copied raw invite remains a valid bearer capability. |
 | Room id | 16 random bytes from `crypto.getRandomValues` (128 bits, 22 base64url chars); independent of the secret |
 | Invite secret | 32 random bytes from `crypto.getRandomValues` (256 bits, 43 base64url chars) |
 | Encryption key | `HKDF-SHA-256(ikm = 32-byte secret, salt = "trackmint-meet-v2", info = "aes-256-gcm meet payload v2\|room:<roomId>")`, derived as a non-extractable AES-256-GCM key |
@@ -99,6 +103,8 @@ Version 1 invites and packets are rejected rather than downgraded.
 | Ordinary-packet replay protection | Positions, chat, and ordinary control packets carry a per-sender, strictly increasing sequence number. Repeated or older sequences are dropped. Timestamps are a secondary ±5-minute sanity check, and locations also enforce newer sequence ordering. |
 | RTC signaling | The encrypted `k: "rtc"` branch carries message, session, sender and target ids plus type, timestamp and payload. It is processed before the ordinary sequence guard because redundant brokers can reorder signaling independently; misaddressed, malformed, older-than-30-second or over-5-second-future signals are rejected. A 500-entry sender/message-id deduplicator and a 40-signals-per-3-seconds per-sender limiter bound replay and flooding. Outgoing signaling uses a separate bounded queue so it cannot block the location/chat send chain. |
 | Chat dedupe | Random message ids plus a bounded seen-set, in addition to the sender sequence |
+| Markers and rally point | `mk` and `goal` packets carry a creator, coordinates, label, and (for markers) type and TTL. Coordinates are finite and range-checked; labels are length/control-character sanitized; unknown types and malformed ids are dropped. Markers expire locally at receipt-anchored deadlines, are capped at 8 per peer and 48 per session, and are not resurrected with extended lifetime on reconnect. Only the host may publish or clear the rally point. |
+| Sender abuse limits | Text, voice, markers, and rally-point updates use local sliding-window budgets (8 text/10 s, 3 voice/30 s, 6 markers/60 s, 4 rally updates/60 s); rejected sends do not enter the encryption/send chain. |
 | Transport limits | Client and relay cap packets at 128 KB. The bundled relay also enforces a per-socket token bucket (8 msg/s, 40 burst), 32 clients per room, 2,000 rooms, 10,000 clients, and a 12-hour idle-room sweep |
 | Public MQTT nodes | Concurrent subscriptions to `broker-cn.emqx.io:8084`, `broker.emqx.io:8084`, and `mqtt-dashboard.com:8884`; the fastest response starts the session immediately and every connected node also receives outgoing ciphertext as redundancy. A custom URL replaces this set unless it is the legacy default |
 | MQTT topic | `${prefix}/${roomId}` (new default prefix `roametch/v2/meet`; existing saved legacy prefixes remain valid) |
@@ -112,7 +118,9 @@ The room id is random and carries no key material. A party that observes the
 MQTT topic or WS path learns only that public id and cannot derive the AES key
 from it. The 256-bit invite secret never appears in a topic, URL query, HTTP
 path, or relay log. Anyone who obtains the full invite can decrypt the session
-and must be treated as a room member.
+and must be treated as a room member. The signed expiry can stop honest clients
+from accepting new joins after a deadline, but it cannot remove a member who
+already has the secret, rotate the room key, or erase data on another device.
 
 ### On-demand WebRTC originals
 

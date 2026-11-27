@@ -18,7 +18,7 @@ import * as backupCore from './core/backup';
 import * as coordsCore from './core/coords';
 import * as keepaliveCore from './core/keepalive';
 import { parseShareFragment, shareFragmentFingerprint } from './core/shareLink';
-import { parseMeetFragment, isLegacyMeetCode } from './core/meetLink';
+import { parseMeetLink, isLegacyMeetCode } from './core/meetLink';
 import { importDemoTrip } from './core/demo';
 import * as meetCore from './core/meet';
 import * as meetLinkCore from './core/meetLink';
@@ -239,7 +239,8 @@ async function boot() {
     void queueSharedTripImport(shell, hash);
   });
 
-  const meetInvite = parseMeetFragment(location.hash);
+  const meetLink = parseMeetLink(location.hash);
+  const meetInvite = meetLink?.invite || '';
   const legacyMeetLink = hasMeetFragment && isLegacyMeetCode(location.hash);
   if (hasMeetFragment && !meetInvite) {
     history.replaceState(history.state || {}, '', location.pathname + location.search);
@@ -248,13 +249,26 @@ async function boot() {
   } else if (meetInvite) {
     shell.navigate('meet');
     try {
-      await meetCore.joinMeetSession(meetInvite);
+      await meetCore.joinMeetSession(meetInvite, {
+        inviteExpiresAt: meetLink?.exp || 0,
+        inviteSig: meetLink?.sig || ''
+      });
       toast(t('meet.autoJoined'), 'ok', 3500);
     } catch (e: any) {
       console.warn('meet auto-join failed', e);
       history.replaceState(history.state || {}, '', location.pathname + location.search);
-      const legacy = e?.message === 'legacy-meet-invite';
-      toast(legacy ? t('meet.legacyCode') : t('meet.autoJoinFail'), 'err', legacy ? 5200 : 4200);
+      const reason = e?.message;
+      const legacy = reason === 'legacy-meet-invite';
+      const expired = reason === 'meet-invite-expired';
+      const badSig = reason === 'meet-invite-signature' || reason === 'meet-invite-invalid';
+      toast(
+        legacy ? t('meet.legacyCode')
+          : expired ? t('meet.inviteExpiredJoin')
+            : badSig ? t('meet.inviteBadSignature')
+              : t('meet.autoJoinFail'),
+        'err',
+        legacy || expired ? 5200 : 4200
+      );
     }
   } else if (hasShareFragment) {
     // Shared-link import (#t=…) — the fragment never reaches a server.
