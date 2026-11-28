@@ -30,6 +30,13 @@ const DEFAULTS = {
   privacyRadius: 300,          // metres, start/end privacy circle
   privacyMode: 'all',          // all crossings | only the leading/trailing portions
   privacyOffset: true,         // deterministic circle offset; expanded to preserve coverage
+  weatherEnabled: true,
+  weatherAlertEnabled: true,
+  weatherProviderMode: 'auto', // auto | cn | global | custom
+  weatherCustomUrl: '',
+  weatherCustomKey: '',
+  weatherCustomHeaders: '',
+  weatherCustomMapping: '',
   tiandituKey: '',             // BYOK
   maptilerKey: '',             // BYOK (P1 reserved)
   customTileUrl: '',           // advanced: {z}/{x}/{y} template, WGS84 assumed

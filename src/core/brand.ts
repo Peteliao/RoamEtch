@@ -58,25 +58,22 @@ export function drawBrandMark(
   ctx.restore();
 }
 
-function drawQrLogo(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number) {
+function drawQrLogo(ctx: CanvasRenderingContext2D, cx: number, cy: number, size: number, background = '#ffffff') {
   const pad = size * 0.12;
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = background;
   ctx.fillRect(cx - size / 2 - pad, cy - size / 2 - pad, size + pad * 2, size + pad * 2);
   drawBrandMark(ctx, cx - size / 2, cy - size / 2, size);
 }
 
-/**
- * Draw a scannable QR code (quiet zone included) at an exact pixel size.
- * Uses dark-on-white and H-level correction so the centred brand mark stays scannable.
- */
-export function drawQr(ctx: CanvasRenderingContext2D, url: string, x: number, y: number, size: number) {
+/** Draw a scannable H-level QR with a quiet zone and centered brand mark. */
+export function drawQr(ctx: CanvasRenderingContext2D, url: string, x: number, y: number, size: number, background = '#ffffff') {
   const qr = qrcode(0, 'H');
   qr.addData(url);
   qr.make();
   const n = qr.getModuleCount();
   const quiet = 2;
   const cell = size / (n + quiet * 2);
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = background;
   ctx.fillRect(x, y, size, size);
   ctx.fillStyle = '#101820';
   for (let r = 0; r < n; r++) {
@@ -84,7 +81,7 @@ export function drawQr(ctx: CanvasRenderingContext2D, url: string, x: number, y:
       if (qr.isDark(r, c)) ctx.fillRect(x + (c + quiet) * cell, y + (r + quiet) * cell, cell + 0.4, cell + 0.4);
     }
   }
-  drawQrLogo(ctx, x + size / 2, y + size / 2, size * 0.2);
+  drawQrLogo(ctx, x + size / 2, y + size / 2, size * 0.2, background);
 }
 
 const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];

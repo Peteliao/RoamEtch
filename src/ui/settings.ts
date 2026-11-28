@@ -25,6 +25,7 @@ import { exportImage } from '../core/shareEnv';
 import { createSyncPanel } from './syncPanel';
 import { eraseSyncState } from '../core/syncStore';
 import { openInstallGuide, installSettingsInfo } from './install';
+import { refreshWeather, weatherState } from '../core/weatherService';
 import { el, icon, toast, confirmModal, filePicker, modal } from './helpers';
 
 export function createSettingsView(navigate) {
@@ -50,7 +51,7 @@ export function createSettingsView(navigate) {
   function segRow(label, options, current, onPick, note = '', className = '') {
     const toggle = el('div', { class: `seg-toggle${className ? ` ${className}` : ''}` });
     for (const [val, txt] of options) {
-      const b = el('button', { class: val === current ? 'active' : '' }, txt);
+      const b = el('button', { class: val === current ? 'active' : '', 'data-value': val }, txt);
       b.onclick = () => {
         toggle.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
         b.classList.add('active');
@@ -75,15 +76,15 @@ export function createSettingsView(navigate) {
     return el('div', { class: 'setting-row' },
       el('div', { class: 'txt' }, el('div', { class: 't' }, label + (unit ? ` (${unit})` : '')), desc ? el('div', { class: 'd' }, desc) : null), inp);
   }
-  function textRow(label, hint, key, placeholder = '', type = 'text') {
+  function textRow(label, hint, key, placeholder = '', type = 'text', savedMessage = t('settings.keySaved')) {
     const inp = el('input', { type, value: get(key) || '', placeholder });
-    inp.onchange = () => { set(key, inp.value.trim()); toast(t('settings.keySaved'), 'ok', 1800); };
+    inp.onchange = () => { set(key, inp.value.trim()); toast(savedMessage, 'ok', 1800); };
     return el('div', { class: 'field' }, el('label', {}, label), inp, hint ? el('div', { class: 'hint' }, hint) : null);
   }
-  function textAreaRow(label, hint, key, placeholder = '') {
+  function textAreaRow(label, hint, key, placeholder = '', savedMessage = t('settings.keySaved')) {
     const inp = el('textarea', { rows: '3', placeholder, spellcheck: 'false' });
     inp.value = get(key) || '';
-    inp.onchange = () => { set(key, inp.value.trim()); toast(t('settings.keySaved'), 'ok', 1800); };
+    inp.onchange = () => { set(key, inp.value.trim()); toast(savedMessage, 'ok', 1800); };
     return el('div', { class: 'field' }, el('label', {}, label), inp, hint ? el('div', { class: 'hint' }, hint) : null);
   }
 
@@ -169,6 +170,92 @@ export function createSettingsView(navigate) {
   const privacyCard = panel(
     numRow(t('settings.privacyRadius'), t('settings.privacyRadiusHint'), 'privacyRadius', { min: 0, max: 5000, step: 50, unit: 'm' })
   );
+
+  // ---- weather ----
+  let weatherMode = get('weatherProviderMode') || 'auto';
+  const weatherFields = el('div', { class: 'weather-settings-fields' });
+  const weatherModeNote = el('div', { class: 'small faint', style: { margin: '2px 0 10px' } });
+  const weatherStatus = el('div', { class: 'small muted weather-settings-status' });
+  const weatherRanking = el('div', { class: 'small faint weather-settings-ranking' });
+  const weatherProbeBtn = el('button', { class: 'btn sm' }, icon('refresh', 14), t('settings.weatherProbe'));
+  function renderWeatherFields() {
+    weatherFields.innerHTML = '';
+    weatherFields.hidden = weatherMode !== 'custom';
+    const noteKey = weatherMode === 'cn' ? 'weatherCnNote'
+      : weatherMode === 'global' ? 'weatherGlobalNote'
+        : weatherMode === 'custom' ? 'weatherCustomNote' : 'weatherAutoNote';
+    weatherModeNote.textContent = t(`settings.${noteKey}`);
+    if (weatherMode !== 'custom') return;
+    const saved = t('settings.weatherSaved');
+    const url = textRow(t('settings.weatherCustomUrl'), t('settings.weatherCustomUrlHint'), 'weatherCustomUrl', 'https://…/weather?lat={lat}&lon={lon}', 'url', saved);
+    const key = textRow(t('settings.weatherCustomKey'), t('settings.weatherCustomKeyHint'), 'weatherCustomKey', '', 'password', saved);
+    url.querySelector('input').autocomplete = 'off';
+    key.querySelector('input').autocomplete = 'new-password';
+    weatherFields.append(
+      url, key,
+      textAreaRow(t('settings.weatherCustomHeaders'), t('settings.weatherCustomHeadersHint'), 'weatherCustomHeaders', '{"Authorization":"Bearer …"}', saved),
+      textAreaRow(t('settings.weatherCustomMapping'), t('settings.weatherCustomMappingHint'), 'weatherCustomMapping', '', saved),
+      el('div', { class: 'hint mono' }, t('settings.weatherMappingExample'))
+    );
+  }
+  function renderWeatherStatus() {
+    const current = weatherState.current;
+    const location = weatherState.location;
+    weatherProbeBtn.disabled = weatherState.fetching || !get('weatherEnabled') || !location;
+    weatherProbeBtn.textContent = '';
+    weatherProbeBtn.append(icon('refresh', 14), weatherState.fetching ? t('settings.weatherProbing') : t('settings.weatherProbe'));
+    weatherStatus.textContent = !location ? t('settings.weatherNoLocation')
+      : current
+        ? `${t('weather.source', { source: current.source })} · ${t(current.cached ? 'weather.cached' : 'weather.latency', { ms: current.latencyMs ?? 0 })}`
+        : weatherState.error
+          ? weatherState.error === 'weather-offline' ? t('weather.errorOffline')
+            : weatherState.error.startsWith('weather-custom') ? t('weather.errorCustom')
+              : weatherState.error === 'weather-provider-unconfigured' ? t('weather.errorUnconfigured')
+                : t('weather.errorUnavailable')
+          : t('weather.unavailable');
+    const ranking = weatherState.ranking;
+    weatherRanking.textContent = ranking?.results?.length
+      ? t('settings.weatherStatus') + ' · ' + ranking.results.map((result) => result.ok
+        ? t('weather.probeResult', { source: t(`weather.providers.${result.id}`), ms: result.ms })
+        : t('weather.probeFailed', { source: t(`weather.providers.${result.id}`) })).join(' · ')
+      : t('weather.noProbe');
+    weatherRanking.hidden = !get('weatherEnabled');
+  }
+  renderWeatherFields();
+  renderWeatherStatus();
+  weatherProbeBtn.onclick = async () => {
+    if (!weatherState.location) return;
+    weatherProbeBtn.disabled = true;
+    await refreshWeather({ force: true, probe: true });
+    renderWeatherStatus();
+  };
+  const weatherProviderRow = segRow(t('settings.weatherProvider'), [
+    ['auto', t('settings.weatherProviderAuto')], ['cn', t('settings.weatherProviderCn')],
+    ['global', t('settings.weatherProviderGlobal')], ['custom', t('settings.weatherProviderCustom')]
+  ], weatherMode, (v) => { weatherMode = v; set('weatherProviderMode', v); renderWeatherFields(); }, t('settings.weatherAutoNote'), 'weather-provider-toggle');
+  const weatherCard = card('sun', t('settings.weatherGroup'),
+    switchRow(t('settings.weatherEnabled'), t('settings.weatherEnabledHint'), 'weatherEnabled'),
+    switchRow(t('settings.weatherAlertEnabled'), t('settings.weatherAlertEnabledHint'), 'weatherAlertEnabled'),
+    weatherProviderRow,
+    weatherModeNote,
+    el('div', { class: 'weather-settings-state' }, weatherStatus, weatherRanking,
+      el('div', { class: 'row', style: { marginTop: '8px' } }, weatherProbeBtn)),
+    weatherFields,
+    el('div', { class: 'small faint', style: { marginTop: '10px', lineHeight: '1.55' } }, t('weather.privacy')),
+    el('div', { class: 'small muted', style: { marginTop: '6px', lineHeight: '1.55' } }, t('weather.notOfficial')),
+    el('div', { class: 'small faint', style: { marginTop: '6px' } }, t('weather.attribution'))
+  );
+  const stopWeatherStatus = on('weather:changed', renderWeatherStatus);
+  const stopWeatherSettings = on('settings:changed', ({ key, reset }) => {
+    if (reset || key === 'weatherProviderMode') {
+      weatherMode = get('weatherProviderMode') || 'auto';
+      weatherProviderRow.querySelectorAll('button').forEach((button) => {
+        button.classList.toggle('active', button.dataset.value === weatherMode);
+      });
+      renderWeatherFields();
+    }
+    renderWeatherStatus();
+  });
 
   // ---- advanced / BYOK ----
   const advCard = card('compass', t('settings.advanced'),
@@ -768,12 +855,16 @@ export function createSettingsView(navigate) {
     variantSelect.append(featureGroup, audienceGroup);
     variantSelect.value = String(variant);
     const variantIndex = el('div', { class: 'small muted promo-variant-index' }, t('settings.promoVariantIndex', { n: variant + 1 }));
-    const copyBtn = el('button', { class: 'btn' }, icon('copy', 16), t('settings.promoCopy'));
-    const nextBtn = el('button', { class: 'btn' }, icon('refresh', 16), t('settings.promoNext'));
-    const saveBtn = el('button', { class: `btn ${canShare ? '' : 'primary'}` }, icon('download', 16), t('settings.promoDownload'));
-    const shareBtn = canShare
-      ? el('button', { class: 'btn primary' }, icon('share', 16), t('settings.promoShare'))
-      : null;
+    const actionButton = (name: string, label: string, primary = false) => el('button',
+      { class: `btn${primary ? ' primary' : ''}` },
+      el('span', { class: 'promo-action-icon' }, icon(name, 18)),
+      el('span', { class: 'promo-action-label' }, label));
+    const nextBtn = actionButton('refresh', t('settings.promoNext'));
+    const copyBtn = actionButton('copy', t('settings.promoCopy'));
+    const saveBtn = actionButton('download', t('settings.promoDownload'), !canShare);
+    const shareBtn = canShare ? actionButton('share', t('settings.promoShare'), true) : null;
+    const promoActions = el('div', { class: `promo-actions${shareBtn ? '' : ' three'}` },
+      nextBtn, copyBtn, saveBtn, ...(shareBtn ? [shareBtn] : []));
     const setBusy = (busy: boolean) => {
       nextBtn.disabled = busy;
       variantSelect.disabled = busy;
@@ -795,21 +886,23 @@ export function createSettingsView(navigate) {
     };
     const m = modal({
       title: t('settings.promoPreviewTitle'),
+      wide: true,
       body: el('div', {},
         el('div', { class: 'small muted promo-preview-note' }, t('settings.promoKeep')),
         el('label', { class: 'promo-variant-picker' },
-          el('span', {}, t('settings.promoVariant')),
+          el('span', { class: 'promo-variant-title' }, t('settings.promoVariant')),
+          variantIndex,
           variantSelect,
-          el('span', { class: 'small faint' }, t('settings.promoVariantHint')),
-          variantIndex),
+          el('span', { class: 'small faint promo-variant-hint' }, t('settings.promoVariantHint'))),
         img),
-      footer: [nextBtn, copyBtn, saveBtn, shareBtn].filter(Boolean),
+      footer: [promoActions],
       onClose: () => {
         if (closed) return;
         closed = true;
         URL.revokeObjectURL(currentUrl);
       }
     });
+    m.box.classList.add('promo-modal');
     const renderVariant = async (requestedVariant: number) => {
       if (closed || nextBtn.disabled) return;
       setBusy(true);
@@ -914,6 +1007,7 @@ export function createSettingsView(navigate) {
     section(t('settings.appearanceGroup')), langCard,
     section(t('settings.recordGroup')), recCard,
     section(t('settings.privacyGroup')), privacyCard,
+    section(t('settings.weatherGroup')), weatherCard,
     section(t('settings.mapGroup')), regionCard, mapAdvanced.details,
     section(t('settings.syncGroup')), syncPanel.card,
     section(t('settings.dataGroup')), dataCard,
@@ -922,13 +1016,21 @@ export function createSettingsView(navigate) {
 
   return {
     view,
-    refresh: () => { renderProbe(); renderSimBanner(); refreshStorage(); syncPanel.refresh(); },
-    destroy: () => { syncPanel.destroy(); healthController?.abort(); },
+    refresh: () => { renderProbe(); renderSimBanner(); refreshStorage(); syncPanel.refresh(); renderWeatherStatus(); },
+    destroy: () => { syncPanel.destroy(); healthController?.abort(); stopWeatherStatus(); stopWeatherSettings(); },
     resize: () => {},
     focus: (intent) => {
       const anchor = typeof intent === 'string' ? intent : intent?.anchor;
-      if (anchor !== 'relay' && anchor !== 'database') return;
+      if (anchor !== 'relay' && anchor !== 'database' && anchor !== 'weather') return;
       requestAnimationFrame(() => {
+        if (anchor === 'weather') {
+          weatherCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          weatherCard.classList.remove('settings-focus');
+          void weatherCard.offsetWidth;
+          weatherCard.classList.add('settings-focus');
+          setTimeout(() => weatherCard.classList.remove('settings-focus'), 2000);
+          return;
+        }
         if (anchor === 'database') {
           dataCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
           dataCard.classList.remove('settings-focus');

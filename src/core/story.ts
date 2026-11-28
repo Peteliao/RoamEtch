@@ -4,6 +4,7 @@ import { computeStats } from './stats';
 import { sunTimes } from './solar';
 import { languageTag } from './language';
 import type { ManualWeather } from './weather';
+import { normalizeWeatherLog, type RecordedWeather } from './weatherLive';
 
 export type Story = {
   title: string;
@@ -46,6 +47,7 @@ export type StoryDay = {
   avgSpeed: number;
   nodes: StoryNode[];
   photos: StoryPhoto[];
+  weather: RecordedWeather[];
   center: { lat: number; lon: number } | null;
   firstTime: number | null;
   sun: { sunrise: string | null; sunset: string | null; polar: 'day' | 'night' | null; available: boolean };
@@ -116,10 +118,11 @@ export function buildStoryDays(full: any, opts: StoryOptions = {}): StoryDay[] {
   const dayMap = new Map<string, {
     segments: Map<string, any[]>;
     nodes: any[];
+    weather: RecordedWeather[];
   }>();
 
   function bucket(day: string) {
-    if (!dayMap.has(day)) dayMap.set(day, { segments: new Map(), nodes: [] });
+    if (!dayMap.has(day)) dayMap.set(day, { segments: new Map(), nodes: [], weather: [] });
     return dayMap.get(day)!;
   }
 
@@ -139,6 +142,10 @@ export function buildStoryDays(full: any, opts: StoryOptions = {}): StoryDay[] {
     const time = Number.isFinite(waypoint.time) ? waypoint.time : fallback;
     const day = dayKeyOf(time, fallback);
     bucket(day).nodes.push(waypoint);
+  }
+
+  for (const sample of normalizeWeatherLog(full.trip?.weatherLog)) {
+    bucket(dayKeyOf(sample.time, fallback)).weather.push(sample);
   }
 
   const days: StoryDay[] = [];
@@ -195,6 +202,7 @@ export function buildStoryDays(full: any, opts: StoryOptions = {}): StoryDay[] {
         photoCount: (node.mediaIds || []).length
       })),
       photos,
+      weather: entry.weather.sort((a, b) => a.time - b.time),
       center,
       firstTime,
       sun: sunFor(day, center, lang),

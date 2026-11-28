@@ -184,9 +184,66 @@ describe('promo variants', () => {
       const slogan = i18n.t('app.slogan');
       const sloganCalls = textCalls.slice(callStart).filter((call) => call.text === slogan);
       expect(sloganCalls).toHaveLength(1);
-      expect(sloganCalls[0]).toMatchObject({ x: 157, y: 180, maxWidth: 851 });
+      expect(sloganCalls[0]).toMatchObject({ x: 72, y: 180, maxWidth: 936 });
       expect(rendered).not.toContain(i18n.t('app.slogan1'));
       expect(rendered).not.toContain(i18n.t('app.slogan2'));
+    }
+  });
+
+  it('draws complete hero and call-to-action copy without ellipsis in every language', async () => {
+    const { texts } = installCanvasMock();
+    const audienceKeysByVariant: Record<number, string> = { 8: 'soloOutdoor', 15: 'family', 17: 'eventLeads', 24: 'lovedOnes' };
+    for (const lang of promoLanguages) {
+      await i18n.setLanguage(lang);
+      for (const variant of [0, 8, 15, 17, 24]) {
+        const textStart = texts.length;
+        await promo.generatePromo(variant);
+        const renderedTexts = texts.slice(textStart);
+        const rendered = new Set(renderedTexts);
+        const audienceKey = audienceKeysByVariant[variant];
+        const copy = variant === 0
+          ? ['eyebrow', 'headline1', 'headline2', 'sub1', 'sub2'].map((key) => i18n.t(`promo.${key}`))
+          : ['eyebrow', 'headline1', 'headline2', 'sub1', 'sub2'].map((key) => i18n.t(`promo.audience.${audienceKey}.${key}`));
+        const cta = variant === 0 ? i18n.t('promo.cta') : i18n.t(`promo.audience.${audienceKey}.cta`);
+        for (const text of [...copy, cta, i18n.t('promo.footer')]) {
+          expect(rendered.has(text), `${lang}.${variant}.${text}`).toBe(true);
+          expect(text).not.toContain('…');
+        }
+        expect(renderedTexts.some((text) => text.includes('…')), `${lang}.${variant}`).toBe(false);
+      }
+    }
+  });
+
+  it('draws the recovery flow, symmetric status labels and compact footer in every language', async () => {
+    const { texts } = installCanvasMock();
+    for (const lang of promoLanguages) {
+      await i18n.setLanguage(lang);
+      const textStart = texts.length;
+      await promo.generatePromo(5);
+      const rendered = new Set(texts.slice(textStart));
+      for (const key of ['gBackground', 'gRelocated', 'gSegment', 'gGap', 'gInterrupted', 'gNoData', 'gRestored', 'gRepair', 'gRepairValue', 'gStatPoints', 'gStatSegments', 'gStatLocal']) {
+        expect(rendered.has(i18n.t(`promo.${key}`)), `${lang}.${key}`).toBe(true);
+      }
+      expect(rendered.has('01')).toBe(true);
+      expect(rendered.has('02')).toBe(true);
+      expect(rendered.has('03')).toBe(true);
+      expect(rendered.has('LOCAL')).toBe(true);
+      expect(rendered.has(i18n.t('promo.footer'))).toBe(true);
+      expect(rendered.has(i18n.t('promo.gNote'))).toBe(false);
+    }
+  });
+
+  it('renders every variant in every language without ellipsis or untranslated promo keys', async () => {
+    const { texts } = installCanvasMock();
+    for (const lang of promoLanguages) {
+      await i18n.setLanguage(lang);
+      for (let variant = 0; variant < promo.PROMO_VARIANT_COUNT; variant++) {
+        const textStart = texts.length;
+        await promo.generatePromo(variant);
+        const rendered = texts.slice(textStart);
+        expect(rendered.some((text) => text.includes('…')), `${lang}.${variant}`).toBe(false);
+        expect(rendered.some((text) => text.startsWith('promo.')), `${lang}.${variant}`).toBe(false);
+      }
     }
   });
 
@@ -212,7 +269,8 @@ describe('promo variants', () => {
       }
     }
     expect(canvases).toHaveLength(350);
-    expect(texts).toContain('RoamEtch迹刻');
+    expect(texts).toContain('RoamEtch');
+    expect(texts).toContain('迹刻');
     expect(await promo.generatePromo(25)).toMatchObject({ variant: 0 });
     expect(await promo.generatePromo(-1)).toMatchObject({ variant: 24 });
   });

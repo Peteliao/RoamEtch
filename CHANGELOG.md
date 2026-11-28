@@ -4,6 +4,33 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.13.0] - 2026-11-28
+
+### Added
+
+- Added live weather from Open-Meteo Global and CMA GRAPES with automatic latency
+  probing, fastest-provider selection, local caching and offline fallback.
+- Added configurable custom weather endpoints, headers, field mappings and alert
+  parsing for regional or self-hosted weather APIs.
+- Added compact top-bar weather, extreme-weather OLED pocket alerts and recorded
+  trip weather snapshots surfaced in stories and travel-book exports.
+
+### Changed
+
+- Rebuilt all 25 promotional designs across six languages around a shared alignment
+  grid, clearer type hierarchy, quieter contour backgrounds and consistent cards.
+- Reworked the recording-recovery flow with numbered steps, symmetric status tags,
+  semantic interruption markers, an independent gap-repair module and equal stats.
+- Simplified promotional footers with a soft QR tile, highlighted URL, compact
+  language list and high-contrast supporting text for light and contrast themes.
+
+### Fixed
+
+- Fixed promotional preview action alignment, wrapping and overflow on narrow
+  screens, including the three-action layout when file sharing is unavailable.
+- Kept long localized promotional copy within canvas bounds without ellipsis and
+  preserved QR readability across every supported theme.
+
 ## [3.12.0] - 2026-11-28
 
 ### Added

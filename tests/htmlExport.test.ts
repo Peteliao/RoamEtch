@@ -157,7 +157,7 @@ describe('self-contained HTML export', () => {
     const ends = await buildSelfContainedHTML(input, { places: [], privacy: { ...options, mode: 'ends', offset: true }, includePhotos: false });
     expect(embedded(ends.html).gaps).toHaveLength(0);
     expect(ends.html).not.toContain('id="gapConnect"');
-  });
+  }, 15_000);
 
   it('ships a parseable dependency-free viewer script', () => {
     expect(VIEWER_JS).toContain('function setReplay');

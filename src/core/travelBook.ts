@@ -10,12 +10,17 @@ import { buildStoryDays, normalizeStory, storyTitle, storySummary } from './stor
 import type { Story, StoryDay } from './story';
 import { mergeManualWeather, weatherCodeKey, weatherIcon } from './weather';
 import type { WeatherSummary } from './weather';
+import { closestRecordedWeather, primaryWeatherAlert, type WeatherAlert } from './weatherLive';
 
 export type BookWeather = {
   summary: WeatherSummary;
   cached: boolean;
   fetchedAt?: number;
   model?: 'forecast' | 'archive';
+  source?: string;
+  recorded?: boolean;
+  time?: number;
+  alerts?: WeatherAlert[];
 };
 
 export type TravelBookOptions = {
@@ -103,7 +108,13 @@ function dayStats(day: StoryDay, units) {
 
 function weatherBlock(day: StoryDay, story: Story, weather: Record<string, BookWeather> | undefined) {
   const manual = story.manualWeather[day.day];
-  const record = weather?.[day.day];
+  const recorded = closestRecordedWeather(day.weather || [], day.firstTime);
+  const record: BookWeather | undefined = recorded
+    ? {
+      summary: recorded.summary, cached: true, fetchedAt: recorded.time, time: recorded.time,
+      source: recorded.source, recorded: true, alerts: recorded.alerts
+    }
+    : weather?.[day.day];
   const summary = record
     ? mergeManualWeather(record.summary, manual)
     : manual
@@ -113,10 +124,16 @@ function weatherBlock(day: StoryDay, story: Story, weather: Record<string, BookW
       }, manual)
       : null;
   const manualOnly = !record && manual;
-  const source = record
-    ? `${esc(t('story.weatherSource'))} · ${esc(t(record.model === 'archive' ? 'story.weatherArchive' : 'story.weatherForecast'))} · ${esc(t(record.cached ? 'story.weatherCached' : 'story.weatherNetwork'))}`
-    : '';
+  const source = record?.recorded
+    ? `${esc(t('story.weatherRecordedSource', { source: record.source || '', time: record.time ? fmtClock(record.time, currentLang()) : '' }))}`
+    : record
+      ? `${esc(t('story.weatherSource'))} · ${esc(t(record.model === 'archive' ? 'story.weatherArchive' : 'story.weatherForecast'))} · ${esc(t(record.cached ? 'story.weatherCached' : 'story.weatherNetwork'))}`
+      : '';
   const sample = record ? `${esc(t('story.weatherSample'))} ${esc(record.summary.sample)}` : '';
+  const alert = primaryWeatherAlert(record?.alerts || []);
+  const alertHtml = alert
+    ? `<div class="weather-alert ${esc(alert.level)}">⚠ ${esc(t('story.weatherRecordedAlert', { level: t(`weather.levels.${alert.level}`), kind: t(`weather.alerts.${alert.kind}`) }))}${alert.message ? ` · ${esc(alert.message)}` : ''}</div>`
+    : '';
   const missing = summary?.missing?.length
     ? `<div class="weather-missing">${esc(t('story.weatherMissing', { fields: summary.missing.map((key) => t(`story.missing.${key}`)).join(' / ') }))}</div>`
     : '';
@@ -125,14 +142,20 @@ function weatherBlock(day: StoryDay, story: Story, weather: Record<string, BookW
       <div class="muted">${esc(t('story.weatherNone'))}</div>
       <div class="weather-source">${esc(t('story.weatherNeedNetwork'))}</div></div>`;
   }
-  const condition = manual?.condition
-    ? esc(manual.condition)
-    : t(`story.codes.${weatherCodeKey(summary.code)}`);
+  const condition = manual?.condition?.trim()
+    ? manual.condition.trim()
+    : summary.condition?.trim()
+      ? summary.condition.trim()
+      : t(`story.codes.${weatherCodeKey(summary.code)}`);
   const manualNote = summary.manual
     ? `<div class="manual-tag">${esc(t('story.manualTag'))}</div>`
     : '';
+  const recordedTag = record?.recorded
+    ? `<span class="recorded-tag">${esc(t('story.weatherRecorded'))}</span>`
+    : '';
   return `<div class="weather">
-    <div class="weather-head">${weatherIcon(summary.code)} ${esc(condition)} ${manualNote}</div>
+    <div class="weather-head">${weatherIcon(summary.code)} ${esc(condition)} ${manualNote} ${recordedTag}</div>
+    ${alertHtml}
     <div class="weather-grid">
       ${summary.temp != null ? `<span>${Math.round(summary.temp)}°C</span>` : ''}
       ${summary.rain != null ? `<span>☔ ${Math.round(summary.rain)}%</span>` : ''}
@@ -212,7 +235,7 @@ export async function buildTravelBook(full: any, opts: TravelBookOptions = {}) {
         }))).join('')}</div>`
       : '';
     const dayNotesMissing = !note && !day.nodes.length && !photos.length && !day.hasTrack;
-    if (dayNotesMissing && !opts.weather?.[day.day]) continue;
+    if (dayNotesMissing && !day.weather.length && !opts.weather?.[day.day]) continue;
     daySections.push(`<section class="day">
       <div class="day-head"><span class="day-index">${String(i + 1).padStart(2, '0')}</span><h2>${esc(day.label)}</h2></div>
       ${dayStats(day, units)}
@@ -269,6 +292,10 @@ export async function buildTravelBook(full: any, opts: TravelBookOptions = {}) {
 .weather-head{font-weight:600;margin-bottom:4px}.weather-grid{display:flex;gap:14px;flex-wrap:wrap;font-size:14px}
 .weather-source,.sun-note{color:var(--muted);font-size:11.5px;margin-top:5px}.weather-missing{color:var(--warm);font-size:11.5px;margin-top:4px}
 .weather-note{font-size:13px;margin-top:6px;padding-top:6px;border-top:1px dashed var(--line)}
+.recorded-tag{font-size:10px;color:var(--accent);background:var(--accent-soft,#e7f0ea);border-radius:999px;padding:1px 7px;vertical-align:2px;margin-left:4px}
+.weather-alert{margin:7px 0 2px;padding:6px 8px;border-radius:8px;font-size:12px;font-weight:700}
+.weather-alert.warning{color:#72500a;background:#fff1c2;border:1px solid #d9a514}
+.weather-alert.severe,.weather-alert.extreme{color:#fff;background:#a92318;border:1px solid #d33b30}
 .manual-tag{font-size:10px;color:#fff;background:var(--warm);border-radius:999px;padding:1px 7px;vertical-align:2px;margin-left:4px}
 .sun-head{font-weight:600;margin-bottom:4px}.sun-times{display:flex;gap:14px;flex-wrap:wrap;font-size:14px}
 .day-note{margin:14px 0;padding:14px 18px;border-left:3px solid var(--warm);background:#f6efe2;white-space:normal}

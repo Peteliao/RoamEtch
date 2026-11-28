@@ -31,8 +31,11 @@ export type WeatherDay = {
 export type WeatherSummary = {
   temp: number | null;
   code: number | null;
+  condition?: string | null;
   rain: number | null;
   wind: number | null;
+  gust?: number | null;
+  precipitation?: number | null;
   uv: number | null;
   hour: number;
   sample: string;

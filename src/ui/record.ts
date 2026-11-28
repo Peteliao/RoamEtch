@@ -8,6 +8,9 @@ import { armKeepAlive, disarmKeepAlive, isKeepAliveActive } from '../core/keepal
 import { requestWakeLock, releaseWakeLock } from '../core/wakelock';
 import { setThemeColorOverride, setThemeModeOverride } from '../core/theme';
 import { regionState } from '../core/region';
+import { updateWeatherLocation, refreshWeather, weatherState } from '../core/weatherService';
+import { primaryWeatherAlert } from '../core/weatherLive';
+import { weatherIcon, weatherCodeKey } from '../core/weather';
 import { availableBasemaps } from '../core/providers';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine, bearing } from '../core/geo';
 import { estimateCalories } from '../core/calories';
@@ -1058,6 +1061,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
         rec.permissionDenied = false;
         rec.geoError = null;
         const c = pos.coords;
+        updateWeatherLocation(c.latitude, c.longitude);
         map.updatePosition(c.latitude, c.longitude, c.accuracy, c.heading);
         map.flyTo(c.latitude, c.longitude, Math.max(map.map.getZoom(), 15));
         if (opts.follow) { map.setFollow(true); followBtn.classList.add('active'); }
@@ -1509,6 +1513,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     setThemeModeOverride(null);
   }
   const psTop = el('div', { class: 'od-top' });
+  const psWeather = el('div', { class: 'od-weather', hidden: true });
   const odGrid = el('div', { class: 'od-grid' });
   const psBottom = el('div', { class: 'od-bottom' });
   const OLED_BRIGHTNESS_MIN = 35;
@@ -1593,7 +1598,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     <div class="ps-hint">${t('record.camSwipe')}</div>`;
   psBottom.querySelector('.ps-actions').append(psCamAct);
   psBottom.querySelector('.ps-actions').prepend(unlockStatus);
-  ps.append(psTop, psBrightness, odGrid, psBottom);
+  ps.append(psTop, psWeather, psBrightness, odGrid, psBottom);
   document.body.append(ps);
 
   function renderPsTop() {
@@ -1605,6 +1610,42 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
       el('span', { class: 'ps-mode' }, icon('powerlock', 15), t('record.powerLock'))
     );
   }
+
+  function renderOledWeather() {
+    const current = weatherState.current;
+    if (!psActive || !get('weatherEnabled') || !current) {
+      psWeather.hidden = true;
+      return;
+    }
+    const alert = get('weatherAlertEnabled') ? primaryWeatherAlert(current.alerts) : null;
+    psWeather.hidden = false;
+    psWeather.className = `od-weather${alert ? ` alert ${alert.level}` : ''}`;
+    psWeather.innerHTML = '';
+    if (alert) {
+      const label = `${t(`weather.levels.${alert.level}`)} · ${t(`weather.alerts.${alert.kind}`)}${alert.forecast ? ` · ${t('weather.forecast')}` : ''}`;
+      const detail = alert.message || `${alert.official ? t('weather.official') : t('weather.risk')} · ${current.source}`;
+      psWeather.append(
+        el('span', { class: 'od-weather-icon' }, '⚠'),
+        el('div', { class: 'od-weather-copy' }, el('strong', {}, label), el('small', {}, detail))
+      );
+      psWeather.setAttribute('role', 'alert');
+      psWeather.setAttribute('aria-live', 'assertive');
+    } else {
+      const temp = current.summary.temp;
+      const shownTemp = temp != null ? Math.round(get('units') === 'imperial' ? temp * 9 / 5 + 32 : temp) : null;
+      const condition = current.summary.condition?.trim() || t(`story.codes.${weatherCodeKey(current.summary.code)}`);
+      psWeather.append(
+        el('span', { class: 'od-weather-icon' }, weatherIcon(current.summary.code)),
+        el('div', { class: 'od-weather-copy' },
+          el('strong', {}, `${condition}${shownTemp != null ? ` · ${shownTemp}°` : ''}`),
+          el('small', {}, `${current.source} · ${t(current.cached ? 'weather.cached' : 'weather.updated', { time: new Date(current.fetchedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) })}`))
+      );
+      psWeather.setAttribute('role', 'status');
+      psWeather.setAttribute('aria-live', 'polite');
+    }
+  }
+  on('weather:changed', renderOledWeather);
+  on('weather:alert', renderOledWeather);
 
   const unlockRing = psBottom.querySelector('.ps-unlock') as HTMLElement;
   const unlockFg = psBottom.querySelector('.ps-unlock .fgc') as SVGCircleElement;
@@ -1770,6 +1811,14 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
         applyOledBrightness();
         renderPsTop();
         updatePsCamera();
+        if (rec.live?.lat != null && rec.live?.lon != null) {
+          updateWeatherLocation(rec.live.lat, rec.live.lon, { force: true, probe: !weatherState.ranking });
+        } else if (weatherState.location) {
+          void refreshWeather({ force: true, probe: !weatherState.ranking });
+        } else {
+          locateOnce();
+        }
+        renderOledWeather();
         renderOled(rec.live);
         updatePsSub();
         setTimeout(() => { if (psActive) updatePsSub(); }, 1200);
@@ -1969,7 +2018,11 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
         map.liveMode = true;
         map._liveFeats = new Map();
         const last = preview.segments[preview.segments.length - 1]?.points.slice(-1)[0];
-        if (last) { map.updatePosition(last.lat, last.lon, last.acc, null); map.fitTrack(); }
+        if (last) {
+          map.updatePosition(last.lat, last.lon, last.acc, null);
+          updateWeatherLocation(last.lat, last.lon);
+          map.fitTrack();
+        }
       }
       renderButtons();
       renderBanners();

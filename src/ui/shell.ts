@@ -3,6 +3,9 @@ import { t } from '../core/i18n';
 import { on, setScope, clearScope } from '../core/events';
 import { regionState, regionLabel, setRegionMode } from '../core/region';
 import { get } from '../core/settings';
+import { weatherIcon, weatherCodeKey } from '../core/weather';
+import { primaryWeatherAlert } from '../core/weatherLive';
+import { refreshWeather, weatherState } from '../core/weatherService';
 import { rec } from '../core/recorder';
 import { getMeetSnapshot } from '../core/meet';
 import { appState, cancelAltBackfill } from './state';
@@ -61,7 +64,8 @@ export function createShell(root) {
     fsBtn.style.display = 'none';
   }
   renderFsBtn();
-  topbar.append(brand, el('span', { class: 'spacer' }), teamButton, recButton, fsBtn, regionChip);
+  const weatherChip = el('button', { class: 'weather-chip', 'aria-live': 'polite', 'aria-atomic': 'true' });
+  topbar.append(brand, weatherChip, el('span', { class: 'spacer' }), teamButton, recButton, fsBtn, regionChip);
 
   const viewsBox = el('div', { class: 'views' });
   const tabbar = el('div', { class: 'tabbar', role: 'tablist' });
@@ -80,6 +84,125 @@ export function createShell(root) {
     regionChip.append(el('span', { class: `dot ${dotClass}${chatNotice ? ' chat-alert' : ''}` }), regionLabel());
   }
   renderRegionChip();
+
+  function weatherTime(time: number) {
+    return new Date(time).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function weatherAlertLabel(alert) {
+    const kind = t(`weather.alerts.${alert.kind}`);
+    return `${t(`weather.levels.${alert.level}`)} · ${kind}${alert.forecast ? ` · ${t('weather.forecast')}` : ''}`;
+  }
+
+  function weatherErrorLabel(error) {
+    if (error === 'weather-offline') return t('weather.errorOffline');
+    if (error?.startsWith('weather-custom')) return t('weather.errorCustom');
+    if (error === 'weather-provider-unconfigured') return t('weather.errorUnconfigured');
+    return t('weather.errorUnavailable');
+  }
+
+  function weatherProviderLabel(id) {
+    return t(`weather.providers.${id}`);
+  }
+
+  function renderWeatherChip() {
+    weatherChip.hidden = !get('weatherEnabled');
+    if (weatherChip.hidden) return;
+    const current = weatherState.current;
+    const alert = get('weatherAlertEnabled') && current ? primaryWeatherAlert(current.alerts) : null;
+    weatherChip.className = `weather-chip${alert ? ` alert ${alert.level}` : ''}${weatherState.fetching ? ' fetching' : ''}`;
+    weatherChip.innerHTML = '';
+    if (!current) {
+      weatherChip.append(
+        el('span', { class: 'weather-icon' }, weatherState.fetching ? '…' : '—'),
+        el('span', { class: 'weather-condition' }, t(weatherState.fetching ? 'weather.fetching' : weatherState.location ? 'weather.unavailable' : 'weather.waiting'))
+      );
+      weatherChip.title = t('weather.title');
+      weatherChip.setAttribute('aria-label', weatherChip.title);
+      return;
+    }
+    const temp = current.summary.temp;
+    const celsius = temp != null && Number.isFinite(temp);
+    const shownTemp = celsius ? Math.round(get('units') === 'imperial' ? temp * 9 / 5 + 32 : temp) : null;
+    const condition = alert
+      ? t(`weather.alerts.${alert.kind}`)
+      : current.summary.condition?.trim() || t(`story.codes.${weatherCodeKey(current.summary.code)}`);
+    weatherChip.append(
+      el('span', { class: 'weather-icon' }, alert ? '⚠' : weatherIcon(current.summary.code)),
+      el('span', { class: 'weather-temp' }, shownTemp != null ? `${shownTemp}°` : ''),
+      el('span', { class: 'weather-condition' }, condition)
+    );
+    const detail = `${condition}${shownTemp != null ? ` ${shownTemp}°${get('units') === 'imperial' ? 'F' : 'C'}` : ''}\n${current.source}\n${t('weather.updated', { time: weatherTime(current.fetchedAt) })}`;
+    weatherChip.title = detail;
+    weatherChip.setAttribute('aria-label', detail);
+    if (alert) {
+      weatherChip.setAttribute('role', 'alert');
+      weatherChip.setAttribute('aria-live', 'assertive');
+    } else {
+      weatherChip.removeAttribute('role');
+      weatherChip.setAttribute('aria-live', 'polite');
+    }
+  }
+
+  function openWeatherSheet() {
+    const source = el('div', { class: 'small muted' });
+    const updated = el('div', { class: 'small muted' });
+    const latency = el('div', { class: 'small muted' });
+    const ranking = el('div', { class: 'small muted' });
+    const error = el('div', { class: 'small weather-error' });
+    const alert = el('div', { class: 'weather-detail-alert' });
+    const refreshBtn = el('button', { class: 'btn secondary' }, t('weather.refresh'));
+    const fill = () => {
+      const current = weatherState.current;
+      source.textContent = current ? t('weather.source', { source: current.source }) : t('weather.waiting');
+      updated.textContent = current ? `${t('weather.updated', { time: weatherTime(current.fetchedAt) })}${current.summary.sample ? ` · ${t('weather.sample', { time: current.summary.sample })}` : ''}` : '';
+      latency.textContent = current?.latencyMs != null ? t('weather.latency', { ms: current.latencyMs }) : current ? t('weather.cached') : '';
+      const rank = weatherState.ranking;
+      ranking.textContent = rank?.results?.length
+        ? rank.results.map((result) => result.ok ? t('weather.probeResult', { source: weatherProviderLabel(result.id), ms: result.ms }) : t('weather.probeFailed', { source: weatherProviderLabel(result.id) })).join(' · ')
+        : t('weather.noProbe');
+      error.textContent = weatherState.error ? weatherErrorLabel(weatherState.error) : '';
+      error.hidden = !weatherState.error;
+      const currentAlert = get('weatherAlertEnabled') && current ? primaryWeatherAlert(current.alerts) : null;
+      alert.hidden = !currentAlert;
+      if (currentAlert) {
+        alert.className = `weather-detail-alert ${currentAlert.level}`;
+        alert.textContent = `${weatherAlertLabel(currentAlert)}${currentAlert.message ? ` · ${currentAlert.message}` : ''}`;
+      }
+      refreshBtn.disabled = weatherState.fetching;
+      refreshBtn.textContent = t(weatherState.fetching ? 'weather.fetching' : 'weather.refresh');
+      renderWeatherChip();
+    };
+    refreshBtn.onclick = async () => {
+      refreshBtn.disabled = true;
+      await refreshWeather({ force: true, probe: true });
+      fill();
+    };
+    const sheet = modal({
+      title: t('weather.title'),
+      body: el('div', { class: 'weather-details' },
+        el('div', { class: 'weather-privacy' }, t('weather.privacy')),
+        source, updated, latency, ranking, alert, error,
+        el('div', { class: 'small muted' }, t('weather.notOfficial')),
+        el('div', { class: 'small faint' }, t('weather.attribution')),
+        el('div', { class: 'row gap', style: { marginTop: '12px' } },
+          refreshBtn,
+          el('button', { class: 'btn secondary', onclick: () => { sheet.close(); navigate('settings', { anchor: 'weather' }); } }, t('weather.settings'))
+        )
+      )
+    });
+    fill();
+  }
+
+  weatherChip.onclick = openWeatherSheet;
+  on('weather:changed', renderWeatherChip);
+  on('weather:alert', ({ alert: currentAlert }) => {
+    renderWeatherChip();
+    toast(weatherAlertLabel(currentAlert), currentAlert.level === 'warning' ? 'warn' : 'err', 6500);
+  });
+  on('settings:changed', renderWeatherChip);
+  renderWeatherChip();
+
   on('region:changed', renderRegionChip);
   on('region:probed', renderRegionChip);
   on('region:probing', renderRegionChip);
@@ -289,6 +412,7 @@ export function createShell(root) {
     buildViews();
     renderRegionChip();
     renderBrand();
+    renderWeatherChip();
     renderFsBtn();
     renderTeamStatus();
   });

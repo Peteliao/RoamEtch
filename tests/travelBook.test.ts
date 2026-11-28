@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { buildTravelBook } from '../src/core/travelBook';
 import { normalizeStory } from '../src/core/story';
+import { initI18n, setLanguage } from '../src/core/i18n';
 
 const T0 = new Date(2026, 10, 20, 9, 0, 0).getTime();
 
-function full() {
+function full(): any {
   return {
     trip: { id: 't1', name: 'Ridge walk', activity: 'hike', createdAt: T0 },
     segments: [{
@@ -25,6 +26,11 @@ function full() {
     ]
   };
 }
+
+beforeAll(async () => {
+  await initI18n();
+  await setLanguage('en');
+});
 
 describe('travel book export', () => {
   it('applies privacy before days, includes disclosed manual weather and notes', async () => {
@@ -62,5 +68,31 @@ describe('travel book export', () => {
     });
     expect(html).not.toContain('data:image/jpeg;base64,');
     expect(html).toContain('Secret Camp');
+  });
+
+  it('exports recorded weather, source and alerts with custom text escaped', async () => {
+    const data = full();
+    data.trip.weatherLog = [{
+      time: T0 + 60_000, lat: 30.0005, lon: 120.0005,
+      source: '<img src=x onerror=alert(1)>', providerId: 'custom',
+      summary: {
+        temp: 18, code: 95, condition: '<b>雷暴</b>', rain: 90, wind: 55,
+        uv: null, hour: 9, sample: '2026-11-20 09:00', missing: ['uv']
+      },
+      alerts: [{ level: 'severe', kind: 'thunderstorm', official: true, message: '<script>alert(1)</script>' }]
+    }];
+    const html = await buildTravelBook(data, {
+      story: normalizeStory({ title: 'Storm story' }),
+      includePhotos: false,
+      privacy: { radius: 0, hideSensitive: false }
+    });
+    expect(html).toContain('Recorded during trip');
+    expect(html).toContain('Trip record');
+    expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+    expect(html).toContain('&lt;b&gt;雷暴&lt;/b&gt;');
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    expect(html).toContain('weather-alert severe');
+    expect(html).not.toContain('<img src=x onerror=alert(1)>');
+    expect(html).not.toContain('<script>alert(1)</script>');
   });
 });

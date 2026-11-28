@@ -129,6 +129,28 @@ afterEach(() => {
 });
 
 describe('promo preview variant switcher', () => {
+  it('uses a dedicated responsive action group with wrapped labels', async () => {
+    await openPreview();
+    const modalOptions = mocks.modal.mock.calls[0][0];
+    expect(modalOptions.wide).toBe(true);
+    expect(document.querySelector('.promo-modal')).not.toBeNull();
+    const actions = document.querySelector('.promo-actions')!;
+    expect(actions.children).toHaveLength(4);
+    for (const action of actions.querySelectorAll('button')) {
+      expect(action.querySelector('.promo-action-icon svg')).not.toBeNull();
+      expect(action.querySelector('.promo-action-label')?.textContent).toBeTruthy();
+    }
+  });
+
+  it('keeps three aligned actions when file sharing is unavailable', async () => {
+    Object.defineProperty(navigator, 'canShare', { configurable: true, value: () => false });
+    await openPreview();
+    const actions = document.querySelector('.promo-actions')!;
+    expect(actions.classList.contains('three')).toBe(true);
+    expect(actions.children).toHaveLength(3);
+    expect(actions.querySelector('.primary')?.textContent).toContain('settings.promoDownload');
+  });
+
   it('cycles sequentially and keeps image, save, copy, share and object URL state together', async () => {
     const initial = await openPreview();
     const second = promoResult(8, 'second');

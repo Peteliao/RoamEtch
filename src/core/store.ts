@@ -3,6 +3,7 @@ import Dexie, { type Transaction } from 'dexie';
 import { uuid } from './geo';
 import { DATABASE_MIGRATIONS, DATABASE_NAME, TRIP_SCHEMA_VERSION } from './migrations';
 import { installDatabaseWriteGuard } from './locks';
+import { normalizeWeatherLog } from './weatherLive';
 
 export { DATABASE_SCHEMA_VERSION, TRIP_SCHEMA_VERSION } from './migrations';
 
@@ -68,6 +69,49 @@ export async function cacheTripStats(id, expectedUpdatedAt, statsCache) {
     const trip = await db.trips.get(id);
     if (!trip || trip.updatedAt !== expectedUpdatedAt) return false;
     await db.trips.update(id, { statsCache });
+    return true;
+  });
+}
+
+const MAX_WEATHER_SAMPLES = 720;
+
+function limitWeatherSamples(samples) {
+  if (samples.length <= MAX_WEATHER_SAMPLES) return samples;
+  const first = samples[0], last = samples[samples.length - 1];
+  const alerts = samples.filter((sample) => sample.alerts?.length);
+  const ordinary = samples.filter((sample) => !sample.alerts?.length);
+  const fixed = [first, ...alerts, last].filter((sample, index, all) => all.indexOf(sample) === index);
+  const remaining = Math.max(0, MAX_WEATHER_SAMPLES - fixed.length);
+  const picked = [];
+  for (let i = 0; i < remaining; i++) {
+    const index = remaining === 1 ? Math.floor(ordinary.length / 2) : Math.round(i * (ordinary.length - 1) / (remaining - 1));
+    if (ordinary[index]) picked.push(ordinary[index]);
+  }
+  if (fixed.length <= MAX_WEATHER_SAMPLES) return [...fixed, ...picked].sort((a, b) => a.time - b.time);
+  const middle = fixed.slice(1, -1);
+  const thinned = [first, last];
+  const slots = MAX_WEATHER_SAMPLES - 2;
+  for (let i = 0; i < slots; i++) {
+    const index = slots === 1 ? Math.floor(middle.length / 2) : Math.round(i * (middle.length - 1) / (slots - 1));
+    if (middle[index]) thinned.push(middle[index]);
+  }
+  return [...new Set(thinned)].sort((a, b) => a.time - b.time);
+}
+
+export async function appendTripWeatherSample(tripId, sample) {
+  return db.transaction('rw', db.trips, async () => {
+    const trip = await db.trips.get(tripId);
+    if (!trip) return false;
+    const normalized = normalizeWeatherLog([sample])[0];
+    if (!normalized) return false;
+    const previous = normalizeWeatherLog(trip.weatherLog);
+    const duplicate = previous.some((entry) =>
+      Math.round(entry.time / 60_000) === Math.round(normalized.time / 60_000)
+      && entry.source === normalized.source && entry.providerId === normalized.providerId
+      && entry.lat.toFixed(2) === normalized.lat.toFixed(2) && entry.lon.toFixed(2) === normalized.lon.toFixed(2));
+    if (duplicate) return false;
+    const next = limitWeatherSamples([...previous, normalized].sort((a, b) => a.time - b.time));
+    await db.trips.update(tripId, { weatherLog: next });
     return true;
   });
 }

@@ -12,6 +12,7 @@ import * as storeCore from './core/store';
 import * as migrationCore from './core/migrations';
 import * as databaseCheckpointCore from './core/databaseCheckpoint';
 import * as recorderCore from './core/recorder';
+import * as weatherCore from './core/weatherService';
 import * as simulationCore from './core/simulation';
 import * as rewalkCore from './core/rewalk';
 import * as batchCore from './core/batch';
@@ -242,12 +243,13 @@ async function boot() {
   } catch (e) { console.warn('pending spill recovery failed', e); }
 
   await migrateLegacySharedImports();
+  weatherCore.initWeatherMonitor();
 
   const shell = createShell(document.getElementById('app'));
   document.getElementById('boot-splash')?.remove();
   diag('boot', 'app ready', { lang: navigator.language });
   // debug handle for diagnostics & acceptance testing (spec: debuggability)
-  window.__lt = { recorder: recorderCore, simulation: simulationCore, store: storeCore, migration: migrationCore, databaseCheckpoint: databaseCheckpointCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, backup: backupCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore, updates: { show: showUpdateNotice } };
+  window.__lt = { recorder: recorderCore, weather: weatherCore, simulation: simulationCore, store: storeCore, migration: migrationCore, databaseCheckpoint: databaseCheckpointCore, coords: coordsCore, region: regionState, shell, theme: themeCore, rewalk: rewalkCore, batch: batchCore, backup: backupCore, keepalive: keepaliveCore, meet: meetCore.meet, meetCore, meetLink: meetLinkCore, updates: { show: showUpdateNotice } };
 
   // Live fragment imports. A meet invite takes precedence when both coexist.
   const hasMeetFragment = /[#&]meet=/.test(location.hash);

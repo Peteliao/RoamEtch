@@ -12,6 +12,9 @@ import {
   weatherCodeKey, weatherIcon
 } from '../core/weather';
 import type { ManualWeather, WeatherSummary } from '../core/weather';
+import {
+  closestRecordedWeather, primaryWeatherAlert, type RecordedWeather, type WeatherAlert
+} from '../core/weatherLive';
 import { buildTravelBook } from '../core/travelBook';
 import { importMatchedPhotos, updateTrip } from '../core/store';
 import { processPhoto } from '../core/photos';
@@ -138,7 +141,22 @@ export function createStoryView(navigate, { embedded = false } = {}) {
 
   function weatherLabel(summary, manual?: ManualWeather | null) {
     if (manual?.condition?.trim()) return manual.condition.trim();
+    if (summary.condition?.trim()) return summary.condition.trim();
     return t(`story.codes.${weatherCodeKey(summary.code)}`);
+  }
+
+  function recordedForDay(day: StoryDay): RecordedWeather | null {
+    return closestRecordedWeather(day.weather || [], day.firstTime);
+  }
+
+  function recordedAlert(day: StoryDay): WeatherAlert | null {
+    return primaryWeatherAlert((day.weather || []).flatMap((sample) => sample.alerts || []));
+  }
+
+  function recordedAlertLabel(alert: WeatherAlert) {
+    return t('story.weatherRecordedAlert', {
+      level: t(`weather.levels.${alert.level}`), kind: t(`weather.alerts.${alert.kind}`)
+    });
   }
 
   function baseSummary(): WeatherSummary {
@@ -146,19 +164,23 @@ export function createStoryView(navigate, { embedded = false } = {}) {
   }
 
   function displaySummary(day: StoryDay) {
+    const recorded = recordedForDay(day);
     const record = weather.get(day.day);
     const manual = story.manualWeather[day.day];
+    if (recorded) return mergeManualWeather(recorded.summary, manual);
     if (record) return mergeManualWeather(record.summary, manual);
     if (manual) return { ...mergeManualWeather(baseSummary(), manual), manual: true };
     return null;
   }
 
   function weatherBox(day: StoryDay) {
+    const recorded = recordedForDay(day);
     const record = weather.get(day.day);
     const manual = story.manualWeather[day.day];
     const summary = displaySummary(day);
     const busy = weatherBusy.has(day.day);
     const error = weatherErrors.get(day.day);
+    const alert = recordedAlert(day);
     const buttons = el('div', { class: 'story-weather-actions' },
       el('button', {
         class: 'btn sm ghost', disabled: busy || !day.center,
@@ -177,15 +199,25 @@ export function createStoryView(navigate, { embedded = false } = {}) {
         el('div', { class: 'story-weather-src' }, t('story.weatherNeedNetwork')));
     }
     const condition = weatherLabel(summary, manual);
-    const source = record
-      ? `${t('story.weatherSource')} · ${t(record.model === 'archive' ? 'story.weatherArchive' : 'story.weatherForecast')} · ${t(record.cached ? 'story.weatherCached' : 'story.weatherNetwork')} · ${fmtClock(record.fetchedAt)}`
-      : t('story.manualSupplement');
+    const source = recorded
+      ? t('story.weatherRecordedSource', { source: recorded.source, time: fmtClock(recorded.time) })
+      : record
+        ? `${t('story.weatherSource')} · ${t(record.model === 'archive' ? 'story.weatherArchive' : 'story.weatherForecast')} · ${t(record.cached ? 'story.weatherCached' : 'story.weatherNetwork')} · ${fmtClock(record.fetchedAt)}`
+        : t('story.manualSupplement');
+    const sample = recorded || record;
+    const alertBox = alert ? el('div', {
+      class: `story-weather-recorded-alert ${alert.level}`,
+      role: alert.level === 'warning' ? 'status' : 'alert',
+      'aria-live': alert.level === 'warning' ? 'polite' : 'assertive'
+    }, `⚠ ${recordedAlertLabel(alert)}${alert.message ? ` · ${alert.message}` : ''}`) : null;
     return el('div', { class: 'story-weather card-flat' },
       el('div', { class: 'story-weather-head' },
-        el('span', { class: 'story-weather-ic' }, weatherIcon(summary.code || null)),
+        el('span', { class: 'story-weather-ic' }, alert ? '⚠' : weatherIcon(summary.code || null)),
         el('h4', {}, condition),
+        recorded ? el('span', { class: 'story-tag' }, t('story.weatherRecorded')) : null,
         summary.manual ? el('span', { class: 'story-tag' }, t('story.manualTag')) : null,
         buttons),
+      alertBox,
       el('div', { class: 'story-weather-vals' },
         summary.temp != null ? el('span', {}, `${Math.round(summary.temp)}°C`) : null,
         summary.rain != null ? el('span', {}, `☔ ${Math.round(summary.rain)}%`) : null,
@@ -197,7 +229,7 @@ export function createStoryView(navigate, { embedded = false } = {}) {
         : null,
       el('div', { class: 'story-weather-src' },
         source,
-        record?.summary?.sample ? ` · ${t('story.weatherSample')} ${record.summary.sample}` : ''),
+        sample?.summary?.sample ? ` · ${t('story.weatherSample')} ${sample.summary.sample}` : ''),
       error ? el('div', { class: 'story-weather-err' },
         t(error === 'weather-offline' ? 'story.weatherOffline' : 'story.weatherFail')) : null,
       manual?.note ? el('div', { class: 'story-weather-note' }, manual.note) : null);
@@ -264,7 +296,7 @@ export function createStoryView(navigate, { embedded = false } = {}) {
     let failures = 0;
     for (const day of days) {
       if (destroyed) return;
-      if (!day.center) continue;
+      if (!day.center || day.weather.length) continue;
       const ok = await fetchDayWeather(day, { silent: true });
       if (!ok) failures++;
     }
@@ -279,7 +311,7 @@ export function createStoryView(navigate, { embedded = false } = {}) {
   function loadCachedWeather(seq: number) {
     const requests = [];
     for (const day of days) {
-      if (!day.center || weather.has(day.day)) continue;
+      if (!day.center || day.weather.length || weather.has(day.day)) continue;
       const cached = cachedWeatherDay(day.center.lat, day.center.lon, day.day);
       if (cached) {
         weather.set(day.day, {

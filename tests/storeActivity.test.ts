@@ -25,7 +25,7 @@ vi.mock('dexie', () => ({
   }
 }));
 
-import { cacheTripStats, db, updateTrip } from '../src/core/store';
+import { appendTripWeatherSample, cacheTripStats, db, updateTrip } from '../src/core/store';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -104,6 +104,57 @@ describe('updateTrip activity changes', () => {
     expect(mocks.trips.get).not.toHaveBeenCalled();
     expect(db.transaction).not.toHaveBeenCalled();
     expect(mocks.trips.update).toHaveBeenCalledWith('trip-1', { thumbPoints: null });
+  });
+});
+
+describe('appendTripWeatherSample', () => {
+  const sample = (time: number, alerts: any[] = []) => ({
+    time, lat: 30, lon: 120, source: 'Open-Meteo', providerId: 'open-meteo', alerts,
+    summary: {
+      temp: 20, code: 1, rain: 10, wind: 8, uv: 2,
+      hour: 9, sample: '2026-11-20 09:00', missing: []
+    }
+  });
+
+  it('appends only weatherLog inside a read-write transaction and preserves updatedAt', async () => {
+    mocks.trips.get.mockResolvedValueOnce({ id: 'trip-weather', updatedAt: 123, weatherLog: [] });
+    await expect(appendTripWeatherSample('trip-weather', sample(1000))).resolves.toBe(true);
+    expect(db.transaction).toHaveBeenCalledWith('rw', db.trips, expect.any(Function));
+    const patch = mocks.trips.update.mock.calls[0][1];
+    expect(patch.weatherLog).toHaveLength(1);
+    expect(patch).not.toHaveProperty('updatedAt');
+  });
+
+  it('rejects duplicate minute, source and rounded-coordinate samples', async () => {
+    mocks.trips.get.mockResolvedValueOnce({
+      id: 'trip-weather', weatherLog: [sample(60_000)]
+    });
+    await expect(appendTripWeatherSample('trip-weather', sample(61_000))).resolves.toBe(false);
+    expect(mocks.trips.update).not.toHaveBeenCalled();
+  });
+
+  it('bounds long recordings while retaining the first, last and alert samples', async () => {
+    const start = new Date(2026, 0, 1).getTime();
+    const existing = Array.from({ length: 730 }, (_, index) => sample(
+      start + index * 60_000,
+      index === 360 ? [{ level: 'extreme', kind: 'thunderstorm' }] : []
+    ));
+    mocks.trips.get.mockResolvedValueOnce({ id: 'trip-weather', weatherLog: existing });
+    await appendTripWeatherSample('trip-weather', sample(start + 730 * 60_000));
+
+    const stored = mocks.trips.update.mock.calls[0][1].weatherLog;
+    expect(stored.length).toBeLessThanOrEqual(720);
+    expect(stored[0].time).toBe(start);
+    expect(stored[stored.length - 1].time).toBe(start + 730 * 60_000);
+    expect(stored.some((entry: any) => entry.alerts.some((alert: any) => alert.kind === 'thunderstorm'))).toBe(true);
+  });
+
+  it('rejects missing trips and invalid samples without writing', async () => {
+    mocks.trips.get.mockResolvedValueOnce(null);
+    await expect(appendTripWeatherSample('missing', sample(1000))).resolves.toBe(false);
+    mocks.trips.get.mockResolvedValueOnce({ id: 'trip-weather', weatherLog: [] });
+    await expect(appendTripWeatherSample('trip-weather', { ...sample(1000), lat: 91 })).resolves.toBe(false);
+    expect(mocks.trips.update).not.toHaveBeenCalled();
   });
 });
 
