@@ -121,8 +121,8 @@ test('Matrix reaches promo, poster, footprint and standalone HTML exports', asyn
     const { generateFootprintImage } = await import('/src/core/footprintShare.ts');
     const { buildSelfContainedHTML } = await import('/src/core/htmlExport.ts');
 
-    const sample = async (source: Blob | HTMLCanvasElement) => {
-      const bitmap = await createImageBitmap(source, 0, 0, 1, 1);
+    const sample = async (source: Blob | HTMLCanvasElement, x = 0, y = 0) => {
+      const bitmap = await createImageBitmap(source, x, y, 1, 1);
       const canvas = document.createElement('canvas');
       canvas.width = canvas.height = 1;
       const ctx = canvas.getContext('2d')!;
@@ -140,7 +140,7 @@ test('Matrix reaches promo, poster, footprint and standalone HTML exports', asyn
     });
     const html = await buildSelfContainedHTML(full, { includePhotos: false });
     return {
-      promo: await sample(promo.blob),
+      promo: await sample(promo.blob, 24, 24),
       poster: await sample(poster.canvas),
       footprint: await sample(footprint.blob),
       html: {
