@@ -188,7 +188,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
 
   function canEnterPowerLock() {
     return !!map && !map.destroyed && !powerLockBusy && !powerLockExitPromise
-      && (rec.status === 'recording' || rec.status === 'paused');
+      && (rec.status === 'idle' || rec.status === 'recording' || rec.status === 'paused');
   }
   function syncPowerLockEntry() {
     if (powerLockEntry) powerLockEntry.disabled = !canEnterPowerLock();
@@ -1406,7 +1406,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
   function openRecWaypoint() {
     const L = rec.live;
     if (!L || L.lat == null || L.lon == null) { toast(t('record.nodeNoFix'), 'warn'); return; }
-    openWaypointModal({ lat: L.lat, lon: L.lon }, recEditOpts());
+    openWaypointModal({ lat: L.lat, lon: L.lon }, { ...recEditOpts(), defaultType: 'route' });
   }
 
   // ---------- banners ----------
@@ -1752,7 +1752,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
       powerLockBusy = true;
       try {
         const target = map;
-        if (!target || target.destroyed || (rec.status !== 'recording' && rec.status !== 'paused')) {
+        if (!target || target.destroyed) {
           toast(t('record.lockUnavailable'), 'warn');
           return false;
         }
@@ -1827,12 +1827,18 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     renderPanel(rec.live);
     if (!simulated) toast(t('record.bgHint'), 'info', 6000);
   });
-  on('recorder:paused', () => { renderButtons(); renderBanners(); });
+  on('recorder:paused', () => {
+    if (psActive) void requestWakeLock();
+    renderButtons(); renderBanners();
+  });
   on('recorder:resumed', async () => {
     liveActivity = (await getTrip(rec.tripId))?.activity || get('activity');
     renderButtons(); renderBanners(); renderPanel(rec.live);
   });
-  on('recorder:stopped', () => { clearLivePanel(); renderButtons(); renderBanners(); });
+  on('recorder:stopped', () => {
+    if (psActive) void requestWakeLock();
+    clearLivePanel(); renderButtons(); renderBanners();
+  });
   on('recorder:busy', () => { readOnly = true; renderBanners(); toast(t('record.tabLocked'), 'warn', 4000); });
   const offBroadcast = onBroadcast((msg) => {
     if (msg.type === 'rec-state') {

@@ -1,6 +1,44 @@
 import { test, expect } from '@playwright/test';
 import { blockExternal, gotoTab, openDemo } from './utils';
 
+test('finished trip map auto-fits the full track and manual overview restores it', async ({ page }) => {
+  await blockExternal(page);
+  await openDemo(page);
+  await page.locator('#trip-detail').getByRole('button', { name: '在地图查看' }).click();
+  await expect(page.locator('.view-trip-bar')).toBeVisible();
+  const framing = () => page.evaluate(async () => {
+    const { toDisplay } = await import('/src/core/coords.ts');
+    const track = window.__lt.shell.getViews().record.getMap();
+    const points = track.segments.flatMap((segment: any) => segment.points || [])
+      .map((point: any) => track.map.project(toDisplay(point.lon, point.lat, track.coordSystem)));
+    const padding = track.map.getPadding();
+    const xs = points.map((point: any) => point.x);
+    const ys = points.map((point: any) => point.y);
+    const visibleW = track.container.clientWidth - padding.left - padding.right;
+    const visibleH = track.container.clientHeight - padding.top - padding.bottom;
+    return {
+      count: points.length,
+      inside: points.every((point: any) => point.x >= padding.left - 1
+        && point.x <= track.container.clientWidth - padding.right + 1
+        && point.y >= padding.top - 1
+        && point.y <= track.container.clientHeight - padding.bottom + 1),
+      fill: Math.max((Math.max(...xs) - Math.min(...xs)) / visibleW, (Math.max(...ys) - Math.min(...ys)) / visibleH)
+    };
+  });
+  await expect.poll(() => page.evaluate(() => window.__lt.shell.getViews().record.getMap().map.isMoving())).toBe(false);
+  const auto = await framing();
+  expect(auto.count).toBeGreaterThan(1);
+  expect(auto.inside).toBe(true);
+  expect(auto.fill).toBeGreaterThan(0.6);
+
+  await page.evaluate(() => window.__lt.shell.getViews().record.getMap().map.zoomIn({ duration: 0 }));
+  await page.locator('#view-record .iconbtn[title="全览轨迹"]').click();
+  await expect.poll(() => page.evaluate(() => window.__lt.shell.getViews().record.getMap().map.isMoving())).toBe(false);
+  const manual = await framing();
+  expect(manual.inside).toBe(true);
+  expect(manual.fill).toBeGreaterThan(0.6);
+});
+
 test('editing is limited to a finished trip map view and supports undo redo', async ({ page }) => {
   let tripId: string | null = null;
   await blockExternal(page);

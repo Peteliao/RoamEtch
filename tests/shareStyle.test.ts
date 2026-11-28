@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  SHARE_STYLE_DEFAULTS, normalizeShareStyle, posterLayout, shareFontStack, trackColorValue
+  SHARE_STYLE_DEFAULTS, normalizeShareStyle, posterLayout, shareFontStack, squareOverlayLayout, squareStackLayout, trackColorValue
 } from '../src/core/shareStyle';
 
 describe('share style', () => {
@@ -48,5 +48,16 @@ describe('share style', () => {
     expect(posterLayout('square', normalizeShareStyle({ mapRatio: 72 }))).toMatchObject({ H: 1080, mapRatio: 56, mapH: 605 });
     expect(posterLayout('vertical', normalizeShareStyle({ mapRatio: 72 }))).toMatchObject({ H: 1920, mapRatio: 72, mapH: 1382 });
     expect(posterLayout('vertical', normalizeShareStyle({ mapRatio: 20 }))).toMatchObject({ mapRatio: 40, mapH: 768 });
+  });
+
+  it('keeps the square profile clear of the brand block and reserves overlay chart space', () => {
+    const stack = squareStackLayout(1080, 605, true);
+    expect(stack.profileY + stack.profileH).toBeLessThanOrEqual(stack.brandY - 18);
+    expect(stack.profileH).toBeGreaterThanOrEqual(96);
+    const overlay = squareOverlayLayout(1080, 605);
+    const profileY = overlay.innerY + 190;
+    const profileBottom = overlay.innerY + overlay.innerH - 100;
+    expect(profileBottom - profileY).toBeGreaterThanOrEqual(96);
+    expect(overlay.innerY + overlay.innerH).toBeLessThanOrEqual(overlay.cardY + overlay.cardH);
   });
 });

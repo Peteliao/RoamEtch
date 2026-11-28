@@ -405,6 +405,53 @@ describe('meetup network and GPS freshness protocol', () => {
     });
   });
 
+  it('accepts explicit WGS-84 rally points without a fresh GPS fix', async () => {
+    const snapshot = await setup();
+    expect(snapshot.self.hasFix).toBe(false);
+    const sendsBefore = harness.relay.send.mock.calls.length;
+    expect(await meetModule.sendMeetGoal({ lat: 0, lon: 0, label: 'Trailhead' })).toBe(true);
+    expect(meetModule.getMeetSnapshot().goal).toMatchObject({ lat: 0, lon: 0, label: 'Trailhead' });
+    const packet = harness.relay.send.mock.calls.slice(sendsBefore)
+      .map(([text]) => JSON.parse(text)).find((entry) => entry.k === 'goal');
+    expect(packet).toMatchObject({ v: snapshot.protocol, la: 0, lo: 0, tx: 'Trailhead' });
+
+    meetModule.injectMeetFix({ lat: 30, lon: 120, acc: 8, ts: now - 120_000 });
+    advance(1000);
+    expect(await meetModule.sendMeetGoal({ lat: -33.9, lon: 151.2 })).toBe(true);
+    expect(meetModule.getMeetSnapshot().goal).toMatchObject({ lat: -33.9, lon: 151.2 });
+    expect(await meetModule.sendMeetGoal({ label: 'GPS fallback' })).toBe(false);
+  });
+
+  it('rejects partial or invalid explicit rally points before sending or rate-limiting', async () => {
+    await setup();
+    const invalid = [
+      { lat: 1 }, { lon: 1 }, { lat: undefined, lon: 1 },
+      { lat: Number.NaN, lon: 1 }, { lat: 1, lon: Number.POSITIVE_INFINITY },
+      { lat: 91, lon: 1 }, { lat: 1, lon: -181 }, { lat: '1' as any, lon: 1 }
+    ];
+    const sendsBefore = harness.relay.send.mock.calls.length;
+    for (const point of invalid) expect(await meetModule.sendMeetGoal(point)).toBe(false);
+    expect(harness.relay.send.mock.calls).toHaveLength(sendsBefore);
+    expect(meetModule.getMeetSnapshot().goal).toBeNull();
+    // Rejections above did not consume the four-send goal budget.
+    for (let i = 0; i < 4; i++) expect(await meetModule.sendMeetGoal({ lat: i, lon: i })).toBe(true);
+    expect(await meetModule.sendMeetGoal({ lat: 4, lon: 4 })).toBe(false);
+  });
+
+  it('records outer packet-version mismatches as update-required without accepting v2', async () => {
+    const snapshot = await setup();
+    await deliver(base(2, 1, { k: 'hi', id: 'stale', name: 'Stale' }));
+    const current = meetModule.getMeetSnapshot();
+    expect(current.protocol).toBe(3);
+    expect(current.protocolMin).toBe(3);
+    expect(current.updateRequired).toBe(true);
+    expect(current.security.updateRequired).toBe(true);
+    expect(current.incompatiblePeers).toEqual([
+      expect.objectContaining({ id: 'stale', reason: 'protocol', peerVersion: 2, updateRequired: true })
+    ]);
+    expect(peer('stale')).toBeUndefined();
+  });
+
   it('hard-rejects incompatible peers and keeps member notices for admitted ones', async () => {
     const snapshot = await setup();
     const events = await import('../src/core/events');

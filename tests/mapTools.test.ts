@@ -279,6 +279,22 @@ describe('TrackMap overlay slope painting', () => {
     expect(mocks.fitBounds).toHaveBeenCalledWith([[179.99, 0], [180.01, 0]], expect.any(Object));
   });
 
+  it('frames full tracks with uniform padding inside the persistent viewport inset', () => {
+    const setPadding = vi.fn();
+    const trackMap = new TrackMap({} as any);
+    (trackMap as any).coordSystem = 'WGS84';
+    (trackMap as any).map = { fitBounds: mocks.fitBounds, setPadding };
+    trackMap.segments = [{ points: [{ lat: 30, lon: 120 }, { lat: 31, lon: 121 }] }];
+
+    trackMap.setViewportInset(140);
+    trackMap.fitTrack();
+
+    expect(setPadding).toHaveBeenCalledWith({ top: 0, right: 0, bottom: 140, left: 0 });
+    expect(mocks.fitBounds).toHaveBeenCalledWith([[120, 30], [121, 31]], {
+      padding: 60, duration: 600, maxZoom: 17
+    });
+  });
+
   it('replays a pending heatmap after the style loads', () => {
     const trackMap = new TrackMap({} as any);
     (trackMap as any).coordSystem = 'WGS84';
@@ -356,6 +372,65 @@ describe('TrackMap overlay slope painting', () => {
     expect(expression[1]).toEqual(['has', 'slope']);
     expect(expression[2][0]).toBe('interpolate');
     expect(expression[3]).toEqual(['coalesce', ['get', 'color'], '#2bcda7']);
+  });
+  it('fits all rendered meet markers across the dateline and preserves the overview', () => {
+    const once = vi.fn();
+    const easeTo = vi.fn();
+    const trackMap = new TrackMap({} as any);
+    (trackMap as any).coordSystem = 'WGS84';
+    (trackMap as any).map = { fitBounds: mocks.fitBounds, once, easeTo, getZoom: () => 10 };
+    (trackMap as any).meetSelf = { hasFix: true, lat: 10, lon: 170, positionStatus: 'stale' };
+    (trackMap as any).meetPeers = [
+      { id: 'stale', lat: 20, lon: 175, networkStatus: 'offline', positionStatus: 'stale' },
+      { id: 'paused', lat: 5, lon: 178, networkStatus: 'online', positionStatus: 'paused' },
+      { id: 'left', lat: 50, lon: 0, networkStatus: 'left' },
+      { id: 'invalid', lat: Number.NaN, lon: 1 }
+    ];
+    (trackMap as any).meetGoal = { lat: -20, lon: -179 };
+    (trackMap as any).meetPinsList = [{ id: 'pin', by: 'a', lat: 30, lon: 179 }];
+
+    trackMap.fitMeet(64, true);
+
+    expect(mocks.fitBounds).toHaveBeenCalledWith([[170, -20], [181, 30]], {
+      padding: 64, duration: 600, maxZoom: 17
+    });
+    expect((trackMap as any)._meetOverviewFit).toBe(true);
+    (trackMap as any)._updateMeetProximity();
+    expect(easeTo).not.toHaveBeenCalled();
+  });
+
+  it('uses a generic map picker before track and edit click handling', () => {
+    const onMapPick = vi.fn();
+    const getLayer = vi.fn();
+    const canvas = document.createElement('canvas');
+    const trackMap = new TrackMap(document.createElement('div'), { onMapPick });
+    (trackMap as any).coordSystem = 'WGS84';
+    (trackMap as any).map = { getLayer, getCanvas: () => canvas };
+    trackMap.setMapPickMode(true);
+    (trackMap as any)._handleMapClick({ lngLat: { lng: 120, lat: 30 }, point: { x: 0, y: 0 } });
+    expect(onMapPick).toHaveBeenCalledWith(120, 30);
+    expect(getLayer).not.toHaveBeenCalled();
+    expect(canvas.style.cursor).toBe('crosshair');
+
+    trackMap.setEditMode(true);
+    expect((trackMap as any).mapPickMode).toBe(false);
+    trackMap.setMapPickMode(true);
+    expect((trackMap as any).editMode).toBe(false);
+    trackMap.setElevationPickMode(true);
+    expect((trackMap as any).mapPickMode).toBe(false);
+  });
+
+  it('updates and removes the clamped marker scale on the map container', () => {
+    const container = document.createElement('div');
+    const trackMap = new TrackMap(container);
+    (trackMap as any).map = { getZoom: () => 30 };
+    trackMap._updateMarkerScale();
+    expect(container.style.getPropertyValue('--map-marker-scale')).toBe('1.28');
+    (trackMap as any).map = { getZoom: () => 0, remove: vi.fn() };
+    trackMap._updateMarkerScale();
+    expect(container.style.getPropertyValue('--map-marker-scale')).toBe('0.72');
+    trackMap.destroy();
+    expect(container.style.getPropertyValue('--map-marker-scale')).toBe('');
   });
 });
 

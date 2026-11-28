@@ -466,12 +466,15 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
   let videoBlob = null, videoExt = 'webm', videoAbort = null, videoUrl = null;
   let videoReadyNote = '';
   let videoSeconds = 15;
+  let videoPacing: 'fixed' | 'smart' = 'fixed';
   const durToggle = el('div', { class: 'seg-toggle sm' });
   const durationButtons = [];
-  for (const s of [10, 15, 30]) {
-    const b = el('button', { class: s === videoSeconds ? 'active' : '' }, t('export.videoSeconds', { s }));
+  for (const s of [10, 15, 30, 'smart'] as const) {
+    const smart = s === 'smart';
+    const b = el('button', { class: !smart && s === videoSeconds ? 'active' : '' }, smart ? t('export.videoSmart') : t('export.videoSeconds', { s }));
     b.onclick = () => {
-      videoSeconds = s;
+      if (smart) videoPacing = 'smart';
+      else { videoPacing = 'fixed'; videoSeconds = s; }
       durToggle.querySelectorAll('button').forEach((x) => x.classList.remove('active'));
       b.classList.add('active');
     };
@@ -534,6 +537,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
         vectorOnly: vectorCb.checked,
         basemapId: getRecordMap?.()?.basemapId || '',
         seconds: videoSeconds,
+        pacing: videoPacing,
         music: musicSel.value,
         signal: abort.signal,
         onProgress: (p) => {

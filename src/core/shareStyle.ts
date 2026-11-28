@@ -84,3 +84,17 @@ export function posterLayout(size: string, style: ShareStyle) {
     : Math.max(40, Math.min(72, style.mapRatio));
   return { H, mapRatio: raw, mapH: Math.round((H * raw) / 100) };
 }
+
+export function squareStackLayout(H: number, mapH: number, showStats: boolean) {
+  const brandY = H - 104;
+  const profileY = mapH + (showStats ? 248 : 180);
+  const profileBottom = brandY - 18;
+  return { brandY, profileY, profileH: Math.max(96, profileBottom - profileY) };
+}
+
+export function squareOverlayLayout(H: number, mapH: number) {
+  const overlap = 64;
+  const cardX = 34, cardY = mapH - overlap, cardW = 1080 - 68, cardH = H - cardY - 30;
+  const innerX = cardX + 28, innerY = cardY + 24, innerW = cardW - 56, innerH = cardH - 48;
+  return { cardX, cardY, cardW, cardH, innerX, innerY, innerW, innerH };
+}

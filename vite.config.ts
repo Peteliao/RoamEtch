@@ -20,6 +20,8 @@ export default defineConfig({
   plugins: [
     VitePWA({
       registerType: 'prompt',
+      // updates.ts owns registration so reloads can respect recording/overlay locks.
+      injectRegister: false,
       includeAssets: ['icons/*.svg', 'icons/*.png'],
       manifest: {
         name: 'RoamEtch',
@@ -40,6 +42,7 @@ export default defineConfig({
       workbox: {
         skipWaiting: false,
         clientsClaim: false,
+        cleanupOutdatedCaches: true,
         globPatterns: ['**/*.{js,css,html,svg,png,woff2,mp4}'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         navigateFallback: 'index.html',

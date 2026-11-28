@@ -60,6 +60,7 @@ afterEach(() => {
 function installCanvasMock() {
   const canvases: HTMLCanvasElement[] = [];
   const texts: string[] = [];
+  const textCalls: Array<{ text: string; x: number; y: number; maxWidth?: number }> = [];
   const gradient = { addColorStop: vi.fn() };
   const ctx = new Proxy({
     measureText: (text: string) => ({ width: String(text).length * 12 }),
@@ -69,7 +70,11 @@ function installCanvasMock() {
     get(target, key: string) {
       if (key in target) return target[key as keyof typeof target];
       return (...args: any[]) => {
-        if (key === 'fillText') texts.push(String(args[0]));
+        if (key === 'fillText') {
+          const text = String(args[0]);
+          texts.push(text);
+          textCalls.push({ text, x: Number(args[1]), y: Number(args[2]), maxWidth: args[3] == null ? undefined : Number(args[3]) });
+        }
       };
     }
   });
@@ -78,7 +83,7 @@ function installCanvasMock() {
     canvases.push(this);
     callback(new Blob(['png'], { type: 'image/png' }));
   });
-  return { canvases, texts };
+  return { canvases, texts, textCalls };
 }
 
 describe('promo variants', () => {
@@ -168,15 +173,20 @@ describe('promo variants', () => {
     }
   });
 
-  it('renders both localized slogan lines on promotional images', async () => {
-    const { texts } = installCanvasMock();
+  it('renders each complete localized slogan once on one baseline', async () => {
+    const { texts, textCalls } = installCanvasMock();
     for (const lang of promoLanguages) {
       await i18n.setLanguage(lang);
       const textStart = texts.length;
+      const callStart = textCalls.length;
       await promo.generatePromo(0);
       const rendered = texts.slice(textStart);
-      expect(rendered).toContain(i18n.t('app.slogan1'));
-      expect(rendered).toContain(i18n.t('app.slogan2'));
+      const slogan = i18n.t('app.slogan');
+      const sloganCalls = textCalls.slice(callStart).filter((call) => call.text === slogan);
+      expect(sloganCalls).toHaveLength(1);
+      expect(sloganCalls[0]).toMatchObject({ x: 157, y: 180, maxWidth: 851 });
+      expect(rendered).not.toContain(i18n.t('app.slogan1'));
+      expect(rendered).not.toContain(i18n.t('app.slogan2'));
     }
   });
 

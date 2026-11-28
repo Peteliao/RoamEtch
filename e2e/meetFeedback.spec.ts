@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
-import { blockExternal, gotoTab } from './utils';
+import { createRelayServer } from '../relay/server.mjs';
+import { blockExternal, configureWsRelay, gotoTab } from './utils';
 
 test('remote chat feedback and proximity map visuals work in the browser', async ({ page }) => {
   await page.addInitScript(() => {
@@ -105,6 +106,7 @@ test('remote chat feedback and proximity map visuals work in the browser', async
     expect(Math.abs(groupCenter.x - groupCenter.visibleX)).toBeLessThan(3);
     expect(Math.abs(groupCenter.y - groupCenter.visibleY)).toBeLessThan(3);
     const farZoom = await map.evaluate(() => window.__lt.shell.getViews().meet.getMap().map.getZoom());
+    const farScale = await map.evaluate(() => Number(getComputedStyle(window.__lt.shell.getViews().meet.getMap().container).getPropertyValue('--map-marker-scale')));
     const colors = await map.evaluate(() => {
       const track = window.__lt.shell.getViews().meet.getMap();
       return {
@@ -124,7 +126,9 @@ test('remote chat feedback and proximity map visuals work in the browser', async
     await expect.poll(() => map.evaluate(() => window.__lt.shell.getViews().meet.getMap().map.getZoom())).toBeGreaterThan(farZoom);
     await expect.poll(() => map.evaluate(() => window.__lt.shell.getViews().meet.getMap().map.isMoving())).toBe(false);
     const nearZoom = await map.evaluate(() => window.__lt.shell.getViews().meet.getMap().map.getZoom());
+    const nearScale = await map.evaluate(() => Number(getComputedStyle(window.__lt.shell.getViews().meet.getMap().container).getPropertyValue('--map-marker-scale')));
     expect(nearZoom).toBeGreaterThan(farZoom);
+    expect(nearScale).toBeGreaterThan(farScale);
 
     await map.evaluate(() => {
       const track = window.__lt.shell.getViews().meet.getMap();
@@ -149,5 +153,64 @@ test('remote chat feedback and proximity map visuals work in the browser', async
     expect(fitted.inside).toBe(true);
   } finally {
     await page.evaluate(() => window.__lt.meet.leave()).catch(() => {});
+  }
+});
+
+test('host can cancel a rally-point picker and send a map-picked goal to a peer', async ({ page, browser }) => {
+  const relay = createRelayServer({ port: 0, host: '127.0.0.1' });
+  const address = await relay.listen();
+  const url = `ws://127.0.0.1:${address.port}/room/{room}`;
+  let peerContext: Awaited<ReturnType<typeof browser.newContext>> | undefined;
+  try {
+    await blockExternal(page);
+    await page.context().grantPermissions(['geolocation']);
+    await page.context().setGeolocation({ latitude: 31, longitude: 121, accuracy: 8 });
+    await page.goto('/');
+    await expect.poll(() => page.evaluate(() => !!window.__lt)).toBe(true);
+    await configureWsRelay(page, url);
+    const invite = await page.evaluate(async () => {
+      await window.__lt.meetCore.createMeetSession({ name: '发起人' });
+      return window.__lt.meet.snapshot().invite as string;
+    });
+    await expect.poll(() => page.evaluate(() => window.__lt.meet.snapshot().relayState)).toBe('connected');
+    peerContext = await browser.newContext({ locale: 'zh-CN', viewport: { width: 430, height: 932 } });
+    const peer = await peerContext.newPage();
+    await blockExternal(peer);
+    await peer.goto('/');
+    await expect.poll(() => peer.evaluate(() => !!window.__lt)).toBe(true);
+    await configureWsRelay(peer, url);
+    await peer.evaluate(async (code) => {
+      await window.__lt.meetCore.joinMeetSession(code, { name: '队员' });
+    }, invite);
+    await expect.poll(() => page.evaluate(() => window.__lt.meet.snapshot().peers.length)).toBe(1);
+    await gotoTab(page, 'meet');
+
+    const goalButton = page.locator('.iconbtn[aria-label="集合点"]');
+    await goalButton.click();
+    const sheet = page.locator('.modal-backdrop').filter({ hasText: '集合点' });
+    await expect(sheet).toBeVisible();
+    await sheet.getByRole('button', { name: '在地图上选择', exact: true }).click();
+    await expect(sheet).toBeHidden();
+    await expect(goalButton).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => page.evaluate(() => window.__lt.shell.getViews().meet.getMap().mapPickMode)).toBe(true);
+    await expect.poll(() => page.locator('#view-meet canvas').evaluate((canvas) => canvas.style.cursor)).toBe('crosshair');
+    await goalButton.click();
+    await expect(goalButton).toHaveAttribute('aria-pressed', 'false');
+    await expect.poll(() => page.evaluate(() => window.__lt.shell.getViews().meet.getMap().mapPickMode)).toBe(false);
+
+    await goalButton.click();
+    await sheet.locator('input[type="text"]').fill('地图集合点');
+    await sheet.getByRole('button', { name: '在地图上选择', exact: true }).click();
+    const mapBox = await page.locator('#view-meet').boundingBox();
+    expect(mapBox).not.toBeNull();
+    await page.mouse.click(mapBox!.x + mapBox!.width / 2, mapBox!.y + 180);
+    await expect(goalButton).toHaveAttribute('aria-pressed', 'false');
+    await expect.poll(() => peer.evaluate(() => window.__lt.meet.snapshot().goal?.label), { timeout: 30_000 }).toBe('地图集合点');
+    const goal = await peer.evaluate(() => window.__lt.meet.snapshot().goal);
+    expect(Number.isFinite(goal.lat) && Number.isFinite(goal.lon)).toBe(true);
+  } finally {
+    await peerContext?.close();
+    await page.evaluate(() => window.__lt.meet.leave()).catch(() => {});
+    await relay.close();
   }
 });

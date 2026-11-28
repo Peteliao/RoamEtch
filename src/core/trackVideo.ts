@@ -10,7 +10,7 @@ import { canvasPalette } from './palette';
 import { paintThemeBackground } from './themeRegistry';
 import { fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, signalLevel, haversine } from './geo';
 import { loadBrandFonts, drawQr, SITE_URL, SPORT_FONT } from './brand';
-import { tripTimeInfo, routePlaceNames } from './shareInfo';
+import { tripTimeInfo, routeDisplayNames } from './shareInfo';
 import { WP_ICONS } from './waypointMeta';
 import { estimateCalories } from './calories';
 import { get } from './settings';
@@ -21,6 +21,8 @@ import { makeVideoRecorder, videoSupported } from './videoCapture';
 import { buildProfile, drawProfileChart, altitudeInUnit, distanceInUnit, speedInUnit } from './profileChart';
 import { bridgeTrackGapsForExport } from './gapRepair';
 import { normalizeShareStyle, trackColorValue } from './shareStyle';
+import { buildVideoTimeline, sampleVideoTimeline, type VideoPacing } from './videoTimeline';
+import { placeVideoOverlay, type VideoPoint } from './videoLayout';
 
 export { videoSupported };
 
@@ -28,7 +30,7 @@ const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Micr
 const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
 const SIG_KEYS = ['', 'Weak', 'Fair', 'Good', 'Strong'];
 const W = 1080, H = 1920, MAP_H = 1080;
-const INTRO_MS = 2600, OUTRO_MS = 3400, FADE_MS = 500;
+const INTRO_MS = 2600, OUTRO_MS = 3400, FADE_MS = 500, FINAL_DWELL_MS = 500;
 const NODE_LEAD_MS = 500, NODE_SHOW_MS = 2600;
 
 // Heavy tracks drop capture frames below 30fps, which truncates the recorded
@@ -117,6 +119,17 @@ async function decodeImage(blob) {
   }
 }
 
+export async function decodeWaypointPhoto(mediaRecords: any[]) {
+  for (const media of mediaRecords) {
+    if (!media) continue;
+    for (const blob of [media.thumb, media.blob]) {
+      const photo = await decodeImage(blob);
+      if (photo) return photo;
+    }
+  }
+  return null;
+}
+
 function drawCover(ctx, img, x, y, w, h) {
   const iw = img.width, ih = img.height;
   const scale = Math.max(w / iw, h / ih);
@@ -152,7 +165,7 @@ function clockOf(ts) {
 }
 
 /**
- * @returns {Promise<{blob, mime, width, height, seconds, usedVectorFallback:boolean, musicTrack:string|null}>}
+ * @returns {Promise<{blob, mime, width, height, seconds, durationSeconds, usedVectorFallback:boolean, musicTrack:string|null}>}
  */
 export async function generateTrackVideo(full, {
   style: styleInput = null,
@@ -160,12 +173,14 @@ export async function generateTrackVideo(full, {
   vectorOnly = false,
   basemapId = '',
   seconds = 15,
+  pacing = 'fixed',
   music = 'random',
   onProgress,
   signal
 }: any = {}): Promise<any> {
   if (!videoSupported()) throw new Error('video-unsupported');
   const design = normalizeShareStyle(styleInput || {});
+  const videoPacing: VideoPacing = pacing === 'smart' ? 'smart' : 'fixed';
   const musicSession = createMusicSession(music);
   try {
   const cropped = await bridgeTrackGapsForExport(full, applyPrivacy(full, privacy), privacy, { signal });
@@ -187,7 +202,7 @@ export async function generateTrackVideo(full, {
 
   let lastProg = 0;
   const report = (p: number) => { if (p > lastProg) { lastProg = p; onProgress?.(p); } };
-  const placesPromise = routePlaceNames(cropped.segments, {
+  const placesPromise = routeDisplayNames(cropped, {
     max: 6, signal,
     onProgress: (p) => report(0.02 + 0.08 * p)
   });
@@ -210,7 +225,7 @@ export async function generateTrackVideo(full, {
 
   const flatPts = cropped.segments.flatMap((s) => s.points);
   const mediaById = new Map(((full as any).media || []).map((md) => [md.id, md]));
-  const nodes = (await Promise.all(m.waypoints.slice(0, 40).map(async (dispWp, i) => {
+  const allNodes = (await Promise.all(m.waypoints.map(async (dispWp, i) => {
     const wp = cropped.waypoints[i];
     if (!wp) return null;
     const onClock = span > 0 && Number.isFinite(wp.time) && wp.time >= firstT! && wp.time <= lastT!;
@@ -229,20 +244,27 @@ export async function generateTrackVideo(full, {
       u = pointU[best];
     }
     const mediaIds = wp.mediaIds || [];
-    const mediaRec = mediaIds.map((id) => mediaById.get(id)).find(Boolean);
-    const photo = mediaRec ? await decodeImage(mediaRec.thumb || mediaRec.blob) : null;
+    const mediaRecords = mediaIds.map((id) => mediaById.get(id)).filter(Boolean);
     const title = String(wp.name || '').trim();
     const desc = String(wp.desc || '').trim();
     return {
       wp, disp: dispWp, u: Math.max(0, Math.min(1, u)),
-      type: wp.type || 'custom', title, desc, photo,
-      photoCount: mediaIds.length, cardW: 0, cardH: 0, cardX: 0, cardY: 0
+      type: wp.type || 'custom', title, desc, mediaRecords,
+      photoCount: mediaIds.length
     };
   }))).filter(Boolean).sort((a, b) => a!.u - b!.u);
+  const nodes = await Promise.all(allNodes.slice(0, 40).map(async (node, nodeIndex) => ({
+    ...node!, nodeIndex, photo: await decodeWaypointPhoto(node!.mediaRecords)
+  })));
 
-  const routePx = [];
+  const routePx: VideoPoint[] = [];
   for (const seg of m.segments) for (const p of seg.points) routePx.push(m.fit!.toPx(p));
-  const routeEnds = [routePx[0], routePx[routePx.length - 1]].filter(Boolean);
+  const nodeProgress = new Map(allNodes.map((node) => [node.disp, node.u]));
+  const timeline = buildVideoTimeline(nodes.map((node) => ({
+    u: node.u,
+    nodeIndex: node.nodeIndex,
+    holdMs: node.photo ? 3800 : node.title || node.desc ? 3200 : 2600
+  })), videoPacing, seconds);
   const clampNum = (v, a, b) => Math.max(a, Math.min(b, v));
   const smooth = (v) => {
     const x = clampNum(v, 0, 1);
@@ -307,30 +329,6 @@ export async function generateTrackVideo(full, {
   function camScreen(p, cam) {
     return [W / 2 + (p[0] - cam.x) * cam.scale, MAP_H / 2 + (p[1] - cam.y) * cam.scale];
   }
-  const insideRect = (p, x, y, w, h, pad = 10) =>
-    p[0] >= x - pad && p[0] <= x + w + pad && p[1] >= y - pad && p[1] <= y + h + pad;
-  for (const n of nodes) {
-    n!.cardW = n!.photo ? 440 : 400;
-    n!.cardH = n!.photo ? 176 : 72 + (n!.title ? 32 : 0) + (n!.desc ? 54 : 0);
-    const margin = 34, bottom = 40;
-    const spots = [
-      [W - margin - n!.cardW, margin], [margin, margin],
-      [W - margin - n!.cardW, MAP_H - bottom - n!.cardH], [margin, MAP_H - bottom - n!.cardH]
-    ];
-    const marker = m.fit!.toPx(n!.disp);
-    let bestSpot = spots[0], bestScore = Infinity;
-    for (const [x, y] of spots) {
-      let score = 0;
-      for (let i = 0; i < routePx.length; i += 2) {
-        if (insideRect(routePx[i], x, y, n!.cardW, n!.cardH, 18)) score++;
-      }
-      if (insideRect(marker, x, y, n!.cardW, n!.cardH, 14)) score += 1e6;
-      for (const e of routeEnds) if (insideRect(e, x, y, n!.cardW, n!.cardH, 14)) score += 4000;
-      if (score < bestScore) { bestScore = score; bestSpot = [x, y]; }
-    }
-    n!.cardX = bestSpot[0];
-    n!.cardY = bestSpot[1];
-  }
 
   const { asc: cumAsc, desc: cumDesc } = cumulativeAscentDescent(stats.series.alt, get('ascentThreshold') ?? 4);
   const render = decimate(m.segments);
@@ -393,8 +391,9 @@ export async function generateTrackVideo(full, {
     ctx.restore();
   }
 
-  function drawNodeCard(n, alpha) {
-    const { cardX: x, cardY: y, cardW: w, cardH: h, photo } = n;
+  function drawNodeCard(n, alpha, rect) {
+    const { x, y, w, h } = rect;
+    const photo = n.photo;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.shadowColor = 'rgba(0,0,0,0.30)';
@@ -469,11 +468,9 @@ export async function generateTrackVideo(full, {
     ctx.restore();
   }
 
-  function drawPhotoCutIn(n, alpha) {
+  function drawPhotoCutIn(n, alpha, rect) {
     if (!n?.photo) return;
-    const w = 780, h = 460;
-    const x = (W - w) / 2;
-    const y = MAP_H - h - 110 + (1 - alpha) * 38;
+    const { x, y, w, h } = rect;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.shadowColor = 'rgba(0,0,0,0.38)';
@@ -542,7 +539,7 @@ export async function generateTrackVideo(full, {
     }
     ctx.restore();
   }
-  function drawFrame(idx, u) {
+  function drawFrame(idx, u, replayMs = u * seconds * 1000, timelineNode = null, timelineAlpha = 0) {
     const cam = cameraFor(idx, u);
     ctx.save();
     ctx.beginPath();
@@ -552,7 +549,8 @@ export async function generateTrackVideo(full, {
     ctx.scale(cam.scale, cam.scale);
     ctx.translate(-cam.x, -cam.y);
     ctx.drawImage(m.bg, 0, 0);
-    paintTrack(ctx, m.fit, render.segs, m.waypoints, {
+    const visibleWaypoints = m.waypoints.filter((wp) => (nodeProgress.get(wp) ?? Infinity) <= u);
+    paintTrack(ctx, m.fit, render.segs, visibleWaypoints, {
       upto: render.origIdx ? countUpTo(render.origIdx, idx) : idx + 1,
       lineWidth: design.trackWidth, dotRadius: 13, darkBg: m.darkBg,
       trackColor, hideStart, hideEnd, headKind: 'playhead'
@@ -563,18 +561,35 @@ export async function generateTrackVideo(full, {
     ctx.fillStyle = trackColor || P.accent;
     ctx.fillRect(0, MAP_H - 8, W * u, 8);
 
-    const replayMs = u * playMs;
-    let activeNode = null, activeAlpha = 0;
-    for (const n of nodes) {
-      const local = replayMs - (n!.u * playMs - NODE_LEAD_MS);
-      if (local < 0 || local >= NODE_SHOW_MS) continue;
-      const a = Math.max(0, Math.min(1, local / 180, (NODE_SHOW_MS - local) / 320));
-      if (a > 0.001 && a >= activeAlpha - 1e-6) { activeNode = n; activeAlpha = a; }
+    let activeNode = timelineNode, activeAlpha = timelineAlpha;
+    if (videoPacing === 'fixed') {
+      activeNode = null; activeAlpha = 0;
+      for (const n of nodes) {
+        const local = replayMs - (n.u * seconds * 1000 - NODE_LEAD_MS);
+        if (local < 0 || local >= NODE_SHOW_MS) continue;
+        const a = Math.max(0, Math.min(1, local / 180, (NODE_SHOW_MS - local) / 320));
+        if (a > 0.001 && a >= activeAlpha - 1e-6) { activeNode = n; activeAlpha = a; }
+      }
     }
     if (activeNode) {
       drawNodePulse(activeNode, replayMs, activeAlpha, cam);
-      if (design.photoCutIn && activeNode!.photo) drawPhotoCutIn(activeNode!, activeAlpha);
-      else drawNodeCard(activeNode!, activeAlpha);
+      const step = Math.max(1, Math.floor(routePx.length / 1200));
+      const screenPoints: VideoPoint[] = routePx
+        .filter((_, i) => i % step === 0 || i === routePx.length - 1)
+        .map((point) => camScreen(point, cam) as VideoPoint);
+      const head = camScreen(routePx[Math.min(routePx.length - 1, idx)], cam) as VideoPoint;
+      if (screenPoints.at(-1)?.[0] !== head[0] || screenPoints.at(-1)?.[1] !== head[1]) screenPoints.push(head);
+      if (design.photoCutIn && activeNode.photo) {
+        const rect = placeVideoOverlay(screenPoints, [
+          { w: 620, h: 380 }, { w: 560, h: 340 }, { w: 500, h: 310 }, { w: 440, h: 280 }
+        ], { w: W, h: MAP_H });
+        drawPhotoCutIn(activeNode, activeAlpha, rect);
+      } else {
+        const cardW = activeNode.photo ? 440 : 400;
+        const cardH = activeNode.photo ? 176 : 72 + (activeNode.title ? 32 : 0) + (activeNode.desc ? 54 : 0);
+        const rect = placeVideoOverlay(screenPoints, [{ w: cardW, h: cardH }], { w: W, h: MAP_H });
+        drawNodeCard(activeNode, activeAlpha, rect);
+      }
     }
 
     const py0 = MAP_H;
@@ -800,8 +815,9 @@ export async function generateTrackVideo(full, {
     ctx.restore();
   }
 
-  const playMs = seconds * 1000;
-  const totalMs = INTRO_MS + playMs + OUTRO_MS; // recap intro, replay, brand outro
+  const replayEndMs = INTRO_MS + timeline.durationMs;
+  const outroStartMs = replayEndMs;
+  const totalMs = outroStartMs + OUTRO_MS + FINAL_DWELL_MS;
   let audioTrack = null;
   if (musicSession) {
     try { audioTrack = await musicSession.attach(totalMs); }
@@ -819,7 +835,7 @@ export async function generateTrackVideo(full, {
   rec.start(250);
 
   let idx = 0, aborted = false;
-  drawFrame(0, 0);
+  drawFrame(0, 0, 0);
   drawIntro(1);
   let cover = '';
   try { cover = canvas.toDataURL('image/jpeg', 0.82); } catch { /* canvas tainted by tiles */ }
@@ -828,11 +844,25 @@ export async function generateTrackVideo(full, {
     const step = (now) => {
       if (signal?.aborted) { aborted = true; resolve(); return; }
       const el = now - t0;
-      const u = el <= INTRO_MS ? 0 : Math.min(1, (el - INTRO_MS) / playMs);
+      let frameU = 0, frameReplayMs = 0, timelineNode = null, timelineAlpha = 0;
+      if (el >= INTRO_MS && el < outroStartMs) {
+        const sample = sampleVideoTimeline(timeline, el - INTRO_MS);
+        frameU = sample.u;
+        frameReplayMs = el - INTRO_MS;
+        while (idx < N - 1 && pointU[idx + 1] <= frameU) idx++;
+        if (videoPacing === 'smart' && sample.phase.kind === 'node') {
+          timelineNode = nodes[sample.nodeIndex!] || null;
+          const duration = sample.phase.endMs - sample.phase.startMs;
+          timelineAlpha = Math.max(0, Math.min(1, sample.localMs / 180, (duration - sample.localMs) / 320));
+        }
+      } else if (el >= outroStartMs) {
+        idx = N - 1;
+        frameU = 1;
+        frameReplayMs = videoPacing === 'fixed' ? seconds * 1000 : timeline.durationMs;
+      }
+      drawFrame(idx, frameU, frameReplayMs, timelineNode, timelineAlpha);
       const introA = el >= INTRO_MS ? 0 : el > INTRO_MS - FADE_MS ? (INTRO_MS - el) / FADE_MS : 1;
-      const outroA = Math.min(1, Math.max(0, (el - INTRO_MS - playMs) / FADE_MS));
-      while (idx < N - 1 && pointU[idx + 1] <= u) idx++;
-      drawFrame(idx, u);
+      const outroA = Math.min(1, Math.max(0, (el - outroStartMs) / FADE_MS));
       if (introA > 0) {
         ctx.save();
         ctx.globalAlpha = introA;
@@ -846,6 +876,8 @@ export async function generateTrackVideo(full, {
     };
     requestAnimationFrame(step);
   });
+  try { rec.requestData?.(); } catch { /* capture already finalized */ }
+  await new Promise((resolve) => setTimeout(resolve, 180));
   try { rec.stop(); } catch { /* already stopped */ }
   stream.getTracks().forEach((tr) => tr.stop());
   await stopped;
@@ -859,7 +891,7 @@ export async function generateTrackVideo(full, {
 
   const type = (rec.mimeType || 'video/webm').split(';')[0];
   const blob = new Blob(chunks, { type });
-  return { blob, mime: type, width: W, height: H, seconds, usedVectorFallback: m.vector, cover, musicTrack: audioTrack ? musicSession.track.id : null };
+  return { blob, mime: type, width: W, height: H, seconds, durationSeconds: totalMs / 1000, usedVectorFallback: m.vector, cover, musicTrack: audioTrack ? musicSession.track.id : null };
   } finally {
     musicSession?.stop();
   }

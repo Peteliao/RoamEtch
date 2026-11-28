@@ -9,12 +9,12 @@ import { prepareMap, paintTrack } from './mapPaint';
 import { computeTripScore, drawScoreBadge, fitText, roundRectPath } from './tripScore';
 import { canvasPalette } from './palette';
 import { loadBrandFonts, drawBrandBlock, drawQr, drawSignalChip, SITE_URL } from './brand';
-import { tripTimeInfo, routePlaceNames } from './shareInfo';
+import { tripTimeInfo, routeDisplayNames } from './shareInfo';
 import { currentLang, t } from './i18n';
 import { languageTag } from './language';
 import { buildProfile, drawProfileChart } from './profileChart';
 import { bridgeTrackGapsForExport } from './gapRepair';
-import { normalizeShareStyle, posterLayout, shareFontStack, trackColorValue } from './shareStyle';
+import { normalizeShareStyle, posterLayout, shareFontStack, squareOverlayLayout, squareStackLayout, trackColorValue } from './shareStyle';
 
 const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif';
 const MONO = 'ui-monospace, "SF Mono", Consolas, monospace';
@@ -154,7 +154,7 @@ function drawInfoPanel(ctx, full, stats, x, y, w, h, { score, time, places, dsn,
 }
 
 function drawStatCard(ctx, x, y, w, h, v, u, label, P, font) {
-  roundRectPath(ctx, x, y, w, h, 18);
+  roundRectPath(ctx, x, y, w, h, 16);
   ctx.fillStyle = P.cellBg;
   ctx.fill();
   ctx.strokeStyle = P.grid;
@@ -162,58 +162,58 @@ function drawStatCard(ctx, x, y, w, h, v, u, label, P, font) {
   ctx.stroke();
   ctx.textAlign = 'left';
   ctx.fillStyle = P.accent;
-  ctx.font = `800 ${v.length > 6 ? 38 : 44}px ${MONO}`;
-  ctx.fillText(v, x + 22, y + 50);
+  ctx.font = `800 ${v.length > 6 ? 32 : 38}px ${MONO}`;
+  ctx.fillText(v, x + 20, y + 40);
   const vw = ctx.measureText(v).width;
   ctx.fillStyle = P.muted;
-  ctx.font = `22px ${font}`;
-  if (u) ctx.fillText(u, x + 22 + vw + 8, y + 50);
-  ctx.fillText(label, x + 22, y + 82);
+  ctx.font = `20px ${font}`;
+  if (u) ctx.fillText(u, x + 20 + vw + 7, y + 40);
+  ctx.fillText(label, x + 20, y + 65);
 }
 
 function drawSquarePanel(ctx, full, stats, score, W, H, mapH, P, time, places, dsn, showStats) {
   const units = get('units');
   const font = dsn.font;
   const py = mapH;
+  const layout = squareStackLayout(H, mapH, showStats);
   ctx.fillStyle = P.panel;
   ctx.fillRect(0, py, W, H - py);
 
   ctx.textAlign = 'left';
   ctx.fillStyle = P.accent;
-  ctx.fillRect(60, py + 34, 64, 6);
+  ctx.fillRect(60, py + 28, 64, 6);
   ctx.fillStyle = P.text;
-  ctx.font = `800 46px ${font}`;
-  ctx.fillText(fitText(ctx, dsn.name, W - 120 - 190), 60, py + 92);
+  ctx.font = `800 44px ${font}`;
+  ctx.fillText(fitText(ctx, dsn.name, W - 120 - 190), 60, py + 80);
   ctx.fillStyle = P.muted;
-  ctx.font = `22px ${font}`;
+  ctx.font = `21px ${font}`;
   const activity = t(`record.activities.${full.trip.activity}`);
   const dateStr = time?.date || new Date(full.trip.createdAt).toLocaleDateString(languageTag(currentLang()));
   const dateLine = time
     ? `${dateStr} · ${activity} · ${time.start} → ${time.end}`
     : `${dateStr} · ${activity}`;
   const dateShown = fitText(ctx, dateLine, W - 260);
-  ctx.fillText(dateShown, 60, py + 128);
+  ctx.fillText(dateShown, 60, py + 112);
   const dw = ctx.measureText(dateShown).width;
-  drawSignalChip(ctx, 60 + dw + 18, py + 128, signalLevel(stats.avgAcc), { on: P.accent, off: P.grid, text: P.muted });
-  drawScoreBadge(ctx, score, W - 60 - 168, py + 40, P);
+  drawSignalChip(ctx, 60 + dw + 18, py + 112, signalLevel(stats.avgAcc), { on: P.accent, off: P.grid, text: P.muted });
+  drawScoreBadge(ctx, score, W - 60 - 168, py + 32, P);
 
   const credit = places.length ? '© OpenStreetMap' : '';
   ctx.font = `15px ${font}`;
   const cwCredit = credit ? ctx.measureText(credit).width : 0;
   ctx.fillStyle = P.muted;
-  ctx.font = `20px ${font}`;
+  ctx.font = `19px ${font}`;
   const meta = [
     `${t('export.elapsed')} ${time ? time.duration : '--'}`,
     places.join(' → ')
   ].filter(Boolean).join(' · ');
-  ctx.fillText(fitText(ctx, meta, W - 120 - cwCredit - 14), 60, py + 164);
+  ctx.fillText(fitText(ctx, meta, W - 120 - cwCredit - 14), 60, py + 144);
   if (credit) {
     ctx.fillStyle = P.faint;
     ctx.font = `15px ${font}`;
-    ctx.fillText(credit, W - 60 - cwCredit, py + 164);
+    ctx.fillText(credit, W - 60 - cwCredit, py + 144);
   }
 
-  let profileY = py + 300;
   if (showStats) {
     const d = fmtDistance(stats.distance, units);
     const dur = time ? time.duration : fmtDuration(stats.duration, { compact: true });
@@ -223,18 +223,15 @@ function drawSquarePanel(ctx, full, stats, score, W, H, mapH, P, time, places, d
       [`${Math.round(stats.ascent)}`, 'm', t('panel.ascent')],
       drawCaloriesCell(stats)
     ];
-    const gap = 16, cw = (W - 120 - gap * 3) / 4, ch = 92, cy = py + 186;
+    const gap = 16, cw = (W - 120 - gap * 3) / 4, ch = 72, cy = py + 160;
     cells.forEach(([v, u, k], i) => drawStatCard(ctx, 60 + i * (cw + gap), cy, cw, ch, v, u, k, P, font));
-  } else {
-    profileY = py + 200;
   }
 
-  const brandY = H - 110;
-  drawProfile(ctx, stats, 60, profileY, W - 120, Math.max(120, brandY - 30 - profileY), P);
-  drawBrandBlock(ctx, 60, brandY, 100, P, W - 120 - 115);
+  drawProfile(ctx, stats, 60, layout.profileY, W - 120, layout.profileH, P);
+  drawBrandBlock(ctx, 60, layout.brandY, 84, P, W - 120 - 100);
 }
 
-function drawCompactOverlay(ctx, stats, x, y, w, h, { score, time, places, dsn, showStats }, P) {
+function drawCompactOverlay(ctx, stats, x, y, w, h, { score, time, places, dsn, showStats, profileY, profileH }, P) {
   const units = get('units');
   const font = dsn.font;
   ctx.textAlign = 'left';
@@ -268,6 +265,7 @@ function drawCompactOverlay(ctx, stats, x, y, w, h, { score, time, places, dsn, 
       ctx.fillText(k, cx, y + 162);
     });
   }
+  drawProfile(ctx, stats, x, profileY, w, profileH, P);
   const qrSize = Math.max(58, Math.min(84, h - 230));
   if (h > 260 && qrSize >= 58) drawQr(ctx, SITE_URL, x, y + h - qrSize - 4, qrSize);
   const brandTextX = x + qrSize + 18;
@@ -308,7 +306,7 @@ export async function generatePoster(full, {
   const trackColor = trackColorValue(style.trackColor, '');
   let mapP = 0, placeP = 0;
   const report = () => onProgress?.(0.9 * mapP + 0.1 * placeP);
-  const placesPromise = routePlaceNames(cropped.segments, {
+  const placesPromise = routeDisplayNames(cropped, {
     max: 6,
     onProgress: (p) => { placeP = p; report(); }
   });
@@ -317,10 +315,12 @@ export async function generatePoster(full, {
   const H = layout.H;
   const square = size === 'square';
   const overlay = style.layout === 'overlay';
-  const overlayMapCap = square ? 0.70 : 0.72;
-  const mapH = overlay
-    ? Math.round(H * Math.min(overlayMapCap, style.mapRatio / 100))
-    : layout.mapH;
+  const overlayMapCap = 0.72;
+  const mapH = square
+    ? layout.mapH
+    : overlay
+      ? Math.round(H * Math.min(overlayMapCap, style.mapRatio / 100))
+      : layout.mapH;
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
@@ -358,8 +358,10 @@ export async function generatePoster(full, {
       }, P);
     }
   } else {
+    const layoutOverlay = square ? squareOverlayLayout(H, mapH) : null;
     const overlap = square ? 64 : 96;
-    const cardX = 34, cardY = mapH - overlap, cardW = W - 68, cardH = H - cardY - 30;
+    const cardX = layoutOverlay?.cardX ?? 34, cardY = layoutOverlay?.cardY ?? mapH - overlap;
+    const cardW = layoutOverlay?.cardW ?? W - 68, cardH = layoutOverlay?.cardH ?? H - cardY - 30;
     ctx.save();
     ctx.shadowColor = 'rgba(0,0,0,0.26)';
     ctx.shadowBlur = 34;
@@ -372,12 +374,15 @@ export async function generatePoster(full, {
     ctx.strokeStyle = P.grid;
     ctx.lineWidth = 1.4;
     ctx.stroke();
-    const innerX = cardX + (square ? 28 : 38);
-    const innerY = cardY + (square ? 24 : 34);
-    const innerW = cardW - (square ? 56 : 76);
+    const innerX = layoutOverlay?.innerX ?? cardX + 38;
+    const innerY = layoutOverlay?.innerY ?? cardY + 34;
+    const innerW = layoutOverlay?.innerW ?? cardW - 76;
     if (square) {
-      drawCompactOverlay(ctx, stats, innerX, innerY, innerW, cardH - 48, {
-        score, time, places, dsn, showStats: style.statsCard
+      const profileY = innerY + (style.statsCard ? 190 : 132);
+      const profileBottom = innerY + layoutOverlay!.innerH - 100;
+      drawCompactOverlay(ctx, stats, innerX, innerY, innerW, layoutOverlay!.innerH, {
+        score, time, places, dsn, showStats: style.statsCard,
+        profileY, profileH: Math.max(96, profileBottom - profileY)
       }, P);
     } else {
       ctx.fillStyle = P.accent;

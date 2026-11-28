@@ -12,7 +12,7 @@ import { on, emit } from '../core/events';
 import { diag } from '../core/diag';
 import { t } from '../core/i18n';
 import { WP_ICONS } from '../core/waypointMeta';
-import { meetProximityZoom, meetRoleColor } from '../core/meetVisuals';
+import { meetMarkerScale, meetProximityZoom, meetRoleColor, renderedMeetPoints } from '../core/meetVisuals';
 import { el, icon } from './helpers';
 
 type RepairOverlayLine = [number, number][];
@@ -63,6 +63,7 @@ export class TrackMap {
   declare waypoints: any[];
   declare editMode: boolean;
   declare elevationPickMode: boolean;
+  declare mapPickMode: boolean;
   declare follow: boolean;
   declare headingUp: boolean;
   declare liveMode: boolean;
@@ -110,6 +111,7 @@ export class TrackMap {
   declare _meetLastDistance: number;
   declare _meetLastSelf: { lat: number; lon: number } | null;
   declare _meetCameraAnimating: boolean;
+  declare _meetOverviewFit: boolean;
   declare _viewportOverlay: HTMLElement | null;
   declare _viewportObserver: ResizeObserver | null;
   declare _viewportFrame: number;
@@ -128,6 +130,7 @@ export class TrackMap {
     this.waypoints = [];
     this.editMode = false;
     this.elevationPickMode = false;
+    this.mapPickMode = false;
     this.follow = false;
     this.headingUp = false;
     this.liveMode = false;
@@ -166,6 +169,7 @@ export class TrackMap {
     this._meetLastDistance = Number.NaN;
     this._meetLastSelf = null;
     this._meetCameraAnimating = false;
+    this._meetOverviewFit = false;
     this._viewportOverlay = null;
     this._viewportObserver = null;
     this._viewportFrame = 0;
@@ -192,6 +196,8 @@ export class TrackMap {
     if (!this.opts.compact) {
       this.map.addControl(new maplibregl.NavigationControl({ showCompass: true, showZoom: true }), 'top-right');
     }
+    this._updateMarkerScale();
+    this.map.on('zoom', () => this._updateMarkerScale());
     this.map.on('load', () => {
       this._addTrackLayers();
       this.redraw();
@@ -255,8 +261,17 @@ export class TrackMap {
     return this;
   }
 
+  _updateMarkerScale() {
+    const zoom = this.map?.getZoom?.();
+    this.container?.style?.setProperty('--map-marker-scale', String(meetMarkerScale(zoom)));
+  }
+
   _handleMapClick(e) {
     const [lon, lat] = fromDisplay(e.lngLat.lng, e.lngLat.lat, this.coordSystem);
+    if (this.mapPickMode) {
+      this.opts.onMapPick?.(lon, lat);
+      return;
+    }
     if (!this.editMode && this.elevationPickMode) {
       this.opts.onElevationPick?.(lon, lat);
       return;
@@ -702,7 +717,7 @@ export class TrackMap {
     const [maxLon, maxLat] = toDisplay(east < west ? east + 360 : east, north, this.coordSystem);
     this.follow = false;
     this.map?.fitBounds([[minLon, minLat], [maxLon, maxLat]], {
-      padding: { top: padding, right: padding, bottom: padding + this._viewportBottom, left: padding },
+      padding,
       duration: 600, maxZoom: 17
     });
   }
@@ -954,6 +969,7 @@ export class TrackMap {
     this.meetGoal = null;
     this.meetPinsList = [];
     this._meetAutoZoomReady = false;
+    this._meetOverviewFit = false;
     this._meetLastDistance = Number.NaN;
     this._meetLastSelf = null;
     this._meetCameraAnimating = false;
@@ -1144,7 +1160,7 @@ export class TrackMap {
   }
 
   _updateMeetProximity() {
-    if (!this.map || this.destroyed || !this._meetAutoZoomReady) return;
+    if (!this.map || this.destroyed || !this._meetAutoZoomReady || this._meetOverviewFit) return;
     const self = this.meetSelf;
     if (!freshMeetPosition(self) || self.lat == null || self.lon == null) return;
     if (this.map.isMoving() || Date.now() < this._meetManualCameraUntil) return;
@@ -1175,43 +1191,30 @@ export class TrackMap {
     if (!this.map || this.destroyed) return;
     if (manual) this._meetManualCameraUntil = Date.now() + 12000;
     this._meetAutoZoomReady = false;
+    this._meetOverviewFit = false;
     this._meetLastDistance = Number.NaN;
     this._meetLastSelf = null;
-    const pts = [];
-    if (freshMeetPosition(this.meetSelf) && this.meetSelf.lat != null) pts.push(toDisplay(this.meetSelf.lon, this.meetSelf.lat, this.coordSystem));
-    for (const p of this.meetPeers) {
-      if (freshMeetPosition(p) && p.lat != null && p.lon != null) pts.push(toDisplay(p.lon, p.lat, this.coordSystem));
-    }
-    if (this.meetGoal?.lat != null && this.meetGoal?.lon != null) {
-      pts.push(toDisplay(this.meetGoal.lon, this.meetGoal.lat, this.coordSystem));
-    }
-    for (const pin of this.meetPinsList) {
-      if (pin.lat != null && pin.lon != null) pts.push(toDisplay(pin.lon, pin.lat, this.coordSystem));
-    }
-    if (!pts.length) return;
+    const points = renderedMeetPoints(this.meetSelf, this.meetPeers, this.meetPinsList, this.meetGoal);
+    if (!points.length) return;
     this.follow = false;
     emit('map:followoff');
-    if (pts.length === 1) {
+    this._meetOverviewFit = points.length > 1;
+    this._meetAutoZoomReady = !this._meetOverviewFit;
+    this._meetCameraAnimating = true;
+    this.map.once('moveend', () => {
+      this._meetCameraAnimating = false;
+      this._meetOverviewFit = false;
       this._meetAutoZoomReady = true;
-      this._meetCameraAnimating = true;
-      this.map.once('moveend', () => { this._meetCameraAnimating = false; });
-      this.map.easeTo({ center: pts[0], zoom: Math.max(this.map.getZoom(), 14), duration: 600 });
+    });
+    if (points.length === 1) {
+      const [lon, lat] = toDisplay(points[0].lon, points[0].lat, this.coordSystem);
+      this.map.easeTo({ center: [lon, lat], zoom: Math.max(this.map.getZoom(), 14), duration: 600 });
       return;
     }
-    let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
-    for (const [lon, lat] of pts) {
-      if (lon < minLon) minLon = lon;
-      if (lon > maxLon) maxLon = lon;
-      if (lat < minLat) minLat = lat;
-      if (lat > maxLat) maxLat = lat;
-    }
-    this._meetAutoZoomReady = true;
-    this._meetCameraAnimating = true;
-    this.map.once('moveend', () => { this._meetCameraAnimating = false; });
-    this.map.fitBounds([[minLon, minLat], [maxLon, maxLat]], {
-      padding,
-      duration: 650, maxZoom: 16
-    });
+    // Bound in WGS-84 first so short dateline crossings stay short. Treat each
+    // marker as an unordered point, then use the same fitter/padding as tracks.
+    const bbox = wgs84TrackBounds(points.map((point) => ({ points: [point] })));
+    if (bbox) this.fitWgs84Bounds(bbox, padding);
   }
 
   // ---------- re-walk approach guide ----------
@@ -1260,19 +1263,38 @@ export class TrackMap {
 
   // ---------- editing ----------
   setEditMode(on) {
-    if (on) this.setElevationPickMode(false);
+    if (on) {
+      this.setMapPickMode(false);
+      this.setElevationPickMode(false);
+    }
     this.editMode = on;
     this._renderWaypoints();
     if (on) this._scheduleVertices();
     else this._clearVertices();
-    this.map.getCanvas().style.cursor = on ? 'crosshair' : '';
+    this._syncPickCursor();
   }
 
   setElevationPickMode(on) {
     this.elevationPickMode = !!on;
-    if (on && this.editMode) this.setEditMode(false);
+    if (on) {
+      if (this.editMode) this.setEditMode(false);
+      this.setMapPickMode(false);
+    }
+    this._syncPickCursor();
+  }
+
+  setMapPickMode(on) {
+    this.mapPickMode = !!on;
+    if (on) {
+      if (this.editMode) this.setEditMode(false);
+      if (this.elevationPickMode) this.setElevationPickMode(false);
+    }
+    this._syncPickCursor();
+  }
+
+  _syncPickCursor() {
     const canvas = this.map?.getCanvas?.();
-    if (canvas) canvas.style.cursor = this.elevationPickMode ? 'crosshair' : '';
+    if (canvas) canvas.style.cursor = this.mapPickMode || this.elevationPickMode || this.editMode ? 'crosshair' : '';
   }
 
   _scheduleVertices() {
@@ -1419,6 +1441,8 @@ export class TrackMap {
 
   destroy() {
     this.destroyed = true;
+    this.setMapPickMode(false);
+    this.container?.style?.removeProperty('--map-marker-scale');
     this._clearLiveFlush();
     this._liveFeats = null;
     this._viewportObserver?.disconnect();

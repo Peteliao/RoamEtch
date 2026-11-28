@@ -12,6 +12,7 @@ import { regionState } from '../core/region';
 import { drawQr } from '../core/brand';
 import { decodeQrImageFile } from '../core/qr';
 import { TrackMap } from './map';
+import { meetFitKey } from '../core/meetVisuals';
 import { el, icon, toast, modal, confirmModal, filePicker } from './helpers';
 import { openCamera } from './camera';
 import { openQrScanner } from './qrScanner';
@@ -73,7 +74,7 @@ export function createMeetView(navigate) {
   }, icon('pin'));
   const goalBtn = el('button', {
     class: 'iconbtn', type: 'button', title: t('meet.goalTool'), 'aria-label': t('meet.goalTool'),
-    onclick: () => openGoalSheet()
+    onclick: () => pickerCode ? cancelGoalPicker() : openGoalSheet()
   }, icon('flag'));
   tools.append(chatBtn, markerBtn, goalBtn, followBtn, fitBtn, shareBtn);
 
@@ -95,8 +96,11 @@ export function createMeetView(navigate) {
 
   let snap = getMeetSnapshot();
   let map = null;
-  let autoFitDone = false;
+  let lastFitKey = '';
+  let fitWaitingKey = '';
   let lastCode = '';
+  let pickerCode = '';
+  let pickerLabel = '';
   let panelCollapsed = false;
   let lastHostId = '';
   let lastTickRender = 0;
@@ -144,7 +148,8 @@ export function createMeetView(navigate) {
       compact: true,
       preserveDrawingBuffer: false,
       fallbackText: t('map.fallback'),
-      onMeetPeerClick: (id) => flyPeer(id)
+      onMeetPeerClick: (id) => flyPeer(id),
+      onMapPick: (lon, lat) => { void handleGoalMapPick(lon, lat); }
     }).init(center, snap.active && snap.self?.positionStatus === 'fresh' ? 14 : (regionState.effective === 'cn' ? 9 : 3));
     map.observeViewportInset(panel);
     map.map?.once('load', maybeAutoFit);
@@ -1363,7 +1368,9 @@ export function createMeetView(navigate) {
       ));
     }
     if (s.incompatiblePeers?.length) {
-      panelBody.append(warningBanner('shield', t('meet.incompatiblePeers', { n: s.incompatiblePeers.length })));
+      const text = t('meet.incompatiblePeers', { n: s.incompatiblePeers.length })
+        + (s.updateRequired ? ` ${t('meet.incompatibleUpdate')}` : '');
+      panelBody.append(warningBanner('shield', text));
     }
     const hiddenPeers = Number(s.security?.hiddenPeers) || 0;
     if (s.keyEpoch > 0 || hiddenPeers > 0) {
@@ -1484,31 +1491,44 @@ export function createMeetView(navigate) {
 
   function syncMap(s) {
     if (!s.active) {
+      cancelGoalPicker();
       map?.clearMeetData();
       map?.clearPosition();
-      autoFitDone = false;
+      lastFitKey = '';
+      fitWaitingKey = '';
       lastCode = '';
       return;
     }
     if (s.code !== lastCode) {
       lastCode = s.code;
-      autoFitDone = false;
+      lastFitKey = '';
+      fitWaitingKey = '';
+      cancelGoalPicker();
     }
+    if (!s.isHost) cancelGoalPicker();
     if (!map) {
       if (!view.classList.contains('active')) return;
       ensureMap();
     }
     map.setMeetData({ self: s.self, peers: s.peers, route: s.route, markers: s.markers, goal: s.goal });
-    if (s.self?.positionStatus === 'fresh') maybeAutoFit();
+    maybeAutoFit();
   }
 
   function maybeAutoFit() {
-    if (!snap.active || !snap.self || snap.self.positionStatus !== 'fresh' || autoFitDone || !map) return;
+    if (!snap.active || !map) return;
+    const key = meetFitKey(snap.self, snap.peers, snap.markers, snap.goal);
+    if (key === lastFitKey) return;
     if (!map.map?.isStyleLoaded()) {
-      map.map?.once('load', maybeAutoFit);
+      if (fitWaitingKey === key) return;
+      fitWaitingKey = key;
+      map.map?.once('load', () => {
+        fitWaitingKey = '';
+        maybeAutoFit();
+      });
       return;
     }
-    autoFitDone = true;
+    fitWaitingKey = '';
+    lastFitKey = key;
     map.fitMeet();
   }
 
@@ -1744,6 +1764,40 @@ export function createMeetView(navigate) {
     setTimeout(() => labelInp.focus(), 80);
   }
 
+  function cancelGoalPicker() {
+    if (!pickerCode) return;
+    pickerCode = '';
+    pickerLabel = '';
+    map?.setMapPickMode(false);
+    goalBtn.classList.remove('active');
+    goalBtn.setAttribute('aria-pressed', 'false');
+  }
+
+  function startGoalPicker(label: string) {
+    const current = getMeetSnapshot();
+    if (!current.active || !current.isHost) return;
+    cancelGoalPicker();
+    pickerCode = current.code;
+    pickerLabel = label;
+    const target = ensureMap();
+    target.setMapPickMode(true);
+    goalBtn.classList.add('active');
+    goalBtn.setAttribute('aria-pressed', 'true');
+    toast(t('meet.goalPickHint'), 'info', 4200);
+  }
+
+  async function handleGoalMapPick(lon: number, lat: number) {
+    if (!pickerCode) return;
+    const code = pickerCode;
+    const label = pickerLabel;
+    cancelGoalPicker();
+    const latest = getMeetSnapshot();
+    if (!latest.active || !latest.isHost || latest.code !== code) return;
+    const ok = await meet.setGoal({ lat, lon, label });
+    if (ok) toast(t('meet.goalSetDone'), 'ok');
+    else if (Date.now() >= rateLimitedUntil) toast(t('meet.goalSetFail'), 'err', 3200);
+  }
+
   function openGoalSheet() {
     const s = getMeetSnapshot();
     if (!s.active) return;
@@ -1772,6 +1826,10 @@ export function createMeetView(navigate) {
         toast(t('meet.goalSetFail'), 'err', 3200);
       }
     };
+    const pickBtn = el('button', {
+      class: 'btn ghost', type: 'button',
+      onclick: () => { m?.close(); startGoalPicker(labelInp.value); }
+    }, icon('map', 16), t('meet.goalPickMap'));
     const goalSummary = s.goal ? el('div', { class: 'meet-goal-summary' },
       el('div', { class: 'mgs-head' }, icon('flag', 17), el('div', { class: 'mgs-t' }, s.goal.label || t('meet.goalDefault'))),
       el('div', { class: 'mgs-d' },
@@ -1787,7 +1845,7 @@ export function createMeetView(navigate) {
           el('div', { class: 'field' },
             el('label', {}, t('meet.goalLabel')), labelInp,
             el('div', { class: 'hint' }, t('meet.goalLabelHint'))),
-          el('div', { class: 'meet-goal-actions' }, setBtn))
+          el('div', { class: 'meet-goal-actions' }, setBtn, pickBtn))
         : el('div', { class: 'meet-sheet-note faint' }, icon('info', 16), el('div', {}, t('meet.goalHostOnly'))));
     m = modal({
       title: t('meet.goalTitle'),
@@ -2047,6 +2105,7 @@ export function createMeetView(navigate) {
     try { navigator.vibrate?.(alert.kind === 'distance' ? [70, 60, 70] : [90]); } catch { /* ignore */ }
   });
   on('meet:ended', ({ reason }) => {
+    cancelGoalPicker();
     chatDraft = '';
     chatBtn.classList.remove('chat-notice', 'chat-ping');
     clearTimeout(chatPingTimer);
@@ -2058,12 +2117,17 @@ export function createMeetView(navigate) {
     else if (reason === 'manual') toast(t('meet.left'), 'ok');
   });
   on('meet:codeReset', () => {
+    cancelGoalPicker();
     chatDraft = '';
     closeChat();
     toast(t('meet.resetDone'), 'ok', 3500);
   });
 
   applySnapshot(snap);
+  const activeObserver = typeof MutationObserver !== 'undefined'
+    ? new MutationObserver(() => { if (!view.classList.contains('active')) cancelGoalPicker(); })
+    : null;
+  activeObserver?.observe(view, { attributes: true, attributeFilter: ['class'] });
 
   return {
     view,
@@ -2071,6 +2135,8 @@ export function createMeetView(navigate) {
     refresh: () => applySnapshot(getMeetSnapshot()),
     getMap: () => map,
     destroy: () => {
+      activeObserver?.disconnect();
+      cancelGoalPicker();
       chatDraft = '';
       chatBtn.classList.remove('chat-notice', 'chat-ping');
       clearTimeout(chatPingTimer);

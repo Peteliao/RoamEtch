@@ -406,9 +406,12 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .trip-detail-panel > .view-scroll { padding-top: 12px; }
 .trip-detail-panel#view-export > .view-scroll > .page-head,
 .trip-detail-panel#view-export .share-trip-card { display: none; }
-.trip-detail-panel > .view-scroll > .analysis-head { margin-bottom: 10px; }
-.trip-detail-panel > .view-scroll > .analysis-head .page-head-row { justify-content: flex-end; margin-bottom: 0; }
-.trip-detail-panel > .view-scroll > .analysis-head .page-title { display: none; }
+.trip-detail-panel > .view-scroll > .analysis-head,
+.trip-detail-panel > .view-scroll > .story-head-embedded { margin-bottom: 10px; }
+.trip-detail-panel > .view-scroll > .analysis-head .page-head-row,
+.trip-detail-panel > .view-scroll > .story-head-embedded .page-head-row { justify-content: flex-end; margin-bottom: 0; }
+.trip-detail-panel > .view-scroll > .analysis-head .page-title,
+.trip-detail-panel > .view-scroll > .story-head-embedded .page-title { display: none; }
 #trip-detail[data-section="overview"] .analysis-data,
 #trip-detail[data-section="data"] .analysis-overview,
 #trip-detail[data-section="share"] .analysis-overview,
@@ -1568,6 +1571,13 @@ html.oled-lock { color-scheme: dark; }
 .photo-strip .ph { position: relative; width: 74px; height: 74px; border-radius: 9px; overflow: hidden; border: 1px solid var(--border); }
 .photo-strip .ph img { width: 100%; height: 100%; object-fit: cover; }
 .photo-strip .ph .rm { position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border-radius: 50%; background: rgba(0,0,0,0.65); color: #fff; border: none; cursor: pointer; font-size: 12px; line-height: 1; }
+/* Scale independently of marker transforms so pin rotation and heading stay intact. */
+.wp-marker, .pos-marker, .meet-peer-marker, .meet-pin, .meet-goal-marker {
+  scale: var(--map-marker-scale, 1);
+  transition: scale 120ms ease;
+}
+.wp-marker, .meet-pin, .meet-goal-marker { transform-origin: 50% 100%; }
+.pos-marker, .meet-peer-marker { transform-origin: 50% 50%; }
 .wp-marker {
   width: 30px; height: 30px; border-radius: 50% 50% 50% 4px;
   background: var(--bg-elev); border: 2px solid var(--accent);

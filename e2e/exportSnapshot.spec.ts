@@ -30,8 +30,8 @@ test('new node text and photo export without reselecting the trip and reach vide
     const waypoints = await window.__lt.store.db.waypoints.where('tripId').equals(id).toArray();
     const node = waypoints.find((wp: any) => wp.name === '节点文字验收');
     const media = node ? await window.__lt.store.db.media.bulkGet(node.mediaIds) : [];
-    return { name: node?.name, desc: node?.desc, photos: media.filter(Boolean).length };
-  }, tripId)).toEqual({ name: '节点文字验收', desc: '节点描述验收', photos: 1 });
+    return { name: node?.name, type: node?.type, desc: node?.desc, photos: media.filter(Boolean).length };
+  }, tripId)).toEqual({ name: '节点文字验收', type: 'route', desc: '节点描述验收', photos: 1 });
 
   await page.locator('.rec-btn.stop').click();
   const result = page.locator('.record-result-sheet');
@@ -60,6 +60,51 @@ test('new node text and photo export without reselecting the trip and reach vide
   await expect.poll(() => poster.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBe(1080);
 
   await page.evaluate(() => {
+    const probe = { profileYs: [] as number[], brandYs: [] as number[] };
+    (window as any).__posterDrawProbe = probe;
+    const fillText = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (text, x, y, maxWidth) {
+      const value = String(text);
+      if (this.canvas.width === 1080 && this.canvas.height === 1080) {
+        if (value.includes('海拔') || value.includes('速度')) probe.profileYs.push(y);
+        if (value === '漫游有迹，刻入舆图' || value === '数据归己，不寄云端') probe.brandYs.push(y);
+      }
+      return maxWidth === undefined ? fillText.call(this, text, x, y) : fillText.call(this, text, x, y, maxWidth);
+    };
+  });
+  const expectSquareProfileClearOfBrand = async () => {
+    await expect.poll(() => page.evaluate(() => {
+      const probe = (window as any).__posterDrawProbe;
+      return probe.profileYs.length > 0 && probe.brandYs.length > 0;
+    })).toBe(true);
+    const gap = await page.evaluate(() => {
+      const probe = (window as any).__posterDrawProbe;
+      return Math.min(...probe.brandYs) - Math.max(...probe.profileYs);
+    });
+    expect(gap).toBeGreaterThan(10);
+  };
+
+  await posterCard.locator('.card-line .seg-toggle button').nth(1).click();
+  await page.evaluate(() => {
+    (window as any).__posterDrawProbe.profileYs = [];
+    (window as any).__posterDrawProbe.brandYs = [];
+  });
+  await posterCard.getByRole('button', { name: '生成', exact: true }).click();
+  await expect(poster).toBeVisible({ timeout: 60_000 });
+  await expect.poll(() => poster.evaluate((img) => (img as HTMLImageElement).naturalHeight)).toBe(1080);
+  await expectSquareProfileClearOfBrand();
+
+  await posterCard.locator('details.share-style > summary').click();
+  await exportView.locator('.style-layout').getByRole('button', { name: '地图叠加', exact: true }).click();
+  await page.evaluate(() => {
+    (window as any).__posterDrawProbe.profileYs = [];
+    (window as any).__posterDrawProbe.brandYs = [];
+  });
+  await posterCard.getByRole('button', { name: '生成', exact: true }).click();
+  await expect(poster).toBeVisible({ timeout: 60_000 });
+  await expectSquareProfileClearOfBrand();
+
+  await page.evaluate(() => {
     const probe = { title: 0, desc: 0, photoDraws: 0 };
     (window as any).__exportDrawProbe = probe;
     const fillText = CanvasRenderingContext2D.prototype.fillText;
@@ -78,9 +123,27 @@ test('new node text and photo export without reselecting the trip and reach vide
   });
 
   const videoCard = exportView.locator('.card').filter({ hasText: '视频回顾' });
+  await expect(videoCard.locator('.seg-toggle button')).toHaveCount(4);
+  await expect(videoCard.locator('.seg-toggle button').last()).toHaveText('智能');
   await videoCard.locator('.seg-toggle button').first().click();
   await videoCard.getByRole('button', { name: '生成', exact: true }).click();
   await expect(videoCard.locator('video')).toBeVisible({ timeout: 60_000 });
+  await expect.poll(() => page.evaluate(() => (window as any).__exportDrawProbe.title)).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__exportDrawProbe.desc)).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => (window as any).__exportDrawProbe.photoDraws)).toBeGreaterThan(0);
+
+  const video = videoCard.locator('video');
+  const fixedSrc = await video.evaluate((node) => node.currentSrc);
+  await page.evaluate(() => {
+    const probe = (window as any).__exportDrawProbe;
+    probe.title = 0;
+    probe.desc = 0;
+    probe.photoDraws = 0;
+  });
+  await videoCard.locator('.seg-toggle button').last().click();
+  await videoCard.getByRole('button', { name: '生成', exact: true }).click();
+  await expect.poll(() => video.evaluate((node) => node.currentSrc), { timeout: 90_000 }).not.toBe(fixedSrc);
+  await expect.poll(() => video.evaluate((node) => node.duration)).toBeGreaterThan(24);
   await expect.poll(() => page.evaluate(() => (window as any).__exportDrawProbe.title)).toBeGreaterThan(0);
   await expect.poll(() => page.evaluate(() => (window as any).__exportDrawProbe.desc)).toBeGreaterThan(0);
   await expect.poll(() => page.evaluate(() => (window as any).__exportDrawProbe.photoDraws)).toBeGreaterThan(0);

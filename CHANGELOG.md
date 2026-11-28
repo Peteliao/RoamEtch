@@ -4,6 +4,34 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.12.0] - 2026-11-28
+
+### Added
+
+- Added Smart video pacing with route-node reading and photo holds, an endpoint
+  dwell, and a final promotional outro.
+- Added a route waypoint type. Recording creates route nodes by default while
+  retaining every other waypoint type, and custom route names drive poster and
+  video route labels in route order.
+- Added map-picked meet rally points, rendered-member overview fitting,
+  zoom-scaled markers, and clearer incompatible-client update guidance.
+
+### Changed
+
+- Square posters now reserve chart space in both stacked and overlay layouts,
+  and generic promotional images draw each complete localized slogan on one line.
+- OLED pocket lock is available while idle as well as during recording.
+- Service-worker updates activate and clean outdated caches without reloading
+  during recording or while an unsaved overlay is open.
+
+### Fixed
+
+- Prevented video node cards and photo cut-ins from covering the route, restored
+  waypoint photos with thumbnail/original fallback decoding, and aligned the
+  poster and video route endpoints.
+- Fixed automatic and manual full-track fitting, story-header alignment, excess
+  analysis-chart gutters, and Wake Lock acquire/release races.
+
 ## [3.11.0] - 2026-11-28
 
 ### Added

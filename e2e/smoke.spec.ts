@@ -12,6 +12,36 @@ test('RoamEtch record view starts directly without manual creation', async ({ pa
   await expect(page.getByRole('button', { name: '手动', exact: true })).toHaveCount(0);
 });
 
+test('OLED pocket lock works while idle and restores the saved theme', async ({ page }) => {
+  await blockExternal(page);
+  await page.goto('/');
+  await gotoTab(page, 'record');
+  const before = await page.evaluate(() => {
+    const info = (window as any).__lt.theme.themeInfo();
+    return { mode: info.mode, effective: info.effective };
+  });
+  const entry = page.locator('.iconbtn[aria-label="OLED 口袋锁"]');
+  await expect(entry).toBeEnabled();
+  await entry.click();
+  await expect(page.locator('#oled-dash')).toHaveClass(/active/);
+  await expect(page.locator('html')).toHaveClass(/oled-lock/);
+  await expect.poll(() => page.evaluate(() => (window as any).__lt.theme.themeInfo().effective)).toBe('dark');
+
+  const unlock = page.locator('#oled-dash .ps-unlock');
+  const box = await unlock.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(1700);
+  await page.mouse.up();
+  await expect(page.locator('#oled-dash')).not.toHaveClass(/active/);
+  await expect(page.locator('html')).not.toHaveClass(/oled-lock/);
+  expect(await page.evaluate(() => {
+    const info = (window as any).__lt.theme.themeInfo();
+    return { mode: info.mode, effective: info.effective };
+  })).toEqual(before);
+});
+
 test('six UI languages keep each complete slogan readable on one line', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (message) => {

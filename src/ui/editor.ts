@@ -12,7 +12,7 @@ import { el, icon, modal, toast, confirmModal, filePickerMulti } from './helpers
 import { openCamera } from './camera';
 import { WP_ICONS } from '../core/waypointMeta';
 
-const WP_TYPES = ['start', 'end', 'view', 'photo', 'stay', 'food', 'supply', 'danger', 'fuel', 'custom'];
+const WP_TYPES = ['start', 'end', 'route', 'view', 'photo', 'stay', 'food', 'supply', 'danger', 'fuel', 'custom'];
 
 function segById(id) {
   return appState.activeTripFull?.segments.find((s) => s.id === id);
@@ -59,7 +59,7 @@ export function openWaypointModal(wpOrPos, opts: any = {}) {
   const context = captureEdit(tripId, opts.scopeCurrent);
   const wp = isNew
     ? {
-      lat: wpOrPos.lat, lon: wpOrPos.lon, name: '', desc: '', type: 'custom',
+      lat: wpOrPos.lat, lon: wpOrPos.lon, name: '', desc: '', type: opts.defaultType || 'custom',
       time: Number.isFinite(wpOrPos.time) ? wpOrPos.time : Date.now(),
       hidden: false, mediaIds: [], alt: null
     }

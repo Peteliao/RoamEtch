@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   maps: [] as any[],
+  eventHandlers: new Map<string, Array<(payload?: any) => void>>(),
+  requestWakeLock: vi.fn(async () => true),
+  releaseWakeLock: vi.fn(async () => {}),
+  setThemeModeOverride: vi.fn(),
+  setThemeColorOverride: vi.fn(),
   rec: {
     status: 'idle' as 'idle' | 'recording' | 'paused' | 'finished',
     tripId: null as string | null,
@@ -40,6 +45,7 @@ const mocks = vi.hoisted(() => ({
   setActiveTrip: vi.fn(),
   refreshActiveTrip: vi.fn(),
   openCamera: vi.fn(),
+  openWaypointModal: vi.fn(),
   modal: vi.fn(),
   navigate: vi.fn()
 }));
@@ -58,7 +64,15 @@ vi.mock('../src/core/settings', () => ({
   } as Record<string, any>)[key],
   set: vi.fn()
 }));
-vi.mock('../src/core/events', () => ({ on: vi.fn(() => vi.fn()), emit: vi.fn() }));
+vi.mock('../src/core/events', () => ({
+  on: vi.fn((name: string, handler: (payload?: any) => void) => {
+    const handlers = mocks.eventHandlers.get(name) || [];
+    handlers.push(handler);
+    mocks.eventHandlers.set(name, handlers);
+    return vi.fn();
+  }),
+  emit: vi.fn()
+}));
 vi.mock('../src/core/recorder', () => ({
   rec: mocks.rec,
   startRecording: vi.fn(), pauseRecording: vi.fn(), resumeRecording: vi.fn(),
@@ -69,8 +83,14 @@ vi.mock('../src/core/recorder', () => ({
 vi.mock('../src/core/keepalive', () => ({
   armKeepAlive: vi.fn(), disarmKeepAlive: vi.fn(), isKeepAliveActive: () => false
 }));
-vi.mock('../src/core/wakelock', () => ({ requestWakeLock: vi.fn(), releaseWakeLock: vi.fn() }));
-vi.mock('../src/core/theme', () => ({ setThemeColorOverride: vi.fn(), setThemeModeOverride: vi.fn() }));
+vi.mock('../src/core/wakelock', () => ({
+  requestWakeLock: mocks.requestWakeLock,
+  releaseWakeLock: mocks.releaseWakeLock
+}));
+vi.mock('../src/core/theme', () => ({
+  setThemeColorOverride: mocks.setThemeColorOverride,
+  setThemeModeOverride: mocks.setThemeModeOverride
+}));
 vi.mock('../src/core/region', () => ({ regionState: { effective: 'global' } }));
 vi.mock('../src/core/providers', () => ({
   availableBasemaps: () => [{ id: 'test', name: 'Test', nameEn: 'Test', kind: 'street', coordSystem: 'WGS' }]
@@ -110,7 +130,7 @@ vi.mock('../src/ui/state', () => ({
   refreshActiveTrip: mocks.refreshActiveTrip
 }));
 vi.mock('../src/ui/editor', () => ({
-  openWaypointModal: vi.fn(), moveWaypoint: vi.fn(), moveVertex: vi.fn(),
+  openWaypointModal: mocks.openWaypointModal, moveWaypoint: vi.fn(), moveVertex: vi.fn(),
   insertVertex: vi.fn(), deleteVertex: vi.fn(), undoEdit: vi.fn(), redoEdit: vi.fn(),
   histState: () => ({ canUndo: false, canRedo: false })
 }));
@@ -154,6 +174,8 @@ vi.mock('../src/ui/map', () => ({
     flyTo = vi.fn();
     setBasemap = vi.fn();
     resize = vi.fn();
+    pauseRendering = vi.fn();
+    resumeRendering = vi.fn();
     destroy = vi.fn();
   }
 }));
@@ -180,6 +202,10 @@ async function waitForIdleInit() {
   await vi.waitFor(() => expect(mocks.findRecoverableTrip).toHaveBeenCalled());
 }
 
+function emitRecorder(name: string, payload?: any) {
+  for (const handler of [...(mocks.eventHandlers.get(name) || [])]) handler(payload);
+}
+
 async function finish(view: HTMLElement) {
   await waitForIdleInit();
   Object.assign(mocks.rec, { status: 'recording', tripId: 'trip-1' });
@@ -192,6 +218,7 @@ beforeEach(() => {
   document.body.innerHTML = '';
   mounted = [];
   mocks.maps.length = 0;
+  mocks.eventHandlers.clear();
   Object.assign(mocks.rec, {
     status: 'idle', tripId: null, segmentId: null, live: null, simulated: false,
     permissionDenied: false, geoError: null, activityGuess: null,
@@ -359,6 +386,100 @@ describe('record view bounded loading', () => {
     expect(mocks.listWaypoints).not.toHaveBeenCalled();
     expect(mocks.loadTripFull).not.toHaveBeenCalled();
     expect(mocks.setActiveTrip).not.toHaveBeenCalled();
+  });
+
+  it('creates recording additions as route nodes by default', async () => {
+    const view = await mount();
+    await waitForIdleInit();
+    Object.assign(mocks.rec, {
+      status: 'recording', tripId: 'trip-1', live: { lat: 30, lon: 120 }
+    });
+    view.refresh();
+
+    (view.view.querySelector('.rec-btn.node') as HTMLButtonElement).click();
+    const sheet = mocks.modal.mock.calls[0][0].body as HTMLElement;
+    (sheet.querySelector('.sheet-row') as HTMLButtonElement).click();
+
+    expect(mocks.openWaypointModal).toHaveBeenCalledWith(
+      { lat: 30, lon: 120 },
+      expect.objectContaining({ tripId: 'trip-1', defaultType: 'route' })
+    );
+  });
+
+  describe('OLED pocket lock', () => {
+    async function enterFromIdle() {
+      const view = await mount();
+      await waitForIdleInit();
+      const entry = view.view.querySelector('.power-lock-entry') as HTMLButtonElement;
+      await vi.waitFor(() => expect(entry.disabled).toBe(false));
+      expect(view.isPowerLockActive()).toBe(false);
+      entry.click();
+      expect(view.isPowerLockActive()).toBe(true);
+      return { view, entry, target: mocks.maps[0] };
+    }
+
+    function unlock() {
+      const ring = document.querySelector('.ps-unlock') as HTMLElement;
+      ring.dispatchEvent(new MouseEvent('click', { detail: 0, bubbles: true }));
+    }
+
+    it('enters manually from idle and restores the map, theme and wake lock on unlock', async () => {
+      const { view, target } = await enterFromIdle();
+
+      expect(mocks.rec.status).toBe('idle');
+      expect(target.pauseRendering).toHaveBeenCalledTimes(1);
+      expect((view.view.querySelector('#map-container') as HTMLElement).style.display).toBe('none');
+      expect(document.documentElement.classList.contains('oled-lock')).toBe(true);
+      expect(document.querySelector('#oled-dash')?.getAttribute('aria-hidden')).toBe('false');
+      expect(mocks.setThemeModeOverride).toHaveBeenCalledWith('dark');
+      expect(mocks.setThemeColorOverride).toHaveBeenCalledWith('#000000');
+      expect(mocks.requestWakeLock).toHaveBeenCalledTimes(1);
+
+      unlock();
+
+      await vi.waitFor(() => expect(view.isPowerLockActive()).toBe(false));
+      expect(target.resumeRendering).toHaveBeenCalledTimes(1);
+      expect((view.view.querySelector('#map-container') as HTMLElement).style.display).toBe('');
+      expect(document.documentElement.classList.contains('oled-lock')).toBe(false);
+      expect(document.querySelector('#oled-dash')?.getAttribute('aria-hidden')).toBe('true');
+      expect(mocks.setThemeColorOverride).toHaveBeenLastCalledWith(null);
+      expect(mocks.setThemeModeOverride).toHaveBeenLastCalledWith(null);
+      expect(mocks.releaseWakeLock).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the entry disabled in the finished state', async () => {
+      const view = await mount();
+      await waitForIdleInit();
+      const entry = view.view.querySelector('.power-lock-entry') as HTMLButtonElement;
+      await vi.waitFor(() => expect(entry.disabled).toBe(false));
+
+      mocks.rec.status = 'finished';
+      view.refresh();
+      entry.click();
+
+      expect(entry.disabled).toBe(true);
+      expect(view.isPowerLockActive()).toBe(false);
+      expect(mocks.maps[0].pauseRendering).not.toHaveBeenCalled();
+    });
+
+    it('reacquires the wake lock on pause and direct stop while OLED is active', async () => {
+      const { view } = await enterFromIdle();
+
+      mocks.requestWakeLock.mockClear();
+      mocks.rec.status = 'paused';
+      emitRecorder('recorder:paused');
+      expect(mocks.requestWakeLock).toHaveBeenCalledTimes(1);
+
+      mocks.requestWakeLock.mockClear();
+      mocks.rec.status = 'finished';
+      emitRecorder('recorder:stopped');
+      expect(mocks.requestWakeLock).toHaveBeenCalledTimes(1);
+      expect(view.isPowerLockActive()).toBe(true);
+
+      unlock();
+      await vi.waitFor(() => expect(view.isPowerLockActive()).toBe(false));
+      expect(mocks.releaseWakeLock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('redraws an active re-walk with a preview instead of full media loading', async () => {

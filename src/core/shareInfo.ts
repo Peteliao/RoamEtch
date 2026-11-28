@@ -310,6 +310,54 @@ export async function routePlaceNames(
   return kept;
 }
 
+export function routeNodeNames(cropped: any, max = 6): string[] {
+  const points = (cropped?.segments || []).flatMap((segment: any) => segment.points || []);
+  const waypoints = (cropped?.waypoints || []).filter((wp: any) => wp?.type === 'route' && String(wp.name || '').trim());
+  if (points.length < 2 || !waypoints.length) return [];
+  const cumulative = [0];
+  for (let i = 1; i < points.length; i++) {
+    cumulative.push(cumulative[i - 1] + haversine(points[i - 1].lat, points[i - 1].lon, points[i].lat, points[i].lon));
+  }
+  const timeDelta = (wp: any, index: number) => Number.isFinite(wp.time) && Number.isFinite(points[index].t)
+    ? Math.abs(wp.time - points[index].t)
+    : Infinity;
+  const ordered = waypoints.map((wp: any, order: number) => {
+    const cosLat = Math.cos((wp.lat * Math.PI) / 180);
+    let bestIndex = 0, bestDistance = Infinity, bestTime = Infinity;
+    for (let i = 0; i < points.length; i++) {
+      const dx = (points[i].lon - wp.lon) * cosLat;
+      const dy = points[i].lat - wp.lat;
+      const distance = dx * dx + dy * dy;
+      const dt = timeDelta(wp, i);
+      if (distance < bestDistance - 1e-10 || (Math.abs(distance - bestDistance) <= 1e-10 && dt < bestTime)) {
+        bestIndex = i; bestDistance = distance; bestTime = dt;
+      }
+    }
+    return { name: String(wp.name).trim(), distance: cumulative[bestIndex], time: Number.isFinite(wp.time) ? wp.time : Infinity, order };
+  }).sort((a, b) => a.distance - b.distance || a.time - b.time || a.order - b.order);
+  const names: string[] = [];
+  for (const item of ordered) if (!names.includes(item.name)) names.push(item.name);
+  if (names.length <= max) return names;
+  const kept: string[] = [];
+  for (let i = 0; i < max; i++) {
+    const name = names[Math.round((i * (names.length - 1)) / (max - 1))];
+    if (!kept.includes(name)) kept.push(name);
+  }
+  return kept;
+}
+
+export async function routeDisplayNames(
+  cropped: any,
+  { max = 6, signal, onProgress }: { max?: number; signal?: AbortSignal; onProgress?: (p: number) => void } = {}
+): Promise<string[]> {
+  const custom = routeNodeNames(cropped, max);
+  if (custom.length) {
+    onProgress?.(1);
+    return custom;
+  }
+  return routePlaceNames(cropped.segments, { max, signal, onProgress });
+}
+
 function roundedPointInPrivacy(point: any, privacy: any) {
   const radius = Number(privacy?.radius) || 0;
   if (!(radius > 0)) return false;

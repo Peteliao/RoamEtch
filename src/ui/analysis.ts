@@ -585,11 +585,9 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     ];
     if (visible.altitude) {
       series.push({ label: `${t('panel.altitude')} (${altitudeUnit(profile.units)})`, stroke: P.accent, width: 1.8, fill: P.accentSoft, points: { show: false } });
-      axes.push({ scale: 'y', stroke: P.accent, grid: { stroke: P.grid }, size: 38, font: '12px system-ui', label: [] });
     }
     if (visible.speed) {
       series.push({ label: `${t('panel.speed')} (${speedUnit(profile.units)})`, stroke: speedColor, width: 2, scale: 'y1', fill: null, points: { show: false } });
-      axes.push({ scale: 'y1', stroke: speedColor, grid: { show: false }, size: 44, font: '12px system-ui', side: 1, label: [] });
     }
     return {
       width: chartWidth(),

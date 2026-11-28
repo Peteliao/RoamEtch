@@ -462,6 +462,7 @@ export function getMeetSnapshot() {
       keyEpoch: 0,
       protocolMin: MEET_PROTOCOL_MIN,
       protocolMax: MEET_PROTOCOL_MAX,
+      updateRequired: false,
       incompatiblePeers: [],
       peerVisibility: {},
       sharing: false,
@@ -495,6 +496,8 @@ export function getMeetSnapshot() {
     ...(self.hasFix && self.positionStatus === 'fresh' ? [self] : []),
     ...peers.filter((p) => p.networkStatus !== 'left' && p.positionStatus === 'fresh')
   ]);
+  const incompatiblePeers = [...s.incompatiblePeers.values()].map((entry: any) => ({ ...entry }));
+  const updateRequired = incompatiblePeers.some((entry: any) => entry.updateRequired);
   return {
     active: true,
     status: relayStatus(s),
@@ -523,13 +526,15 @@ export function getMeetSnapshot() {
     keyEpoch: s.keyEpoch,
     protocolMin: MEET_PROTOCOL_MIN,
     protocolMax: MEET_PROTOCOL_MAX,
+    updateRequired,
     security: {
       epoch: s.keyEpoch,
       rotated: s.keyEpoch > 0,
       hiddenPeers: [...s.peerVisibility.values()].filter((v) => v === 'hidden').length,
-      incompatiblePeers: s.incompatiblePeers.size
+      incompatiblePeers: s.incompatiblePeers.size,
+      updateRequired
     },
-    incompatiblePeers: [...s.incompatiblePeers.values()].map((entry: any) => ({ ...entry })),
+    incompatiblePeers,
     peerVisibility: Object.fromEntries(s.peerVisibility),
     sharing: s.sharing,
     geoError: s.geoError,
@@ -958,7 +963,11 @@ function rejectIncomingPeer(s: MeetSession, msg: any, verdict: any) {
   const existing = s.incompatiblePeers.get(id);
   if (!existing) {
     const name = cleanName(msg.name) || t('meet.unnamedPeer');
-    s.incompatiblePeers.set(id, { id, name, reason: verdict.reason });
+    s.incompatiblePeers.set(id, {
+      id, name, reason: verdict.reason,
+      peerVersion: Number.isFinite(Number(verdict.peerMin)) ? Number(verdict.peerMin) : null,
+      updateRequired: verdict.reason === 'protocol' || verdict.reason === 'old' || verdict.reason === 'new'
+    });
     pushSystemChat(s, 'incompatible', { name });
     emit('meet:incompatible', { id, name, reason: verdict.reason });
     emitState();
@@ -1319,7 +1328,11 @@ async function handleIncoming(text: string) {
     if (!s.legacyNotices.has(senderId)) {
       s.legacyNotices.add(senderId);
       const name = cleanName(msg.name) || t('meet.unnamedPeer');
-      s.incompatiblePeers.set(senderId, { id: senderId, name, reason: 'protocol' });
+      s.incompatiblePeers.set(senderId, {
+        id: senderId, name, reason: 'protocol',
+        peerVersion: Number.isFinite(Number(msg.v)) ? Number(msg.v) : null,
+        updateRequired: true
+      });
       pushSystemChat(s, 'incompatible', { name });
       emit('meet:incompatible', { id: senderId, name, reason: 'protocol' });
       emitState();
@@ -2217,13 +2230,24 @@ export async function deleteMeetMarker(id: string) {
   return true;
 }
 
-export async function sendMeetGoal({ label = '' }: { label?: string } = {}) {
+export async function sendMeetGoal(options: { label?: string; lat?: number; lon?: number } = {}) {
+  const { label = '', lat, lon } = options;
   const s = session;
   if (!s || s.hostId !== s.self.id) return false;
   const now = Date.now();
-  if (positionStatus(s.self, now, s.sharing) !== 'fresh' || s.self.lat == null || s.self.lon == null) return false;
+  const explicitLocation = 'lat' in options || 'lon' in options;
+  let goalLat = s.self.lat;
+  let goalLon = s.self.lon;
+  if (explicitLocation) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)
+      || Math.abs(lat as number) > 90 || Math.abs(lon as number) > 180) return false;
+    goalLat = lat as number;
+    goalLon = lon as number;
+  } else if (positionStatus(s.self, now, s.sharing) !== 'fresh' || goalLat == null || goalLon == null) {
+    return false;
+  }
   if (sendLimitDenied(s, 'goal', now)) return false;
-  const goal = sanitizeMeetGoal({ la: s.self.lat, lo: s.self.lon, tx: label }, now);
+  const goal = sanitizeMeetGoal({ la: goalLat, lo: goalLon, tx: label }, now);
   if (!goal) return false;
   const ok = await publishPositional({ k: 'goal', id: s.self.id, la: goal.lat, lo: goal.lon, tx: goal.label });
   if (session !== s || !ok) return false;
