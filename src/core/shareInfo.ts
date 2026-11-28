@@ -2,6 +2,7 @@
 // place names sampled along the track via OSM-based reverse geocoding.
 import { haversine, fmtDuration } from './geo';
 import { currentLang } from './i18n';
+import { languageTag } from './language';
 import { applyPrivacy } from './privacy';
 import { migrateLegacyKey } from './storageKeys';
 import { cityFootprintKey, normalizeCityFootprint, type CityFootprint } from './footprint';
@@ -108,14 +109,15 @@ export function tripTimeInfo(full: any) {
   }
   if (first == null || last == null || last <= first) return null;
   const a = new Date(first), b = new Date(last);
+  const locale = languageTag(currentLang());
   const hm = (d: Date) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
   const sameDay = a.toDateString() === b.toDateString();
   return {
     ts: first,
     te: last,
-    date: a.toLocaleDateString(),
+    date: a.toLocaleDateString(locale),
     start: hm(a),
-    end: sameDay ? hm(b) : `${b.toLocaleDateString()} ${hm(b)}`,
+    end: sameDay ? hm(b) : `${b.toLocaleDateString(locale)} ${hm(b)}`,
     durationMs: last - first,
     duration: fmtDuration(last - first)
   };
@@ -168,9 +170,9 @@ async function reverseOne(lat: number, lon: number, signal?: AbortSignal) {
       const gap = Math.max(0, NOMINATIM_GAP - (Date.now() - lastRequestAt));
       if (gap) await new Promise((r) => setTimeout(r, gap));
       lastRequestAt = Date.now();
-      const lang = currentLang() === 'zh' ? 'zh-CN' : 'en';
+      const locale = languageTag(currentLang());
       const nomi = await fetchJson(
-        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=16&addressdetails=1&accept-language=${lang}`,
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=16&addressdetails=1&accept-language=${locale}`,
         signal
       );
       name = nominatimLabel(nomi);
@@ -218,7 +220,8 @@ async function reverseCity(lat: number, lon: number, signal?: AbortSignal): Prom
     const wait = Math.max(0, PHOTON_GAP - (Date.now() - lastRequestAt));
     if (wait) await new Promise((r) => setTimeout(r, wait));
     lastRequestAt = Date.now();
-    const lang = currentLang() === 'zh' ? 'zh' : 'en';
+    const locale = languageTag(currentLang());
+    const lang = locale.split('-')[0];
     const photon = await fetchJson(`https://photon.komoot.io/reverse?lat=${roundedLat}&lon=${roundedLon}&lang=${lang}`, signal);
     const props = photon?.features?.[0]?.properties;
     let name = photonCity(props);
@@ -228,7 +231,7 @@ async function reverseCity(lat: number, lon: number, signal?: AbortSignal): Prom
       const gap = Math.max(0, NOMINATIM_GAP - (Date.now() - lastRequestAt));
       if (gap) await new Promise((r) => setTimeout(r, gap));
       lastRequestAt = Date.now();
-      const acceptLanguage = currentLang() === 'zh' ? 'zh-CN' : 'en';
+      const acceptLanguage = languageTag(currentLang());
       const nomi = await fetchJson(
         `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${roundedLat}&lon=${roundedLon}&zoom=10&addressdetails=1&accept-language=${acceptLanguage}`,
         signal

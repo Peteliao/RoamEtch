@@ -122,7 +122,8 @@ async function performSharedTripImport(shell, hash, fingerprint, shared) {
       }
       if (existing) await storeCore.forgetShareImport(fingerprint);
 
-      const trip = await createTrip({ name: shared.name, activity: shared.activity, status: 'finished' });
+      const sharedName = shared.name === 'Shared trip' ? t('trips.untitled') : shared.name;
+      const trip = await createTrip({ name: sharedName, activity: shared.activity, status: 'finished' });
       const sharedSegments = shared.segments?.length ? shared.segments : [shared.points];
       for (const points of sharedSegments) {
         const seg = await addSegment(trip.id);
@@ -139,7 +140,7 @@ async function performSharedTripImport(shell, hash, fingerprint, shared) {
     if (location.hash !== hash || /[#&]meet=/.test(location.hash)) return true;
     clearSharedFragment(hash);
     if (!await openSharedTrip(shell, result.tripId)) throw new Error('shared-trip-open-failed');
-    if (result.created) toast(t('trips.importOk', { name: shared.name }), 'ok');
+    if (result.created) toast(t('trips.importOk', { name: shared.name === 'Shared trip' ? t('trips.untitled') : shared.name }), 'ok');
     return true;
   } catch (error) {
     sharedImportFailed(error);
@@ -179,9 +180,29 @@ function queueSharedTripImport(shell, hash) {
   return queued;
 }
 
+function migrationActionableMessage(error) {
+  switch (error?.code) {
+    case 'migration-checkpoint-capacity': return t('boot.migrationCheckpointCapacity');
+    case 'migration-checkpoint-failed': return t('boot.migrationCheckpointFailed');
+    case 'migration-checkpoint-verification-failed': return t('boot.migrationCheckpointVerificationFailed');
+    case 'migration-checkpoint-blocked': return t('boot.migrationCheckpointBlocked');
+    case 'migration-rollback-journal-invalid': return t('boot.migrationRollbackJournalInvalid');
+    case 'migration-rollback-verification-failed': return t('boot.migrationRollbackVerificationFailed');
+    case 'migration-rollback-checkpoint-invalid': return t('boot.migrationRollbackCheckpointInvalid');
+    case 'migration-rollback-blocked': return t('boot.migrationRollbackBlocked');
+    case 'migration-rollback-failed': return t('boot.migrationRollbackFailed');
+    default:
+      if (String(error?.code || '').startsWith('migration-checkpoint-')) return t('boot.migrationCheckpointFailed');
+      if (String(error?.code || '').startsWith('migration-rollback-')) return t('boot.migrationRollbackFailed');
+      return '';
+  }
+}
+
 async function boot() {
   const bootSub = document.getElementById('boot-sub');
   await initI18n();
+  const bootLogo = document.querySelector('.boot-logo');
+  if (bootLogo) bootLogo.textContent = t('app.name');
   bootSub && (bootSub.textContent = t('boot.region'));
   initRegion();
 
@@ -320,10 +341,9 @@ boot().catch((e) => {
       : e.code === 'invalid-trip-schema-version'
         ? t('boot.migrationInvalid')
         : t('boot.migrationFailed');
-    const actionable = e.code?.startsWith('migration-checkpoint-') || e.code?.startsWith('migration-rollback-')
-      ? `\n${e.message}` : '';
-    sub.textContent = `${title}${actionable}\n${t('boot.migrationRecovery')}`;
+    const actionable = migrationActionableMessage(e);
+    sub.textContent = `${title}${actionable ? `\n${actionable}` : ''}\n${t('boot.migrationRecovery')}`;
   } else {
-    sub.textContent = 'Boot failed: ' + (e?.message || e);
+    sub.textContent = t('boot.failed', { message: e?.message || e });
   }
 });

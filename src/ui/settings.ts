@@ -4,7 +4,7 @@ import { t } from '../core/i18n';
 import { get, set, patch, resetSettings, MEET_P2P_NOTICE_VERSION } from '../core/settings';
 import { meet } from '../core/meet';
 import { on } from '../core/events';
-import { regionState, setRegionMode, runProbe } from '../core/region';
+import { regionState, setRegionMode, runProbe, simulationModeLabel } from '../core/region';
 import { storageEstimate, requestStoragePersistence, eraseAll, listTrips, TRIP_SCHEMA_VERSION,
   listQuarantinedRows, restoreQuarantinedRows, discardQuarantinedRows } from '../core/store';
 import { inspectStorageHealth, previewMediaCleanup, executeMediaCleanup } from '../core/storageHealth';
@@ -16,6 +16,7 @@ import { exportBackupFlow, restoreBackupFlow, lastBackupLabel, backupDue } from 
 import { appendBackupHistory, clearBackupHistory, listBackupHistory } from '../core/backupHistory';
 import { startPlayback, stopPlayback, isPlaying } from '../core/simulator';
 import { setLanguage, currentLang } from '../core/i18n';
+import { languageTag } from '../core/language';
 import { generatePromo, nextVariant, PROMO_VARIANT_COUNT, promoVariantLabel } from '../core/promo';
 import { setRewalkVoice } from '../core/rewalk';
 import { APP_VERSION } from '../core/version';
@@ -104,7 +105,7 @@ export function createSettingsView(navigate) {
       el('tr', {}, el('td', { class: 'faint' }, t('region.syncJudge')), el('td', { colspan: 2, class: 'faint' }, s.syncGuess === 'cn' ? t('region.cn') : t('region.global')))
     );
     regionNote.textContent = s.simulated
-      ? t('region.simActive', { mode: s.simulated })
+      ? t('region.simActive', { mode: simulationModeLabel(s.simulated) })
       : t('region.coordNote');
   }
   renderProbe();
@@ -134,7 +135,9 @@ export function createSettingsView(navigate) {
   // ---- appearance ----
   const langCard = panel(
     segRow(t('settings.language'), [
-      ['auto', t('settings.langAuto')], ['zh', t('settings.langZh')], ['en', t('settings.langEn')]
+      ['auto', t('settings.langAuto')], ['zh', t('settings.langZh')], ['en', t('settings.langEn')],
+      ['zh-TW', t('settings.langZhTw')], ['ja', t('settings.langJa')],
+      ['ko', t('settings.langKo')], ['es', t('settings.langEs')]
     ], get('language'), (v) => setLanguage(v), t('settings.langNote')),
     segRow(t('settings.units'), [['metric', t('settings.metric')], ['imperial', t('settings.imperial')]], get('units'), (v) => set('units', v)),
     segRow(t('settings.theme'), THEME_OPTIONS.map((option) => [option.id, t(option.labelKey)]),
@@ -310,7 +313,7 @@ export function createSettingsView(navigate) {
   function renderSimBanner() {
     simBanner.innerHTML = '';
     if (get('sim').enabled && get('sim').network !== 'off') {
-      simBanner.append(el('div', { class: 'debug-banner' }, '🧪 ' + t('region.simActive', { mode: get('sim').network })));
+      simBanner.append(el('div', { class: 'debug-banner' }, '🧪 ' + t('region.simActive', { mode: simulationModeLabel(get('sim').network) })));
     }
   }
   renderSimBanner();
@@ -324,7 +327,7 @@ export function createSettingsView(navigate) {
   const debugCard = card('settings', t('settings.debug'),
     simBanner,
     el('div', { class: 'setting-row' },
-      el('div', { class: 'txt' }, el('div', { class: 't' }, t('settings.simNetwork')), el('div', { class: 'd' }, 'CN / Global / offline / CORS')),
+      el('div', { class: 'txt' }, el('div', { class: 't' }, t('settings.simNetwork')), el('div', { class: 'd' }, t('settings.simNetworkHint', { global: t('region.simGlobal'), offline: t('region.simOffline') }))),
       el('label', { class: 'switch' }, simEnable, el('span', { class: 'slider' })), simSel),
     el('div', { class: 'setting-row', style: { flexWrap: 'wrap' } },
       el('div', { class: 'txt' }, el('div', { class: 't' }, t('settings.simPlayback')), el('div', { class: 'd' }, t('settings.simPlaybackHint'))),
@@ -607,7 +610,7 @@ export function createSettingsView(navigate) {
         el('div', { class: 'row wrap', style: { justifyContent: 'space-between', gap: '6px' } },
           el('strong', {}, `${t(`settings.historyKind.${record.kind}`)} · ${t(`settings.historyStatus.${record.status}`)}`),
           el('span', { class: 'small', style: { color: failed ? 'var(--danger)' : 'var(--muted)' } },
-            new Date(record.createdAt).toLocaleString())),
+            new Date(record.createdAt).toLocaleString(languageTag(currentLang())))),
         record.filename ? el('div', { class: 'small mono', style: { marginTop: '4px', wordBreak: 'break-all' } }, record.filename) : null,
         el('div', { class: 'small muted', style: { marginTop: '4px' } },
           t('settings.historyCounts', { trips: record.trips, waypoints: record.waypoints, media: record.media }),
@@ -866,9 +869,9 @@ export function createSettingsView(navigate) {
   const promoCard = card('sparkles', t('settings.promoTitle'),
     el('div', { class: 'promo-hero' },
       el('img', { src: './icons/icon-192.png', alt: '', width: '52', height: '52', loading: 'lazy' }),
-      el('div', { style: { minWidth: '0' } },
-        el('div', { class: 'promo-headline' }, t('app.slogan')),
-        el('div', { class: 'small muted' }, t('app.brandLine')))),
+      el('div', { class: 'small muted promo-brand-line' }, t('app.brandLine')),
+      el('div', { class: 'promo-headline' },
+        el('span', { class: 'promo-slogan' }, t('app.slogan')))),
     el('div', { class: 'small muted', style: { margin: '10px 0' } }, t('settings.promoDesc')),
     promoBtn,
     el('div', { class: 'small faint', style: { marginTop: '8px' } }, t('settings.promoKeep'))

@@ -1,6 +1,7 @@
 // App settings persisted in localStorage. Language / units / region are fully decoupled.
 import { emit } from './events';
 import { isThemeMode } from './themeRegistry';
+import { browserUILanguage, isUILanguage } from './language';
 
 const KEY = 'localtrace.settings.v1';
 
@@ -13,7 +14,7 @@ export const DEFAULT_MEET_STUN = [
 ];
 
 const DEFAULTS = {
-  language: 'auto',            // auto | zh | en   (UI language, independent of region)
+  language: 'auto',            // auto | zh | zh-TW | en | ja | ko | es (UI language, independent of region)
   regionMode: 'auto',          // auto | cn | global  (manual override wins)
   units: 'metric',             // metric | imperial
   theme: 'dark',               // auto or any stable id in themeRegistry
@@ -149,7 +150,6 @@ function persist(s) {
 
 export function resolvedLanguage() {
   const l = get('language');
-  if (l === 'zh' || l === 'en') return l;
-  const nav = (navigator.language || 'en').toLowerCase();
-  return nav.startsWith('zh') ? 'zh' : 'en';
+  if (isUILanguage(l)) return l;
+  return browserUILanguage(navigator.language);
 }

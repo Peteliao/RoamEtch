@@ -1,4 +1,5 @@
-import { t } from '../core/i18n';
+import { currentLang, t } from '../core/i18n';
+import { languageTag } from '../core/language';
 import { routeRepository } from '../core/routeRepository';
 import { fmtAltitude, fmtDistance, fmtDuration, fmtPace, fmtSpeed, wgs84TrackBounds } from '../core/geo';
 import { get } from '../core/settings';
@@ -251,7 +252,7 @@ export function openTrackComparison(trips, initialAId = null) {
   const resultBox = el('div', { class: 'compare-result' });
   const historyBox = el('section', { class: 'compare-history', 'aria-label': t('compare.historyTitle') });
   const select = (value, side) => el('select', { class: 'input compare-select', 'aria-label': t(`compare.track${side}`) },
-    ...usable.map((trip) => el('option', { value: trip.id, selected: trip.id === value }, trip.name || new Date(trip.createdAt).toLocaleString())));
+    ...usable.map((trip) => el('option', { value: trip.id, selected: trip.id === value }, trip.name || new Date(trip.createdAt).toLocaleString(languageTag(currentLang())))));
   const aSelect = select(aId, 'A');
   const bSelect = select(bId, 'B');
   aSelect.onchange = () => {
@@ -283,7 +284,7 @@ export function openTrackComparison(trips, initialAId = null) {
       suggestions.length ? el('div', { class: 'compare-history-list' },
         ...suggestions.map((trip) => {
           const timestamp = new Date(trip.createdAt).getTime();
-          const date = Number.isFinite(timestamp) ? new Date(timestamp).toLocaleDateString() : '';
+          const date = Number.isFinite(timestamp) ? new Date(timestamp).toLocaleDateString(languageTag(currentLang())) : '';
           const stats = trip.statsCache || trip.stats || {};
           const name = trip.name || date || t('compare.untitled');
           const detail = [date, distanceText(Number(stats.distance), units)].filter(Boolean).join(' · ');

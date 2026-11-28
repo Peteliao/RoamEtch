@@ -22,7 +22,7 @@ export default defineConfig({
       registerType: 'prompt',
       includeAssets: ['icons/*.svg', 'icons/*.png'],
       manifest: {
-        name: 'RoamEtch迹刻 · 行程记录',
+        name: 'RoamEtch',
         short_name: 'RoamEtch',
         description: 'Offline-first GPS recorder for road trips, hiking, cycling and travel',
         theme_color: '#000000',

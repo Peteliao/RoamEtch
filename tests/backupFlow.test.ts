@@ -25,7 +25,7 @@ vi.mock('../src/core/settings', () => ({ get: vi.fn(() => 0), set: mocks.set }))
 vi.mock('../src/core/events', () => ({ emit: mocks.emit, on: vi.fn() }));
 vi.mock('../src/core/gpx', () => ({ triggerDownload: mocks.triggerDownload }));
 vi.mock('../src/core/shareEnv', () => ({ isWeChat: () => false, wechatFileGuidance: vi.fn() }));
-vi.mock('../src/core/i18n', () => ({ t: (key: string) => key }));
+vi.mock('../src/core/i18n', () => ({ t: (key: string) => key, currentLang: () => 'zh' }));
 vi.mock('../src/ui/helpers', async (importOriginal) => ({
   ...await importOriginal<typeof import('../src/ui/helpers')>(),
   toast: mocks.toast
@@ -131,7 +131,7 @@ describe('backup flow history', () => {
     mocks.inspectBackup.mockRejectedValueOnce(error);
 
     await expect(restoreBackupFlow(new File(['backup'], 'large.trip'))).resolves.toBe(false);
-    expect(mocks.toast).toHaveBeenCalledWith(error.message, 'err', 7000);
+    expect(mocks.toast).toHaveBeenCalledWith('backup.limitExceeded', 'err', 7000);
     expect(mocks.restoreBackup).not.toHaveBeenCalled();
   });
 });

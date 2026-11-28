@@ -14,7 +14,8 @@ import { tripTimeInfo, routePlaceNames } from './shareInfo';
 import { WP_ICONS } from './waypointMeta';
 import { estimateCalories } from './calories';
 import { get } from './settings';
-import { t } from './i18n';
+import { currentLang, t } from './i18n';
+import { languageTag } from './language';
 import { createMusicSession } from './music';
 import { makeVideoRecorder, videoSupported } from './videoCapture';
 import { buildProfile, drawProfileChart, altitudeInUnit, distanceInUnit, speedInUnit } from './profileChart';
@@ -372,7 +373,7 @@ export async function generateTrackVideo(full, {
   canvas.width = W; canvas.height = H;
   const ctx = canvas.getContext('2d');
   const name = (full.trip.name || t('record.newTripName')).slice(0, 20);
-  const dateStr = time?.date || new Date(full.trip.createdAt).toLocaleDateString();
+  const dateStr = time?.date || new Date(full.trip.createdAt).toLocaleDateString(languageTag(currentLang()));
   const activity = t(`record.activities.${full.trip.activity}`);
 
   function drawNodePulse(n, replayMs, alpha, cam) {

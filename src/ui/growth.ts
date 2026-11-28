@@ -1,4 +1,5 @@
-import { t } from '../core/i18n';
+import { currentLang, t } from '../core/i18n';
+import { languageTag } from '../core/language';
 import { get } from '../core/settings';
 import { routeRepository } from '../core/routeRepository';
 import { fmtAltitude, fmtDistance, fmtDuration, fmtPace, fmtSpeed } from '../core/geo';
@@ -180,7 +181,7 @@ function recordDetails(record, units) {
   return el('details', { class: 'growth-record-source' },
     el('summary', {}, t('growth.recordSource')),
     el('dl', {},
-      el('div', {}, el('dt', {}, t('growth.recordDate')), el('dd', {}, `${record.date} · ${new Date(record.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`)),
+      el('div', {}, el('dt', {}, t('growth.recordDate')), el('dd', {}, `${record.date} · ${new Date(record.timestamp).toLocaleTimeString(languageTag(currentLang()), { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`)),
       el('div', {}, el('dt', {}, t('growth.recordElapsed')), el('dd', {}, fmtDuration(record.elapsedMs))),
       el('div', {}, el('dt', {}, t('growth.recordMoving')), el('dd', {}, fmtDuration(record.movingMs))),
       el('div', {}, el('dt', {}, t('growth.recordPace')), el('dd', {}, `${pace.v}${pace.u} · ${speed.v} ${speed.u}`)),

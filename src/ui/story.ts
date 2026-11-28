@@ -2,6 +2,7 @@
 // offline sun times, node notes and a printable travel book.
 import { t, currentLang } from '../core/i18n';
 import { get } from '../core/settings';
+import { languageTag } from '../core/language';
 import { on } from '../core/events';
 import { fmtDistance, fmtDuration, fmtAltitude } from '../core/geo';
 import { buildStoryDays, normalizeStory, storyTitle, storySummary } from '../core/story';
@@ -30,13 +31,11 @@ type WeatherEntry = {
 };
 
 function fmtClock(ms) {
-  const lang = currentLang();
-  return new Date(ms).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' });
+  return new Date(ms).toLocaleTimeString(languageTag(currentLang()), { hour: '2-digit', minute: '2-digit' });
 }
 
 function fmtDayDate(day: string) {
-  const lang = currentLang();
-  return new Date(`${day}T12:00:00`).toLocaleDateString(lang === 'zh' ? 'zh-CN' : 'en-US', {
+  return new Date(`${day}T12:00:00`).toLocaleDateString(languageTag(currentLang()), {
     month: 'short', day: 'numeric', weekday: 'long'
   });
 }

@@ -3,6 +3,11 @@ import i18next from 'i18next';
 import { get, resolvedLanguage, set } from './settings';
 import { emit } from './events';
 import { THEME_DEFINITIONS } from './themeRegistry';
+import { languageTag } from './language';
+import zhTW from '../locales/zh-TW';
+import ja from '../locales/ja';
+import ko from '../locales/ko';
+import es from '../locales/es';
 
 const zh = {
   app: {
@@ -15,12 +20,22 @@ const zh = {
   },
   boot: {
     init: '正在初始化…', region: '识别服务环境…',
+    failed: '启动失败：{{message}}',
     migrationAdvisory: '升级前发现 {{n}} 项数据提示，原始记录已保留',
     damagedIsolated: '已将 {{n}} 条损坏记录移入隔离区，可在设置中备份或恢复',
     migrationFailed: '数据库升级或校验失败，未清除任何行程数据。',
     migrationFuture: '此数据由更新版本创建，请使用对应版本打开。',
     migrationInvalid: '检测到无效的行程数据版本，升级已中止。',
-    migrationRecovery: '请保留现场并重新加载；若仍失败，请使用原版本导出备份或通过已验证备份恢复。'
+    migrationRecovery: '请保留现场并重新加载；若仍失败，请使用原版本导出备份或通过已验证备份恢复。',
+    migrationCheckpointCapacity: '无法创建已验证的迁移恢复点：浏览器存储空间不足或配额受限。请释放空间或关闭其他标签页后重试；数据库未升级。',
+    migrationCheckpointFailed: '无法创建已验证的迁移恢复点；数据库未升级。',
+    migrationCheckpointVerificationFailed: '迁移恢复点校验失败。请保留恢复点，不要升级源数据库。',
+    migrationCheckpointBlocked: '另一个标签页或浏览器扩展阻止了迁移恢复点操作。请关闭其他漫游有迹标签页或拦截软件后重试。',
+    migrationRollbackJournalInvalid: '持久化迁移回滚日志无效。请保持数据库关闭并保留所有恢复数据库。',
+    migrationRollbackVerificationFailed: '恢复数据库的数据与已验证恢复点不一致。',
+    migrationRollbackCheckpointInvalid: '恢复点结构与本次失败的迁移不匹配。',
+    migrationRollbackBlocked: '另一个标签页或浏览器扩展阻止了自动迁移回滚。已验证的恢复数据库和恢复点已保留。',
+    migrationRollbackFailed: '无法验证自动迁移回滚。恢复点及临时恢复数据库已保留。'
   },
   tabs: { record: '记录', meet: '组队', trips: '行程', analysis: '分析', export: '分享', settings: '设置' },
   common: {
@@ -29,6 +44,7 @@ const zh = {
     confirm: '确认', clear: '清空', copy: '复制', copied: '已复制', open: '打开', export: '导出',
     import: '导入', preview: '预览', apply: '应用', reset: '重置', yes: '是', no: '否',
     unavailable: '不可用', offline: '离线', online: '在线', seconds: '秒', meters: '米', km: '公里', days: '天',
+    previous: '上一张', next: '下一张', jpegImage: 'JPEG 图片',
     fullscreen: '全屏', exitFullscreen: '退出全屏'
   },
   camera: {
@@ -90,7 +106,7 @@ const zh = {
     switchHint: '切换服务环境不影响本地已存数据与界面语言',
     modeAuto: '自动识别', modeCn: '国内方案', modeGlobal: '海外方案',
     probeTitle: '节点连通状态', syncJudge: '同步初判', probeResult: '探活结果',
-    simActive: '网络模拟已启用：{{mode}}', bothFail: '双节点超时，保持初判结果',
+    simActive: '网络模拟已启用：{{mode}}', simCn: 'CN', simGlobal: '全球', simOffline: '离线', simCorsFail: 'CORS 失败', bothFail: '双节点超时，保持初判结果',
     coordNote: '坐标转换仅取决于底图坐标系与中国大陆围栏，与网络环境无关'
   },
   record: {
@@ -515,7 +531,7 @@ const zh = {
     styleCs: '坐标系',
     layers: '地图图层',
     layerNote: '底图仅影响显示；轨迹始终按 WGS-84 存储，切换图源不会改变数据。',
-    vectorShort: '矢量'
+    vectorShort: '矢量', customSource: '自定义图源'
   },
   growth: {
     title: '年度运动报告', openReport: '年度报告', year: '年份', activity: '活动', allActivities: '全部活动', localOnly: '全部统计仅在本机完成，不上传轨迹',
@@ -606,7 +622,7 @@ const zh = {
     wpStart: '香山入口', wpView: '观景台', wpPhoto: '拍照点', wpFood: '补给点', wpEnd: '环线终点'
   },
   trips: {
-    title: '我的行程', empty: '还没有行程', emptyHint: '去「记录」页开始你的第一段行程',
+    title: '我的行程', untitled: '未命名行程', empty: '还没有行程', emptyHint: '去「记录」页开始你的第一段行程',
     open: '打开', rename: '重命名', deleteConfirm: '删除该行程及其所有数据？此操作不可撤销。',
     deleted: '行程已删除', renamed: '行程已更新',
     points: '{{n}} 点', distance: '{{v}}', duration: '{{v}}',
@@ -619,11 +635,12 @@ const zh = {
     batchImportOk: '成功导入 {{ok}} 个行程', batchImportPartial: '导入 {{ok}} 个，失败 {{fail}} 个',
     batchExportTitle: '批量导出行程', batchExportHint: '勾选行程后打包为 ZIP，每个行程一个文件，可直接批量导入',
     selectAll: '全选', selectNone: '全不选', exportZip: '导出 ZIP',
-    batchExportOk: '已导出 {{n}} 个行程', batchNone: '请至少选择一个行程',
+    batchExportOk: '已导出 {{n}} 个行程', batchExportOk_one: '已导出 {{n}} 个行程', batchExportOk_other: '已导出 {{n}} 个行程', batchNone: '请至少选择一个行程',
     rewalk: '重走行程', format: '格式',
     backup: '整库备份', restore: '恢复备份',
-    backupOk: '备份已导出（{{n}} 条行程）', restoreOk: '已恢复 {{n}} 条行程',
-    restoreConflict: '发现 {{n}} 条同 ID 行程',
+    backupOk: '备份已导出（{{n}} 条行程）', backupOk_one: '备份已导出（{{n}} 条行程）', backupOk_other: '备份已导出（{{n}} 条行程）',
+    restoreOk: '已恢复 {{n}} 条行程', restoreOk_one: '已恢复 {{n}} 条行程', restoreOk_other: '已恢复 {{n}} 条行程',
+    restoreConflict: '发现 {{n}} 条同 ID 行程', restoreConflict_one: '发现 {{n}} 条同 ID 行程', restoreConflict_other: '发现 {{n}} 条同 ID 行程',
     conflictSkip: '跳过重复', conflictOverwrite: '覆盖本地',
     restoreErr: '备份文件无效或已损坏',
     storage: '存储空间', storageWarn: '存储空间不足，建议立即整库备份',
@@ -697,7 +714,7 @@ const zh = {
     intro: '序言', introPh: '这段旅程从哪里开始？想记住什么？',
     saved: '已保存', saveFail: '保存失败',
     days: '天', nodes: '个节点', photos: '张照片', distance: '里程', ascent: '爬升', duration: '时长',
-    dayCount: '{{n}} 天',
+    dayCount: '{{n}} 天', dayCount_one: '{{n}} 天', dayCount_other: '{{n}} 天',
     addPhotos: '自动关联照片', addPhotosHint: '读取 EXIF 时间与 GPS，先预览再确认',
     exportBook: '导出手账', exportBookTitle: '导出手账',
     exportBookHint: '生成可打印的单文件 HTML；导出前统一应用隐私裁剪。',
@@ -762,6 +779,7 @@ const zh = {
     unlockIntro: '这是一个加密备份。请输入导出时设置的密码，以解锁并校验内容。',
     unlockAction: '解锁', wrongPassword: '密码错误或文件已损坏，请重试。',
     unsupported: '此备份使用了不支持的加密格式，请升级应用后重试。',
+    limitExceeded: '备份超过安全恢复上限。请拆分行程导出多个完整备份；若只需轨迹，可改用 GPX（不含照片和分享导入历史）。',
     encrypted: '加密方式', encryptedValue: 'AES-256-GCM · PBKDF2',
     encryptedNote: '加密备份已解锁，内容通过完整性校验。',
     previewTitle: '恢复备份', exportedAt: '导出时间', contents: '备份内容',
@@ -1044,7 +1062,7 @@ const zh = {
     includePhotos: '海报包含节点照片',
     htmlSize: '体积档位', htmlClear: '清晰', htmlLight: '轻量', htmlNone: '纯文字（无照片）',
     htmlEstimate: '预计约 {{size}} · 照片按缩略图估算',
-    htmlWarn: '文件较大（{{size}}），分享可能受限'
+    htmlWarn: '文件较大（{{size}}），分享可能受限', failed: '分享内容生成失败，请重试'
   },
   install: {
     title: '把 RoamEtch迹刻放到手机桌面',
@@ -1094,7 +1112,7 @@ const zh = {
     sub2: '年度足迹 · 验证备份 · 配乐回顾',
     cardLive: '记录中',
     cta: '扫码免费体验',
-    footer: '免费开源 · 中文 / English · 可添加到手机桌面',
+    footer: '免费开源 · 支持简体、繁體、English、日本語、한국어、Español · 可添加到手机桌面',
     f1t: '年度足迹', f1d: '收藏、标签与年度统计',
     f2t: '验证备份', f2d: 'SHA-256 校验，换机安心',
     f3t: '加密组队', f3d: '位置与聊天端到端加密',
@@ -1168,7 +1186,7 @@ const zh = {
         sub2: '隐私圈与敏感节点，让分享范围由你决定',
         feature1: 'GPX 导入导出', feature2: '起终点隐私圈', feature3: '缓存后可离线使用',
         cta: '记录下一段自己的路',
-        caption: '给独立户外人的轨迹工具｜RoamEtch迹刻\n\n徒步、骑行、越野跑或 Citywalk，无需账号即可开始。轨迹与照片默认存于本机，隐私圈、敏感节点与 EXIF 剥离帮助控制分享内容。缓存后可离线使用，首次访问、未缓存区域与在线服务仍需联网。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #户外记录 #隐私圈 #GPX'
+        caption: '给独立户外人的轨迹工具｜RoamEtch迹刻\n\n徒步、骑行、越野跑或 Citywalk，无需账号即可开始。轨迹与照片默认存于本机，隐私圈、敏感节点与 EXIF 剥离帮助控制分享内容。缓存后可离线使用，首次访问、未缓存区域与在线服务仍需联网。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #户外记录 #隐私圈 #GPX'
       },
       roadCrews: {
         label: '临时车队', eyebrow: '实时组队 · 加密聊天 · 原图点对点',
@@ -1177,7 +1195,7 @@ const zh = {
         sub2: '位置与聊天加密传输，房间到时关闭',
         feature1: 'AES-256-GCM', feature2: '限时房间', feature3: '原图按需加载',
         cta: '邀请队友，查看实时位置',
-        caption: '给临时结伴与自驾车队的组队工具｜RoamEtch迹刻\n\n邀请链接加入实时组队，位置与聊天使用 AES-256-GCM 加密；房间可选 1 / 2 / 4 / 8 小时。原图通过 WebRTC 按需直传，中继可见密文与网络元数据。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #实时组队 #自驾车队 #加密聊天'
+        caption: '给临时结伴与自驾车队的组队工具｜RoamEtch迹刻\n\n邀请链接加入实时组队，位置与聊天使用 AES-256-GCM 加密；房间可选 1 / 2 / 4 / 8 小时。原图通过 WebRTC 按需直传，中继可见密文与网络元数据。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #实时组队 #自驾车队 #加密聊天'
       },
       travelCreators: {
         label: '旅行创作', eyebrow: '海报 · 年度足迹 · 回顾视频',
@@ -1186,7 +1204,7 @@ const zh = {
         sub2: '海报与自包含 HTML，适合保存与分享',
         feature1: '年度足迹', feature2: '本机合成视频', feature3: '自包含 HTML',
         cta: '把下一段旅程做成作品',
-        caption: '给旅行创作者的记录与分享工具｜RoamEtch迹刻\n\n用节点、笔记与照片整理旅途，导出回顾视频、年度足迹海报或自包含 HTML。视频在本机合成，支持自定义循环配乐；分享前可检查隐私圈与敏感节点。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #旅行创作 #视频回顾 #年度足迹'
+        caption: '给旅行创作者的记录与分享工具｜RoamEtch迹刻\n\n用节点、笔记与照片整理旅途，导出回顾视频、年度足迹海报或自包含 HTML。视频在本机合成，支持自定义循环配乐；分享前可检查隐私圈与敏感节点。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #旅行创作 #视频回顾 #年度足迹'
       },
       crossBorder: {
         label: '跨国与部署', eyebrow: '双区服务 · WGS-84 · 加密备份',
@@ -1204,7 +1222,7 @@ const zh = {
         sub2: 'WebCrypto、WebRTC 与 MQTT，构成组队链路',
         feature1: 'GPL-3.0 开源', feature2: 'PWA 可安装', feature3: '浏览器原生 API',
         cta: '阅读源码，参与贡献',
-        caption: '给前端开发者与开源学习者的项目｜RoamEtch迹刻\n\n原生 TypeScript 与 DOM 构建界面，MapLibre、IndexedDB、WebCrypto、WebRTC 与 MQTT 协作完成地图、存储、加密与原图传输。项目以 GPL-3.0 开源，欢迎阅读源码、提交 issue 或 PR。\n\n中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #TypeScript #MapLibre #OpenSource'
+        caption: '给前端开发者与开源学习者的项目｜RoamEtch迹刻\n\n原生 TypeScript 与 DOM 构建界面，MapLibre、IndexedDB、WebCrypto、WebRTC 与 MQTT 协作完成地图、存储、加密与原图传输。项目以 GPL-3.0 开源，欢迎阅读源码、提交 issue 或 PR。\n\n支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #TypeScript #MapLibre #OpenSource'
       },
       athletes: {
         label: '耐力训练', eyebrow: '徒步 · 骑行 · 跑步 · 自驾',
@@ -1213,7 +1231,7 @@ const zh = {
         sub2: '已完成行程可修改活动类型并重算指标',
         feature1: '高程与速度', feature2: '活动类型可编辑', feature3: '热量按活动估算',
         cta: '复盘下一次训练',
-        caption: '给耐力运动与训练复盘者的轨迹工具｜RoamEtch迹刻\n\n查看海拔、速度、累计爬升与分段统计；已完成行程可以修改活动类型并重算相关指标。徒步、骑行、跑步与旅行提供热量估算，海拔、坡度与热量数据仅供参考。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #耐力训练 #轨迹分析 #户外运动'
+        caption: '给耐力运动与训练复盘者的轨迹工具｜RoamEtch迹刻\n\n查看海拔、速度、累计爬升与分段统计；已完成行程可以修改活动类型并重算相关指标。徒步、骑行、跑步与旅行提供热量估算，海拔、坡度与热量数据仅供参考。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #耐力训练 #轨迹分析 #户外运动'
       },
       commuters: {
         label: '城市通勤', eyebrow: '步行 · 骑行 · 通勤记录',
@@ -1222,7 +1240,7 @@ const zh = {
         sub2: '多活动分析与城市足迹，逐渐积累日常路线',
         feature1: '暂停续记', feature2: '多维轨迹统计', feature3: '城市足迹',
         cta: '记录今天的通勤路线',
-        caption: '给城市通勤与步行骑行者的记录工具｜RoamEtch迹刻\n\n记录通勤、步行与骑行路线，暂停后可从新分段继续；查看距离、移动时间、速度与活动统计。日常轨迹默认存于本机，可导出 GPX 或整理进城市足迹。\n\n无需账号，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #城市通勤 #步行 #骑行记录'
+        caption: '给城市通勤与步行骑行者的记录工具｜RoamEtch迹刻\n\n记录通勤、步行与骑行路线，暂停后可从新分段继续；查看距离、移动时间、速度与活动统计。日常轨迹默认存于本机，可导出 GPX 或整理进城市足迹。\n\n无需账号，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #城市通勤 #步行 #骑行记录'
       },
       family: {
         label: '亲子家庭', eyebrow: '实时位置 · 限时房间 · 加密聊天',
@@ -1231,7 +1249,7 @@ const zh = {
         sub2: '房间到期关闭，本机会话在退出后清除',
         feature1: '队员标记区分', feature2: '加密聊天', feature3: '限时房间',
         cta: '创建家庭实时组队',
-        caption: '给亲子与家庭户外活动的组队工具｜RoamEtch迹刻\n\n发起人与队员使用不同地图标记，可查看实时位置、距离与方向。位置与聊天加密传输，房间可选 1 / 2 / 4 / 8 小时；退出后清除本机会话，不补发历史。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #家庭户外 #实时位置 #亲子出行'
+        caption: '给亲子与家庭户外活动的组队工具｜RoamEtch迹刻\n\n发起人与队员使用不同地图标记，可查看实时位置、距离与方向。位置与聊天加密传输，房间可选 1 / 2 / 4 / 8 小时；退出后清除本机会话，不补发历史。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #家庭户外 #实时位置 #亲子出行'
       },
       overland: {
         label: '长途自驾', eyebrow: '离线瓦片 · OLED 口袋锁 · 后台续记',
@@ -1240,7 +1258,7 @@ const zh = {
         sub2: 'OLED 口袋锁降低屏幕耗电，返回后可继续记录',
         feature1: '缓存瓦片', feature2: 'OLED 口袋锁', feature3: '断点分段',
         cta: '为长途路线做好准备',
-        caption: '给长途自驾与露营旅行者的轨迹工具｜RoamEtch迹刻\n\n提前缓存所需界面与地图瓦片，长断点会明确分段，返回页面后可继续记录。OLED 口袋锁提供纯黑界面与亮度调节；未缓存区域、在线服务及首次访问仍需联网，系统也可能暂停后台定位。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #长途自驾 #离线地图 #露营'
+        caption: '给长途自驾与露营旅行者的轨迹工具｜RoamEtch迹刻\n\n提前缓存所需界面与地图瓦片，长断点会明确分段，返回页面后可继续记录。OLED 口袋锁提供纯黑界面与亮度调节；未缓存区域、在线服务及首次访问仍需联网，系统也可能暂停后台定位。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #长途自驾 #离线地图 #露营'
       },
       eventLeads: {
         label: '活动领队', eyebrow: '实时地图 · 队员列表 · 房间计时',
@@ -1249,7 +1267,7 @@ const zh = {
         sub2: '房间设置 1 / 2 / 4 / 8 小时有效期',
         feature1: '队员实时位置', feature2: '发起人标记区分', feature3: '到时关闭房间',
         cta: '发起下一场活动组队',
-        caption: '给俱乐部与活动领队的实时组队工具｜RoamEtch迹刻\n\n发起活动后，队员通过邀请链接加入；地图区分发起人与队员，并显示位置、距离与方向。位置与聊天加密传输，房间按设定时间关闭，中继不提供历史回放。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #活动领队 #实时组队 #户外俱乐部'
+        caption: '给俱乐部与活动领队的实时组队工具｜RoamEtch迹刻\n\n发起活动后，队员通过邀请链接加入；地图区分发起人与队员，并显示位置、距离与方向。位置与聊天加密传输，房间按设定时间关闭，中继不提供历史回放。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #活动领队 #实时组队 #户外俱乐部'
       },
       fieldResearch: {
         label: '野外调查', eyebrow: '节点照片 · GPX · 敏感信息控制',
@@ -1258,7 +1276,7 @@ const zh = {
         sub2: '导出前隐藏敏感节点与起终点隐私圈',
         feature1: 'GPX 批量导入', feature2: '节点照片', feature3: '敏感节点隐藏',
         cta: '整理下一份野外记录',
-        caption: '给野外调查与公民科学记录者的轨迹工具｜RoamEtch迹刻\n\n用节点关联位置、名称、笔记与照片，支持 GPX、XML 与 ZIP 批量导入。导出前可隐藏敏感节点与起终点隐私圈；海拔、坡度与定位精度仍受设备和服务影响。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #野外调查 #公民科学 #GPX'
+        caption: '给野外调查与公民科学记录者的轨迹工具｜RoamEtch迹刻\n\n用节点关联位置、名称、笔记与照片，支持 GPX、XML 与 ZIP 批量导入。导出前可隐藏敏感节点与起终点隐私圈；海拔、坡度与定位精度仍受设备和服务影响。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #野外调查 #公民科学 #GPX'
       },
       dataStewards: {
         label: '轨迹数据', eyebrow: 'GPX · GeoJSON · KML · ZIP',
@@ -1267,7 +1285,7 @@ const zh = {
         sub2: '支持 GPX、GeoJSON、KML 导出，统一 WGS-84 存储',
         feature1: '批量导入', feature2: '三种导出格式', feature3: 'SHA-256 校验备份',
         cta: '导入并整理轨迹文件',
-        caption: '给 GPX 与轨迹数据整理者的工具｜RoamEtch迹刻\n\n支持 GPX、XML 与 ZIP 批量导入，按分段和节点整理轨迹；可导出 GPX、GeoJSON、KML，统一按 WGS-84 存储。整库备份可加密，并通过 SHA-256 校验文件完整性。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #GPX #GeoJSON #轨迹数据'
+        caption: '给 GPX 与轨迹数据整理者的工具｜RoamEtch迹刻\n\n支持 GPX、XML 与 ZIP 批量导入，按分段和节点整理轨迹；可导出 GPX、GeoJSON、KML，统一按 WGS-84 存储。整库备份可加密，并通过 SHA-256 校验文件完整性。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #GPX #GeoJSON #轨迹数据'
       },
       yearlyMemory: {
         label: '年度记忆', eyebrow: '12 个月 · 城市足迹 · 收藏标签',
@@ -1276,7 +1294,7 @@ const zh = {
         sub2: '年度图片与 9 秒视频，为一年留下可分享的切片',
         feature1: '12 个月统计', feature2: '年度图片', feature3: '9 秒回顾视频',
         cta: '生成今年的年度足迹',
-        caption: '给年度足迹与记忆收藏者的分享工具｜RoamEtch迹刻\n\n把 12 个月的里程、爬升、出发天数、收藏标签与城市足迹整理成年度页面，生成足迹图片或 9 秒回顾视频。分享图片提供年度汇总，不含精确坐标、轨迹与照片。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #年度足迹 #年度回顾 #旅行记忆'
+        caption: '给年度足迹与记忆收藏者的分享工具｜RoamEtch迹刻\n\n把 12 个月的里程、爬升、出发天数、收藏标签与城市足迹整理成年度页面，生成足迹图片或 9 秒回顾视频。分享图片提供年度汇总，不含精确坐标、轨迹与照片。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #年度足迹 #年度回顾 #旅行记忆'
       },
       nightOled: {
         label: '夜行与 OLED', eyebrow: '纯黑界面 · 长按口袋锁 · 亮度调节',
@@ -1285,7 +1303,7 @@ const zh = {
         sub2: '右键长按 3 秒休眠，左键长按 1.5 秒解锁',
         feature1: '120px 相机滑钮', feature2: '前景亮度可调', feature3: '长按快速锁定',
         cta: '设置夜间口袋锁',
-        caption: '给夜行与 OLED 界面用户的记录工具｜RoamEtch迹刻\n\nOLED 口袋锁使用纯黑界面，支持前景亮度调节与 120px 相机滑钮。右键长按 3 秒进入休眠，左键长按 1.5 秒解锁；口袋锁不会自动结束正在进行的记录。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #OLED #夜行记录 #口袋锁'
+        caption: '给夜行与 OLED 界面用户的记录工具｜RoamEtch迹刻\n\nOLED 口袋锁使用纯黑界面，支持前景亮度调节与 120px 相机滑钮。右键长按 3 秒进入休眠，左键长按 1.5 秒解锁；口袋锁不会自动结束正在进行的记录。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #OLED #夜行记录 #口袋锁'
       },
       dogWalkers: {
         label: '遛宠散步', eyebrow: '日常步行 · 节点照片 · 城市足迹',
@@ -1294,7 +1312,7 @@ const zh = {
         sub2: '无需账号，轨迹与照片默认存于本机',
         feature1: '步行记录', feature2: '照片节点', feature3: '城市足迹',
         cta: '收藏今天的散步路线',
-        caption: '给遛宠与日常散步者的记录工具｜RoamEtch迹刻\n\n记录每天散步路线，添加节点、笔记与照片，查看距离、时长与活动统计。轨迹与照片默认存于本机，无需账号；积累的城市足迹可在年度回顾中查看。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #遛宠 #日常散步 #城市足迹'
+        caption: '给遛宠与日常散步者的记录工具｜RoamEtch迹刻\n\n记录每天散步路线，添加节点、笔记与照片，查看距离、时长与活动统计。轨迹与照片默认存于本机，无需账号；积累的城市足迹可在年度回顾中查看。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #遛宠 #日常散步 #城市足迹'
       },
       siteVisits: {
         label: '现场服务', eyebrow: '到访节点 · 现场照片 · 活动编辑',
@@ -1303,7 +1321,7 @@ const zh = {
         sub2: '已完成行程可修改活动类型并重算相关指标',
         feature1: '到访节点', feature2: '活动类型可编辑', feature3: 'GPX 导出',
         cta: '记录下一次现场到访',
-        caption: '给独立巡检与现场服务者的记录工具｜RoamEtch迹刻\n\n用节点标记到访位置，补充名称、笔记与现场照片；行程可导出 GPX，活动类型也能在完成后修改并重算指标。敏感节点与起终点隐私圈可在导出前隐藏。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #现场巡检 #到访记录 #GPX'
+        caption: '给独立巡检与现场服务者的记录工具｜RoamEtch迹刻\n\n用节点标记到访位置，补充名称、笔记与现场照片；行程可导出 GPX，活动类型也能在完成后修改并重算指标。敏感节点与起终点隐私圈可在导出前隐藏。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #现场巡检 #到访记录 #GPX'
       },
       lovedOnes: {
         label: '亲友分享', eyebrow: '自包含 HTML · 海报 · 保存与分享',
@@ -1312,18 +1330,18 @@ const zh = {
         sub2: '也可保存年度足迹图片，复制对应分享文案',
         feature1: '单文件 HTML', feature2: '年度足迹图片', feature3: '一键复制文案',
         cta: '把旅程分享给想念的人',
-        caption: '给亲友分享者的旅行记录工具｜RoamEtch迹刻\n\n把行程导出为自包含 HTML，在浏览器中打开；也可以生成年度足迹图片，并复制配套分享文案。分享前请检查隐私圈与敏感节点，HTML 会包含你选择导出的内容。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #旅行分享 #年度足迹 #HTML'
+        caption: '给亲友分享者的旅行记录工具｜RoamEtch迹刻\n\n把行程导出为自包含 HTML，在浏览器中打开；也可以生成年度足迹图片，并复制配套分享文案。分享前请检查隐私圈与敏感节点，HTML 会包含你选择导出的内容。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #旅行分享 #年度足迹 #HTML'
       }
     },
     shareTitle: 'RoamEtch迹刻 · 把旅程留在本机',
-    caption: '把轨迹留在本机，把旅程变成作品｜RoamEtch迹刻\n\n无需注册。行程、照片与年度足迹默认存于本机；底图、海拔等服务会按需联网。\n\n年度足迹 · 收藏、标签与年度统计\n可验证备份 · SHA-256 校验，换机更安心\n加密组队 · 位置与聊天端到端加密\n配乐回顾 · 自制循环音乐，导出回顾视频\n\n免费开源，中文 / English。打开网页即可记录，也能添加到手机桌面。\n{{url}}\n\n#RoamEtch #迹刻 #轨迹记录 #开源 #隐私保护',
+    caption: '把轨迹留在本机，把旅程变成作品｜RoamEtch迹刻\n\n无需注册。行程、照片与年度足迹默认存于本机；底图、海拔等服务会按需联网。\n\n年度足迹 · 收藏、标签与年度统计\n可验证备份 · SHA-256 校验，换机更安心\n加密组队 · 位置与聊天端到端加密\n配乐回顾 · 自制循环音乐，导出回顾视频\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。打开网页即可记录，也能添加到手机桌面。\n{{url}}\n\n#RoamEtch #迹刻 #轨迹记录 #开源 #隐私保护',
     caption2: '一年走过的路，都在这一页｜RoamEtch迹刻\n\n里程、爬升、出发天数与 12 个月节奏，汇成年度足迹，可生成图片或视频。分享图片提供年度汇总，不含精确坐标、轨迹与照片。\n\n轨迹与照片默认存于本机，无需注册。\n{{url}}\n\n#RoamEtch #迹刻 #年度足迹 #徒步 #骑行 #开源',
-    caption3: '队伍位置与聊天，加密传输｜RoamEtch迹刻\n\n使用邀请链接加入实时组队，查看位置与端到端加密聊天；退出后清除本机会话，不补发历史。\n\n轨迹与照片默认存于本机，无需注册。免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #加密组队 #实时位置 #开源',
+    caption3: '队伍位置与聊天，加密传输｜RoamEtch迹刻\n\n使用邀请链接加入实时组队，查看位置与端到端加密聊天；退出后清除本机会话，不补发历史。\n\n轨迹与照片默认存于本机，无需注册。免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #加密组队 #实时位置 #开源',
     caption4: '海拔与速度，放在同一张图｜RoamEtch迹刻\n\n徒步、骑行、跑步与自驾统一分析：海拔与速度联动曲线，配合分段统计与轨迹质量，看清每一段爬升和节奏。\n\n行程与照片默认存于本机，无需注册。\n{{url}}\n\n#RoamEtch #迹刻 #户外分析 #徒步 #骑行 #跑步 #自驾',
-    caption5: '一路上的故事，变成回顾视频｜RoamEtch迹刻\n\n把轨迹、沿途节点、旅行笔记与照片串进导出的回顾视频，配上自定义循环音乐；视频在本机合成。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #视频回顾 #旅行故事 #节点照片',
+    caption5: '一路上的故事，变成回顾视频｜RoamEtch迹刻\n\n把轨迹、沿途节点、旅行笔记与照片串进导出的回顾视频，配上自定义循环音乐；视频在本机合成。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #视频回顾 #旅行故事 #节点照片',
     caption6: '锁屏或切后台后回来，继续记录｜RoamEtch迹刻\n\n后台可能暂停定位；返回页面后会重新定位，并在中断处新建分段继续记录。长断点可手动沿路网补全，不会改写原始轨迹。\n\n轨迹与照片默认存于本机，无需注册。\n{{url}}\n\n#RoamEtch #迹刻 #后台定位 #轨迹续记 #断点补全',
     caption7: '去过的城市，在地图上发光｜RoamEtch迹刻\n\n年度足迹点亮城市地图，把每一站收进旅行回忆；视频回顾内置随机配乐，每次播放一段自制循环音乐。\n\n轨迹与照片默认存于本机，无需注册。\n{{url}}\n\n#RoamEtch #迹刻 #城市足迹 #年度回顾 #随机配乐',
-    caption8: '分享想要的，留住私密的｜RoamEtch迹刻\n\n起终点隐私圈、敏感节点隐藏与照片 EXIF 剥离，由你决定分享什么；轨迹与照片默认存于本机，整库备份可加密，无需云账户。\n\n免费开源，中文 / English。\n{{url}}\n\n#RoamEtch #迹刻 #隐私保护 #加密备份 #敏感信息'
+    caption8: '分享想要的，留住私密的｜RoamEtch迹刻\n\n起终点隐私圈、敏感节点隐藏与照片 EXIF 剥离，由你决定分享什么；轨迹与照片默认存于本机，整库备份可加密，无需云账户。\n\n免费开源，支持简体、繁體、English、日本語、한국어、Español。\n{{url}}\n\n#RoamEtch #迹刻 #隐私保护 #加密备份 #敏感信息'
   },
   sync: {
     cardTitle: '跨设备同步',
@@ -1405,6 +1423,7 @@ const zh = {
   },
   settings: {
     title: '设置', language: '界面语言', langAuto: '跟随系统', langZh: '简体中文', langEn: 'English',
+    langZhTw: '繁體中文', langJa: '日本語', langKo: '한국어', langEs: 'Español',
     appearanceGroup: '外观与语言', recordGroup: '记录', privacyGroup: '隐私与安全',
     mapGroup: '地图与服务', syncGroup: '跨设备同步', dataGroup: '数据管理', shareGroup: '分享应用', installGroup: '安装与快捷打开', debugGroup: '调试', aboutGroup: '关于',
     langNote: '界面语言与服务环境相互独立',
@@ -1464,7 +1483,7 @@ const zh = {
     cooldownMinutes: '{{m}} 分钟',
     meetAlertGoal: '集合点偏离提醒',
     meetAlertGoalHint: '仅当有人从集合点附近走到范围外时提醒，初始距离过远不会触发。',
-    debug: '调试工具', simNetwork: '网络环境模拟',
+    debug: '调试工具', simNetwork: '网络环境模拟', simNetworkHint: 'CN / {{global}} / {{offline}} / CORS',
     simOff: '关闭', simCn: '模拟国内', simGlobal: '模拟海外', simOffline: '模拟断网', simCors: '模拟 CORS 失败',
     simPlayback: 'GPX 模拟回放', simPlaybackHint: '无需真实 GPS，按 GPX 轨迹回放定位',
     simStart: '开始回放', simStop: '停止回放', simSpeed: '回放倍速',
@@ -1591,12 +1610,22 @@ const en = {
   },
   boot: {
     init: 'Initializing…', region: 'Detecting service region…',
+    failed: 'Startup failed: {{message}}',
     migrationAdvisory: '{{n}} data finding(s) before upgrade; original records were kept',
     damagedIsolated: 'Moved {{n}} damaged record(s) to quarantine; back up or restore them in Settings',
     migrationFailed: 'Database upgrade or verification failed; no trip data was cleared.',
     migrationFuture: 'This data was created by a newer version; open it with that version.',
     migrationInvalid: 'An invalid trip data version was found; the upgrade was stopped.',
-    migrationRecovery: 'Keep the data and reload. If it still fails, export a backup with the previous version or restore a verified backup.'
+    migrationRecovery: 'Keep the data and reload. If it still fails, export a backup with the previous version or restore a verified backup.',
+    migrationCheckpointCapacity: 'Cannot create a verified migration recovery point because browser storage is full or quota is blocked. Free storage or close other tabs, then retry; the database was not upgraded.',
+    migrationCheckpointFailed: 'Could not create a verified migration recovery point. The database was not upgraded.',
+    migrationCheckpointVerificationFailed: 'Migration recovery checkpoint verification failed. Keep the checkpoint and do not upgrade the source database.',
+    migrationCheckpointBlocked: 'Another tab or browser extension is blocking the migration recovery point. Close other RoamEtch tabs or blocking software, then retry.',
+    migrationRollbackJournalInvalid: 'The durable migration rollback journal is invalid. Keep the database closed and retain all recovery databases.',
+    migrationRollbackVerificationFailed: 'Recovered database rows do not match the verified checkpoint.',
+    migrationRollbackCheckpointInvalid: 'The recovery checkpoint schema does not match the failed migration.',
+    migrationRollbackBlocked: 'Another tab or browser extension is blocking automatic migration rollback. The verified recovery database and checkpoint have been retained.',
+    migrationRollbackFailed: 'Automatic migration rollback could not be verified. The checkpoint and temporary recovery database have been retained.'
   },
   tabs: { record: 'Record', meet: 'Meet', trips: 'Trips', analysis: 'Analysis', export: 'Share', settings: 'Settings' },
   common: {
@@ -1605,6 +1634,7 @@ const en = {
     confirm: 'Confirm', clear: 'Clear', copy: 'Copy', copied: 'Copied', open: 'Open', export: 'Export',
     import: 'Import', preview: 'Preview', apply: 'Apply', reset: 'Reset', yes: 'Yes', no: 'No',
     unavailable: 'Unavailable', offline: 'Offline', online: 'Online', seconds: 's', meters: 'm', km: 'km', days: 'd',
+    previous: 'Previous', next: 'Next', jpegImage: 'JPEG image',
     fullscreen: 'Fullscreen', exitFullscreen: 'Exit fullscreen'
   },
   camera: {
@@ -1666,7 +1696,7 @@ const en = {
     switchHint: 'Switching region never affects local data or UI language',
     modeAuto: 'Auto detect', modeCn: 'China', modeGlobal: 'Global',
     probeTitle: 'Endpoint connectivity', syncJudge: 'Sync initial guess', probeResult: 'Probe result',
-    simActive: 'Network simulation active: {{mode}}', bothFail: 'Both probes timed out — keeping initial guess',
+    simActive: 'Network simulation active: {{mode}}', simCn: 'CN', simGlobal: 'Global', simOffline: 'offline', simCorsFail: 'CORS failure', bothFail: 'Both probes timed out — keeping initial guess',
     coordNote: 'Coordinate offset depends only on basemap datum + China fence, not network region'
   },
   record: {
@@ -2091,7 +2121,7 @@ const en = {
     styleCs: 'datum',
     layers: 'Map layers',
     layerNote: 'Basemaps affect display only; tracks always stay WGS-84 and switching sources never rewrites data.',
-    vectorShort: 'vector'
+    vectorShort: 'vector', customSource: 'Custom source'
   },
   growth: {
     title: 'Annual activity report', openReport: 'Annual report', year: 'Year', activity: 'Activity', allActivities: 'All activities', localOnly: 'All statistics stay on this device; tracks are never uploaded',
@@ -2182,7 +2212,7 @@ const en = {
     wpStart: 'Xiangshan trailhead', wpView: 'Viewpoint', wpPhoto: 'Photo spot', wpFood: 'Snack stop', wpEnd: 'Loop finish'
   },
   trips: {
-    title: 'My trips', empty: 'No trips yet', emptyHint: 'Start your first trip in the Record tab',
+    title: 'My trips', untitled: 'Untitled trip', empty: 'No trips yet', emptyHint: 'Start your first trip in the Record tab',
     open: 'Open', rename: 'Rename', deleteConfirm: 'Delete this trip and all its data? This cannot be undone.',
     deleted: 'Trip deleted', renamed: 'Trip updated',
     points: '{{n}} pts', distance: '{{v}}', duration: '{{v}}',
@@ -2195,11 +2225,12 @@ const en = {
     batchImportOk: 'Imported {{ok}} trips', batchImportPartial: '{{ok}} imported, {{fail}} failed',
     batchExportTitle: 'Export trips', batchExportHint: 'Selected trips are packed into a ZIP, one file per trip, re-importable in batch',
     selectAll: 'Select all', selectNone: 'Clear', exportZip: 'Export ZIP',
-    batchExportOk: 'Exported {{n}} trips', batchNone: 'Select at least one trip',
+    batchExportOk: 'Exported {{n}} trips', batchExportOk_one: 'Exported {{n}} trip', batchExportOk_other: 'Exported {{n}} trips', batchNone: 'Select at least one trip',
     rewalk: 'Re-walk trip', format: 'Format',
     backup: 'Backup all', restore: 'Restore backup',
-    backupOk: 'Backup exported ({{n}} trips)', restoreOk: 'Restored {{n}} trips',
-    restoreConflict: '{{n}} trips with existing IDs found',
+    backupOk: 'Backup exported ({{n}} trips)', backupOk_one: 'Backup exported ({{n}} trip)', backupOk_other: 'Backup exported ({{n}} trips)',
+    restoreOk: 'Restored {{n}} trips', restoreOk_one: 'Restored {{n}} trip', restoreOk_other: 'Restored {{n}} trips',
+    restoreConflict: '{{n}} trips with existing IDs found', restoreConflict_one: '{{n}} trip with an existing ID found', restoreConflict_other: '{{n}} trips with existing IDs found',
     conflictSkip: 'Skip duplicates', conflictOverwrite: 'Overwrite local',
     restoreErr: 'Invalid or corrupted backup file',
     storage: 'Storage', storageWarn: 'Low storage — back up now',
@@ -2273,7 +2304,7 @@ const en = {
     intro: 'Introduction', introPh: 'Where did this journey begin, and what do you want to remember?',
     saved: 'Saved', saveFail: 'Could not save',
     days: 'days', nodes: 'nodes', photos: 'photos', distance: 'Distance', ascent: 'Ascent', duration: 'Time',
-    dayCount: '{{n}} days',
+    dayCount: '{{n}} days', dayCount_one: '{{n}} day', dayCount_other: '{{n}} days',
     addPhotos: 'Associate photos', addPhotosHint: 'Read EXIF time and GPS, preview before writing',
     exportBook: 'Export book', exportBookTitle: 'Export travel book',
     exportBookHint: 'Build a printable single-file HTML; privacy crops apply before export.',
@@ -2338,6 +2369,7 @@ const en = {
     unlockIntro: 'This backup is encrypted. Enter the password used when exporting to unlock and verify it.',
     unlockAction: 'Unlock', wrongPassword: 'Wrong password or damaged file — please try again.',
     unsupported: 'This backup uses an unsupported encryption format. Please update the app and retry.',
+    limitExceeded: 'This backup exceeds safe restore limits. Split trips into several full backups, or export tracks as GPX when photos and share-import history are not needed.',
     encrypted: 'Encryption', encryptedValue: 'AES-256-GCM · PBKDF2',
     encryptedNote: 'Encrypted backup unlocked and integrity verified.',
     previewTitle: 'Restore backup', exportedAt: 'Exported', contents: 'Contents',
@@ -2619,7 +2651,7 @@ const en = {
     includePhotos: 'Include waypoint photos',
     htmlSize: 'Size tier', htmlClear: 'Clear', htmlLight: 'Light', htmlNone: 'Text only',
     htmlEstimate: 'Estimated {{size}} · photos use thumbnails',
-    htmlWarn: 'Large file ({{size}}) — sharing may be limited'
+    htmlWarn: 'Large file ({{size}}) — sharing may be limited', failed: 'Could not generate the share content; please retry'
   },
   install: {
     title: 'Add RoamEtch to your home screen',
@@ -2669,7 +2701,7 @@ const en = {
     sub2: 'Yearly footprint · verified backup · soundtracked recaps',
     cardLive: 'RECORDING',
     cta: 'Scan to try free',
-    footer: 'Open source · 中文 / English · Add to home screen',
+    footer: 'Open source · 支持简体、繁體、English、日本語、한국어、Español · Add to home screen',
     f1t: 'Yearly footprint', f1d: 'Favorites, tags and annual stats',
     f2t: 'Verified backup', f2d: 'SHA-256 checked before restore',
     f3t: 'Encrypted meetups', f3d: 'Live positions and team chat',
@@ -2743,7 +2775,7 @@ const en = {
         sub2: 'Privacy circles and sensitive waypoints shape what you share',
         feature1: 'GPX import / export', feature2: 'Privacy circles', feature3: 'Cached offline use',
         cta: 'Record your next own pace',
-        caption: 'A track tool for independent outdoors people — RoamEtch / 迹刻\n\nStart hiking, cycling, trail running or a city walk without an account. Tracks and photos are stored on your device by default; privacy circles, sensitive waypoints and stripped EXIF help control what you share. Cached screens work offline, while first visits, uncached areas and online services still need a connection.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #OutdoorTracking #PrivacyCircle #GPX'
+        caption: 'A track tool for independent outdoors people — RoamEtch / 迹刻\n\nStart hiking, cycling, trail running or a city walk without an account. Tracks and photos are stored on your device by default; privacy circles, sensitive waypoints and stripped EXIF help control what you share. Cached screens work offline, while first visits, uncached areas and online services still need a connection.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #OutdoorTracking #PrivacyCircle #GPX'
       },
       roadCrews: {
         label: 'Temporary crews', eyebrow: 'LIVE TEAMS · ENCRYPTED CHAT · P2P ORIGINALS',
@@ -2752,7 +2784,7 @@ const en = {
         sub2: 'Positions and chat are encrypted; rooms close on time',
         feature1: 'AES-256-GCM', feature2: 'Timed rooms', feature3: 'On-demand originals',
         cta: 'Invite your road crew',
-        caption: 'A live-team tool for temporary travel crews and road trips — RoamEtch / 迹刻\n\nJoin with an invite link. Positions and chat use AES-256-GCM encryption, and rooms can last 1 / 2 / 4 / 8 hours. Original photos transfer on demand over WebRTC; relays can see ciphertext and network metadata.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #LiveTeam #RoadTrip #EncryptedChat'
+        caption: 'A live-team tool for temporary travel crews and road trips — RoamEtch / 迹刻\n\nJoin with an invite link. Positions and chat use AES-256-GCM encryption, and rooms can last 1 / 2 / 4 / 8 hours. Original photos transfer on demand over WebRTC; relays can see ciphertext and network metadata.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #LiveTeam #RoadTrip #EncryptedChat'
       },
       travelCreators: {
         label: 'Travel creators', eyebrow: 'POSTERS · YEARLY FOOTPRINT · VIDEO RECAPS',
@@ -2761,7 +2793,7 @@ const en = {
         sub2: 'Save or share posters and self-contained HTML',
         feature1: 'Yearly footprint', feature2: 'On-device video', feature3: 'Self-contained HTML',
         cta: 'Make your next journey a story',
-        caption: 'A recording and sharing tool for travel creators — RoamEtch / 迹刻\n\nOrganize a journey with waypoints, notes and photos, then export a recap video, yearly poster or self-contained HTML page. Videos are rendered on-device with optional original looping music; review privacy circles and sensitive waypoints before sharing.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #TravelCreator #VideoRecap #YearlyFootprint'
+        caption: 'A recording and sharing tool for travel creators — RoamEtch / 迹刻\n\nOrganize a journey with waypoints, notes and photos, then export a recap video, yearly poster or self-contained HTML page. Videos are rendered on-device with optional original looping music; review privacy circles and sensitive waypoints before sharing.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #TravelCreator #VideoRecap #YearlyFootprint'
       },
       crossBorder: {
         label: 'Cross-border & hosting', eyebrow: 'DUAL REGIONS · WGS-84 · ENCRYPTED BACKUP',
@@ -2779,7 +2811,7 @@ const en = {
         sub2: 'WebCrypto, WebRTC and MQTT power the team connection',
         feature1: 'GPL-3.0 source', feature2: 'Installable PWA', feature3: 'Native browser APIs',
         cta: 'Read the source and contribute',
-        caption: 'A project for frontend developers and open-source learners — RoamEtch / 迹刻\n\nVanilla TypeScript and DOM build the interface, while MapLibre, IndexedDB, WebCrypto, WebRTC and MQTT handle maps, storage, encryption and original-photo transfer. Licensed under GPL-3.0; source reading, issues and pull requests are welcome.\n\nChinese / English.\n{{url}}\n\n#RoamEtch #迹刻 #TypeScript #MapLibre #OpenSource'
+        caption: 'A project for frontend developers and open-source learners — RoamEtch / 迹刻\n\nVanilla TypeScript and DOM build the interface, while MapLibre, IndexedDB, WebCrypto, WebRTC and MQTT handle maps, storage, encryption and original-photo transfer. Licensed under GPL-3.0; source reading, issues and pull requests are welcome.\n\nSimplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #TypeScript #MapLibre #OpenSource'
       },
       athletes: {
         label: 'Endurance training', eyebrow: 'HIKING · CYCLING · RUNNING · DRIVING',
@@ -2788,7 +2820,7 @@ const en = {
         sub2: 'Edit completed trips by activity and recalculate metrics',
         feature1: 'Elevation + speed', feature2: 'Editable activity', feature3: 'Activity-based calories',
         cta: 'Review your next training block',
-        caption: 'A track tool for endurance training and workout review — RoamEtch / 迹刻\n\nReview elevation, speed, ascent and segment stats, or change the activity type on a completed trip to recalculate related metrics. Calorie estimates are available for hiking, cycling, running and travel; altitude, slope and calorie data are for reference.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #EnduranceTraining #TrackAnalysis #OutdoorSports'
+        caption: 'A track tool for endurance training and workout review — RoamEtch / 迹刻\n\nReview elevation, speed, ascent and segment stats, or change the activity type on a completed trip to recalculate related metrics. Calorie estimates are available for hiking, cycling, running and travel; altitude, slope and calorie data are for reference.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #EnduranceTraining #TrackAnalysis #OutdoorSports'
       },
       commuters: {
         label: 'Urban commuters', eyebrow: 'WALKING · CYCLING · COMMUTE LOGS',
@@ -2797,7 +2829,7 @@ const en = {
         sub2: 'Multi-activity analysis and city footprints grow over time',
         feature1: 'Pause and resume', feature2: 'Track statistics', feature3: 'City footprint',
         cta: 'Log today’s commute',
-        caption: 'A recording tool for commuters, walkers and cyclists — RoamEtch / 迹刻\n\nLog commute, walking and cycling routes, then resume from a new segment after a pause. Review distance, moving time, speed and activity stats. Tracks are stored on your device by default and can be exported as GPX or added to the city footprint.\n\nNo account; Chinese / English.\n{{url}}\n\n#RoamEtch #迹刻 #UrbanCommute #Walking #CyclingLog'
+        caption: 'A recording tool for commuters, walkers and cyclists — RoamEtch / 迹刻\n\nLog commute, walking and cycling routes, then resume from a new segment after a pause. Review distance, moving time, speed and activity stats. Tracks are stored on your device by default and can be exported as GPX or added to the city footprint.\n\nNo account; Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #UrbanCommute #Walking #CyclingLog'
       },
       family: {
         label: 'Family outings', eyebrow: 'LIVE POSITIONS · TIMED ROOMS · ENCRYPTED CHAT',
@@ -2806,7 +2838,7 @@ const en = {
         sub2: 'Rooms close on time; local sessions clear on exit',
         feature1: 'Distinct member markers', feature2: 'Encrypted chat', feature3: 'Timed rooms',
         cta: 'Start a family live team',
-        caption: 'A live-team tool for family outings — RoamEtch / 迹刻\n\nThe leader and members use different map markers and can see positions, distance and direction. Positions and chat are encrypted, with 1 / 2 / 4 / 8-hour room limits. Leaving clears the local session, and history is not replayed.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #FamilyOuting #LivePosition #Parenting'
+        caption: 'A live-team tool for family outings — RoamEtch / 迹刻\n\nThe leader and members use different map markers and can see positions, distance and direction. Positions and chat are encrypted, with 1 / 2 / 4 / 8-hour room limits. Leaving clears the local session, and history is not replayed.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #FamilyOuting #LivePosition #Parenting'
       },
       overland: {
         label: 'Overland travel', eyebrow: 'OFFLINE TILES · OLED POCKET LOCK · RESUME',
@@ -2815,7 +2847,7 @@ const en = {
         sub2: 'Save screen power with OLED lock and resume on return',
         feature1: 'Cached map tiles', feature2: 'OLED pocket lock', feature3: 'Explicit gap segments',
         cta: 'Prepare for the long road',
-        caption: 'A track tool for overland trips and camping — RoamEtch / 迹刻\n\nCache the screens and map tiles you need in advance. Long gaps are marked as separate segments, and recording can continue after you return. OLED pocket lock offers a black screen and brightness control; first visits, uncached areas and online services still need a connection, and the OS may pause background GPS.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #Overland #OfflineMap #Camping'
+        caption: 'A track tool for overland trips and camping — RoamEtch / 迹刻\n\nCache the screens and map tiles you need in advance. Long gaps are marked as separate segments, and recording can continue after you return. OLED pocket lock offers a black screen and brightness control; first visits, uncached areas and online services still need a connection, and the OS may pause background GPS.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #Overland #OfflineMap #Camping'
       },
       eventLeads: {
         label: 'Event leaders', eyebrow: 'LIVE MAP · MEMBER LIST · ROOM TIMER',
@@ -2824,7 +2856,7 @@ const en = {
         sub2: 'Set a 1 / 2 / 4 / 8-hour room limit',
         feature1: 'Live member positions', feature2: 'Leader marker', feature3: 'Timed room closure',
         cta: 'Lead the next group activity',
-        caption: 'A live-team tool for clubs and activity leaders — RoamEtch / 迹刻\n\nMembers join through an invite link. The map distinguishes leader and member markers and shows positions, distance and direction. Positions and chat are encrypted, rooms close after the chosen limit, and the relay does not provide history replay.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #EventLeader #LiveTeam #OutdoorClub'
+        caption: 'A live-team tool for clubs and activity leaders — RoamEtch / 迹刻\n\nMembers join through an invite link. The map distinguishes leader and member markers and shows positions, distance and direction. Positions and chat are encrypted, rooms close after the chosen limit, and the relay does not provide history replay.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #EventLeader #LiveTeam #OutdoorClub'
       },
       fieldResearch: {
         label: 'Field research', eyebrow: 'PHOTO WAYPOINTS · GPX · SENSITIVE CONTROLS',
@@ -2833,7 +2865,7 @@ const en = {
         sub2: 'Hide sensitive waypoints and start/end circles on export',
         feature1: 'Bulk GPX import', feature2: 'Photo waypoints', feature3: 'Hide sensitive points',
         cta: 'Organize the next field log',
-        caption: 'A track tool for field research and citizen science — RoamEtch / 迹刻\n\nLink positions, names, notes and photos to waypoints, with GPX, XML and ZIP bulk import. Hide sensitive waypoints and start/end privacy circles before export. Elevation, slope and location accuracy still depend on devices and services.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #FieldResearch #CitizenScience #GPX'
+        caption: 'A track tool for field research and citizen science — RoamEtch / 迹刻\n\nLink positions, names, notes and photos to waypoints, with GPX, XML and ZIP bulk import. Hide sensitive waypoints and start/end privacy circles before export. Elevation, slope and location accuracy still depend on devices and services.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #FieldResearch #CitizenScience #GPX'
       },
       dataStewards: {
         label: 'Track data', eyebrow: 'GPX · GEOJSON · KML · ZIP',
@@ -2842,7 +2874,7 @@ const en = {
         sub2: 'Export GPX, GeoJSON or KML from WGS-84 storage',
         feature1: 'Bulk import', feature2: 'Three export formats', feature3: 'SHA-256 verification',
         cta: 'Import and organize tracks',
-        caption: 'A tool for GPX and track-data stewards — RoamEtch / 迹刻\n\nBulk-import GPX, XML and ZIP, then organize segments and waypoints. Export GPX, GeoJSON or KML from WGS-84 storage. Full backups can be encrypted and use SHA-256 to check file integrity.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #GPX #GeoJSON #TrackData'
+        caption: 'A tool for GPX and track-data stewards — RoamEtch / 迹刻\n\nBulk-import GPX, XML and ZIP, then organize segments and waypoints. Export GPX, GeoJSON or KML from WGS-84 storage. Full backups can be encrypted and use SHA-256 to check file integrity.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #GPX #GeoJSON #TrackData'
       },
       yearlyMemory: {
         label: 'Yearly memories', eyebrow: '12 MONTHS · CITY FOOTPRINT · TAGS',
@@ -2851,7 +2883,7 @@ const en = {
         sub2: 'Share a yearly image or a 9-second recap video',
         feature1: '12-month summary', feature2: 'Yearly image', feature3: '9-second video',
         cta: 'Make this year’s footprint',
-        caption: 'A sharing tool for yearly footprints and memories — RoamEtch / 迹刻\n\nGather 12 months of distance, ascent, days out, favorite tags and city footprints into a yearly page. Export a footprint image or a 9-second recap video. The share image contains summary data without precise coordinates, tracks or photos.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #YearlyFootprint #YearInReview #TravelMemories'
+        caption: 'A sharing tool for yearly footprints and memories — RoamEtch / 迹刻\n\nGather 12 months of distance, ascent, days out, favorite tags and city footprints into a yearly page. Export a footprint image or a 9-second recap video. The share image contains summary data without precise coordinates, tracks or photos.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #YearlyFootprint #YearInReview #TravelMemories'
       },
       nightOled: {
         label: 'Night & OLED', eyebrow: 'BLACK UI · HOLD TO LOCK · BRIGHTNESS',
@@ -2860,7 +2892,7 @@ const en = {
         sub2: 'Hold right for 3s to sleep; hold left for 1.5s to unlock',
         feature1: '120px camera slider', feature2: 'Adjustable brightness', feature3: 'Hold-to-lock controls',
         cta: 'Set up your night pocket lock',
-        caption: 'A recording tool for night use and OLED screens — RoamEtch / 迹刻\n\nOLED pocket lock uses a black interface with adjustable foreground brightness and a 120px camera slider. Hold right for 3 seconds to sleep or left for 1.5 seconds to unlock. Pocket lock does not automatically finish an active recording.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #OLED #NightRecording #PocketLock'
+        caption: 'A recording tool for night use and OLED screens — RoamEtch / 迹刻\n\nOLED pocket lock uses a black interface with adjustable foreground brightness and a 120px camera slider. Hold right for 3 seconds to sleep or left for 1.5 seconds to unlock. Pocket lock does not automatically finish an active recording.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #OLED #NightRecording #PocketLock'
       },
       dogWalkers: {
         label: 'Dog walkers', eyebrow: 'DAILY WALKS · PHOTO WAYPOINTS · CITY FOOTPRINT',
@@ -2869,7 +2901,7 @@ const en = {
         sub2: 'No account; tracks and photos are stored locally by default',
         feature1: 'Walking logs', feature2: 'Photo waypoints', feature3: 'City footprint',
         cta: 'Keep today’s walking route',
-        caption: 'A recording tool for dog walkers and daily strolls — RoamEtch / 迹刻\n\nLog daily walks, add waypoints, notes and photos, and review distance, duration and activity stats. Tracks and photos are stored on your device by default with no account; city footprints can be viewed in the yearly recap.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #DogWalking #DailyWalk #CityFootprint'
+        caption: 'A recording tool for dog walkers and daily strolls — RoamEtch / 迹刻\n\nLog daily walks, add waypoints, notes and photos, and review distance, duration and activity stats. Tracks and photos are stored on your device by default with no account; city footprints can be viewed in the yearly recap.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #DogWalking #DailyWalk #CityFootprint'
       },
       siteVisits: {
         label: 'Site visits', eyebrow: 'VISIT WAYPOINTS · PHOTOS · ACTIVITY EDITING',
@@ -2878,7 +2910,7 @@ const en = {
         sub2: 'Edit activity on completed trips and recalculate metrics',
         feature1: 'Visit waypoints', feature2: 'Editable activity', feature3: 'GPX export',
         cta: 'Log the next site visit',
-        caption: 'A recording tool for independent inspections and site service — RoamEtch / 迹刻\n\nMark visit locations with names, notes and photos, export the trip as GPX, and edit the activity type after completion to recalculate related metrics. Sensitive waypoints and start/end privacy circles can be hidden before export.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #SiteInspection #VisitLog #GPX'
+        caption: 'A recording tool for independent inspections and site service — RoamEtch / 迹刻\n\nMark visit locations with names, notes and photos, export the trip as GPX, and edit the activity type after completion to recalculate related metrics. Sensitive waypoints and start/end privacy circles can be hidden before export.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #SiteInspection #VisitLog #GPX'
       },
       lovedOnes: {
         label: 'Loved ones', eyebrow: 'SELF-CONTAINED HTML · POSTERS · SHARE',
@@ -2887,18 +2919,18 @@ const en = {
         sub2: 'Save a yearly image and copy the matching caption',
         feature1: 'Single-file HTML', feature2: 'Yearly image', feature3: 'Copy caption',
         cta: 'Share a journey with someone',
-        caption: 'A travel recording tool for sharing with loved ones — RoamEtch / 迹刻\n\nExport a journey as self-contained HTML to open in a browser, or create a yearly footprint image with a matching caption. Review privacy circles and sensitive waypoints first; the HTML includes the content you choose to export.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #TravelSharing #YearlyFootprint #HTML'
+        caption: 'A travel recording tool for sharing with loved ones — RoamEtch / 迹刻\n\nExport a journey as self-contained HTML to open in a browser, or create a yearly footprint image with a matching caption. Review privacy circles and sensitive waypoints first; the HTML includes the content you choose to export.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #TravelSharing #YearlyFootprint #HTML'
       }
     },
     shareTitle: 'RoamEtch — your journeys, kept local',
-    caption: 'Your tracks stay local. Your journeys become stories — RoamEtch / 迹刻\n\nNo sign-up. Trips, photos and yearly footprints are stored on your device by default; basemaps, elevation and other online services connect as needed.\n\nYearly footprint · favorites, tags and annual stats\nVerified backup · SHA-256 checked, easier migration\nEncrypted teams · live positions and team chat\nSoundtracked recaps · original looping music in exported videos\n\nFree and open source, in Chinese and English. Record from your browser or add it to your home screen.\n{{url}}\n\n#RoamEtch #迹刻 #GPSJournal #Hiking #Cycling #OpenSource',
+    caption: 'Your tracks stay local. Your journeys become stories — RoamEtch / 迹刻\n\nNo sign-up. Trips, photos and yearly footprints are stored on your device by default; basemaps, elevation and other online services connect as needed.\n\nYearly footprint · favorites, tags and annual stats\nVerified backup · SHA-256 checked, easier migration\nEncrypted teams · live positions and team chat\nSoundtracked recaps · original looping music in exported videos\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish. Record from your browser or add it to your home screen.\n{{url}}\n\n#RoamEtch #迹刻 #GPSJournal #Hiking #Cycling #OpenSource',
     caption2: 'A year of routes, gathered into one page — RoamEtch / 迹刻\n\nDistance, ascent, days out and all 12 months roll up into your yearly footprint. Export a share image or a soundtracked video. The yearly share image contains summary data without precise coordinates, tracks or photos.\n\nTracks and photos are stored on your device by default. No sign-up.\n{{url}}\n\n#RoamEtch #迹刻 #YearlyFootprint #Hiking #Cycling #OpenSource',
-    caption3: 'Team positions and chat, encrypted — RoamEtch / 迹刻\n\nJoin a live team with an invite link to see real-time positions and end-to-end encrypted chat. Your local session clears when you leave, and the relay does not replay history.\n\nTracks and photos are stored on your device by default. Free and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #LiveTeam #EncryptedChat #OpenSource',
+    caption3: 'Team positions and chat, encrypted — RoamEtch / 迹刻\n\nJoin a live team with an invite link to see real-time positions and end-to-end encrypted chat. Your local session clears when you leave, and the relay does not replay history.\n\nTracks and photos are stored on your device by default. Free and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #LiveTeam #EncryptedChat #OpenSource',
     caption4: 'Elevation and speed, together on one chart — RoamEtch / 迹刻\n\nHiking, cycling, running and driving share one analysis view: a combined elevation and speed chart, segment stats and track quality for every climb and change of pace.\n\nTrips and photos are stored on your device by default. No sign-up.\n{{url}}\n\n#RoamEtch #迹刻 #OutdoorAnalysis #Hiking #Cycling #Running #Driving',
-    caption5: 'Every story along the way becomes a recap video — RoamEtch / 迹刻\n\nExported recap videos bring together the route, waypoints, travel notes and photos, with original looping music. The video is rendered on your device.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #VideoRecap #TravelStory #TripPhotos',
+    caption5: 'Every story along the way becomes a recap video — RoamEtch / 迹刻\n\nExported recap videos bring together the route, waypoints, travel notes and photos, with original looping music. The video is rendered on your device.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #VideoRecap #TravelStory #TripPhotos',
     caption6: 'Return from the background and keep recording — RoamEtch / 迹刻\n\nLocking the screen or backgrounding may pause GPS. When you return, location is re-armed and recording resumes in a new segment. Long gaps can be road-filled manually without rewriting original track samples.\n\nTracks and photos are stored on your device by default. No sign-up.\n{{url}}\n\n#RoamEtch #迹刻 #BackgroundGPS #TrackContinuity #GapRepair',
     caption7: 'The cities you visit light up the map — RoamEtch / 迹刻\n\nYour yearly city footprint gathers every stop on a lit map, while video recaps include built-in randomized music that shuffles an original looping track.\n\nTracks and photos are stored on your device by default. No sign-up.\n{{url}}\n\n#RoamEtch #迹刻 #CityFootprint #YearInReview #RandomMusic',
-    caption8: 'Share what you choose, keep the rest private — RoamEtch / 迹刻\n\nStart/end privacy circles, sensitive-waypoint controls and stripped photo EXIF help you decide what to share. Tracks and photos are stored on your device by default, full backups can be encrypted, and no cloud account is needed.\n\nFree and open source, in Chinese and English.\n{{url}}\n\n#RoamEtch #迹刻 #PrivacyFirst #EncryptedBackup #SensitiveData'
+    caption8: 'Share what you choose, keep the rest private — RoamEtch / 迹刻\n\nStart/end privacy circles, sensitive-waypoint controls and stripped photo EXIF help you decide what to share. Tracks and photos are stored on your device by default, full backups can be encrypted, and no cloud account is needed.\n\nFree and open source, in Simplified and Traditional Chinese, English, Japanese, Korean and Spanish.\n{{url}}\n\n#RoamEtch #迹刻 #PrivacyFirst #EncryptedBackup #SensitiveData'
   },
   sync: {
     cardTitle: 'Cross-device sync',
@@ -2980,6 +3012,7 @@ const en = {
   },
   settings: {
     title: 'Settings', language: 'Language', langAuto: 'System', langZh: '简体中文', langEn: 'English',
+    langZhTw: '繁體中文', langJa: '日本語', langKo: '한국어', langEs: 'Español',
     appearanceGroup: 'Appearance & language', recordGroup: 'Recording', privacyGroup: 'Privacy & safety',
     mapGroup: 'Maps & services', syncGroup: 'Cross-device sync', dataGroup: 'Data', shareGroup: 'Spread the word', installGroup: 'Install & quick access', debugGroup: 'Debug', aboutGroup: 'About',
     langNote: 'UI language is independent from service region',
@@ -3039,7 +3072,7 @@ const en = {
     cooldownMinutes: '{{m}} min',
     meetAlertGoal: 'Rally point drift alerts',
     meetAlertGoalHint: 'Only alerts when someone moves from near the rally point to outside it; being far at the start does not trigger.',
-    debug: 'Debug tools', simNetwork: 'Network simulation',
+    debug: 'Debug tools', simNetwork: 'Network simulation', simNetworkHint: 'CN / {{global}} / {{offline}} / CORS',
     simOff: 'Off', simCn: 'Simulate CN', simGlobal: 'Simulate Global', simOffline: 'Simulate offline', simCors: 'Simulate CORS fail',
     simPlayback: 'GPX playback simulator', simPlaybackHint: 'Replay a GPX track as GPS fixes — no real GPS needed',
     simStart: 'Start playback', simStop: 'Stop playback', simSpeed: 'Playback speed',
@@ -3157,16 +3190,37 @@ const en = {
 
 let ready = false;
 
+function syncDocumentLanguage() {
+  document.documentElement.lang = languageTag(currentLang());
+  document.title = `${t('app.name')} · ${t('app.tagline')}`;
+  const values = {
+    description: t('app.slogan'),
+    'application-name': t('app.name'),
+    'apple-mobile-web-app-title': t('app.name')
+  };
+  for (const [name, content] of Object.entries(values)) {
+    const meta = document.querySelector(`meta[name="${name}"]`);
+    meta?.setAttribute('content', content);
+  }
+}
+
 export async function initI18n() {
   await i18next.init({
     lng: resolvedLanguage(),
     fallbackLng: 'en',
-    resources: { zh: { translation: zh }, en: { translation: en } },
+    resources: {
+      zh: { translation: zh },
+      'zh-TW': { translation: zhTW },
+      en: { translation: en },
+      ja: { translation: ja },
+      ko: { translation: ko },
+      es: { translation: es }
+    },
     interpolation: { escapeValue: false },
     returnNull: false
   });
   ready = true;
-  document.documentElement.lang = currentLang() === 'zh' ? 'zh-CN' : 'en';
+  syncDocumentLanguage();
 }
 
 export function t(key: string, opts: any = {}): string {
@@ -3179,8 +3233,8 @@ export function currentLang() { return i18next.language || resolvedLanguage(); }
 export async function setLanguage(lang) {
   set('language', lang);
   await i18next.changeLanguage(lang === 'auto' ? resolvedLanguage() : lang);
-  document.documentElement.lang = currentLang() === 'zh' ? 'zh-CN' : 'en';
+  syncDocumentLanguage();
   emit('language:changed', currentLang());
 }
 
-export { zh, en };
+export { zh, zhTW, en, ja, ko, es };

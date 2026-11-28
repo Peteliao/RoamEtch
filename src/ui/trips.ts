@@ -1,5 +1,6 @@
 // Trips list: open/edit/analyze, GPX import, full backup/restore, storage monitor.
-import { t } from '../core/i18n';
+import { currentLang, t } from '../core/i18n';
+import { languageTag } from '../core/language';
 import { on } from '../core/events';
 import { listTrips, deleteTrip, updateTrip, loadTripPreview, storageEstimate } from '../core/store';
 import { routeRepository } from '../core/routeRepository';
@@ -613,7 +614,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
               }, icon('star', 15)),
               el('span', { class: 'name-text' }, trip.name || t('record.newTripName'))),
             el('div', { class: 'meta' },
-              new Date(trip.createdAt).toLocaleDateString(),
+              new Date(trip.createdAt).toLocaleDateString(languageTag(currentLang())),
               el('span', {}, t(`record.activities.${trip.activity}`)),
               el('span', { class: 'tag' }, t(`trips.${statusKey}`))),
             trip.tags?.length ? el('div', { class: 'trip-tags' }, trip.tags.map((tag) => el('span', { class: 'trip-tag' }, `#${tag}`))) : null),
@@ -1193,7 +1194,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     scroll.style.display = open ? 'none' : '';
     if (!open) return;
     detailTitle.textContent = detailTrip.name || t('record.newTripName');
-    detailDate.textContent = `${new Date(detailTrip.createdAt).toLocaleDateString()} · ${t(`record.activities.${detailTrip.activity}`)}`;
+    detailDate.textContent = `${new Date(detailTrip.createdAt).toLocaleDateString(languageTag(currentLang()))} · ${t(`record.activities.${detailTrip.activity}`)}`;
     detailSelect.replaceChildren(...allTrips.map((trip) => el('option', { value: trip.id }, trip.name || t('record.newTripName'))));
     detailSelect.value = detailTrip.id;
     detailActions.replaceChildren(
@@ -1412,7 +1413,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
         cb,
         el('div', { class: 'txt' },
           el('div', { class: 't' }, tr.name || t('record.newTripName')),
-          el('div', { class: 'd' }, `${new Date(tr.createdAt).toLocaleDateString()}${d ? ` · ${d.v}${d.u}` : ''}`))));
+          el('div', { class: 'd' }, `${new Date(tr.createdAt).toLocaleDateString(languageTag(currentLang()))}${d ? ` · ${d.v}${d.u}` : ''}`))));
     }
     const fmtSel = el('select', {}, el('option', { value: 'gpx' }, 'GPX'), el('option', { value: 'geojson' }, 'GeoJSON'));
     const m = modal({
@@ -1433,7 +1434,7 @@ export function createTripsView(navigate, getRecordMap = () => null) {
             m.close();
             if (isWeChat()) { wechatFileGuidance(); return; }
             triggerDownload(blob, filename);
-            toast(t('trips.batchExportOk', { n: count }), 'ok');
+            toast(t('trips.batchExportOk', { n: count, count }), 'ok');
           }
         }, t('trips.exportZip'))
       ]

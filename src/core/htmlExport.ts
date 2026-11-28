@@ -6,6 +6,7 @@ import { simplify, fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, hav
 import { applyPrivacy } from './privacy';
 import { computeStats } from './stats';
 import { get } from './settings';
+import { languageTag } from './language';
 import { effectiveTheme } from './theme';
 import { t, currentLang } from './i18n';
 import { tripTimeInfo, routePlaceNames } from './shareInfo';
@@ -225,8 +226,8 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
     weightKg: get('weightKg')
   });
   const units = get('units');
-  const locale = currentLang().startsWith('zh') ? 'zh-CN' : 'en-US';
-  const lang = locale === 'zh-CN' ? 'zh-CN' : 'en';
+  const locale = languageTag(currentLang());
+  const lang = locale;
   const initialTheme = effectiveTheme();
   const ti = tripTimeInfo(full);
   const track = fullPointTrack(cropped);
@@ -319,7 +320,10 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
   const labels = {
     replay: t('export.htmlReplay'),
     pause: t('export.htmlPause'),
-    vector: t('export.htmlVector')
+    vector: t('export.htmlVector'),
+    close: t('common.close'),
+    previous: t('common.previous'),
+    next: t('common.next')
   };
 
   const data = {

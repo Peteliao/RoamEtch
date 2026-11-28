@@ -5,7 +5,8 @@ import { startRecording, stopRecording, handleFix, rec } from './recorder';
 import { haversine, bearing } from './geo';
 import { get } from './settings';
 import { emit } from './events';
-import { t } from './i18n';
+import { currentLang, t } from './i18n';
+import { languageTag } from './language';
 import { buildDemoPoints } from './demo';
 import { normalizeSimulationOptions, simulateTrack, type SimulationOptions } from './simulation';
 
@@ -30,7 +31,7 @@ export async function startPlayback({ gpxText = null, name = null } = {}) {
   } else {
     points = buildDemoPoints();
   }
-  const ok = await startRecording({ simulated: true, name: name || `${t('record.simRecording')} ${new Date().toLocaleTimeString()}` });
+  const ok = await startRecording({ simulated: true, name: name || `${t('record.simRecording')} ${new Date().toLocaleTimeString(languageTag(currentLang()))}` });
   if (!ok) return false;
   playing = true;
   emit('sim:started', { count: points.length });

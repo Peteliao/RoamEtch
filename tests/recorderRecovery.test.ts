@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../src/core/settings', () => ({ get: vi.fn((key) => key === 'ascentThreshold' ? 4 : 65) }));
 vi.mock('../src/core/events', () => ({ emit: vi.fn() }));
-vi.mock('../src/core/i18n', () => ({ t: vi.fn((key) => key) }));
+vi.mock('../src/core/i18n', () => ({ t: vi.fn((key) => key), currentLang: () => 'zh' }));
 vi.mock('../src/core/store', () => ({
   getTrip: mocks.getTrip,
   loadTripTrack: mocks.loadTripTrack,

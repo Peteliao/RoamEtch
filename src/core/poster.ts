@@ -10,7 +10,8 @@ import { computeTripScore, drawScoreBadge, fitText, roundRectPath } from './trip
 import { canvasPalette } from './palette';
 import { loadBrandFonts, drawBrandBlock, drawQr, drawSignalChip, SITE_URL } from './brand';
 import { tripTimeInfo, routePlaceNames } from './shareInfo';
-import { t } from './i18n';
+import { currentLang, t } from './i18n';
+import { languageTag } from './language';
 import { buildProfile, drawProfileChart } from './profileChart';
 import { bridgeTrackGapsForExport } from './gapRepair';
 import { normalizeShareStyle, posterLayout, shareFontStack, trackColorValue } from './shareStyle';
@@ -83,7 +84,7 @@ function drawInfoPanel(ctx, full, stats, x, y, w, h, { score, time, places, dsn,
   ctx.fillStyle = P.muted;
   ctx.font = `${metaSize}px ${font}`;
   const activity = t(`record.activities.${full.trip.activity}`);
-  const dateStr = time?.date || new Date(full.trip.createdAt).toLocaleDateString();
+  const dateStr = time?.date || new Date(full.trip.createdAt).toLocaleDateString(languageTag(currentLang()));
   const dateLine = time
     ? `${dateStr} · ${activity} · ${time.start} → ${time.end}`
     : `${dateStr} · ${activity}`;
@@ -186,7 +187,7 @@ function drawSquarePanel(ctx, full, stats, score, W, H, mapH, P, time, places, d
   ctx.fillStyle = P.muted;
   ctx.font = `22px ${font}`;
   const activity = t(`record.activities.${full.trip.activity}`);
-  const dateStr = time?.date || new Date(full.trip.createdAt).toLocaleDateString();
+  const dateStr = time?.date || new Date(full.trip.createdAt).toLocaleDateString(languageTag(currentLang()));
   const dateLine = time
     ? `${dateStr} · ${activity} · ${time.start} → ${time.end}`
     : `${dateStr} · ${activity}`;

@@ -16,7 +16,7 @@ vi.mock('maplibre-gl', () => ({ setWorkerUrl: vi.fn() }));
 vi.mock('../src/core/store', () => ({ loadTripTrack: mocks.loadTripTrack }));
 vi.mock('../src/core/workerBridge', () => ({ simplifyAsync: mocks.simplifyAsync }));
 vi.mock('../src/core/elevation', () => ({ resolveAltitude: mocks.resolveAltitude }));
-vi.mock('../src/core/i18n', () => ({ t: (key: string) => key }));
+vi.mock('../src/core/i18n', () => ({ t: (key: string) => key, currentLang: () => 'zh' }));
 vi.mock('../src/ui/history', () => ({
   onUIPop: vi.fn(),
   pushUIState: () => ({ id: 1 }),

@@ -7,6 +7,7 @@ import { fmtAltitude, fmtDistance } from './geo';
 import { recapFootprint } from './footprint';
 import { currentLang, t } from './i18n';
 import { get } from './settings';
+import { languageTag } from './language';
 import { createMusicSession } from './music';
 import { makeVideoRecorder, videoSupported } from './videoCapture';
 import { prepareMap } from './mapPaint';
@@ -31,7 +32,7 @@ const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 const easeOut = (v: number) => 1 - Math.pow(1 - clamp01(v), 3);
 
 export function monthLabel(month: number, lang = currentLang()) {
-  return new Date(2024, month - 1, 1).toLocaleDateString(lang === 'zh' ? 'zh-CN' : 'en-US', { month: 'short' });
+  return new Date(2024, month - 1, 1).toLocaleDateString(languageTag(lang), { month: 'short' });
 }
 
 export function footprintCaption(fp, units = get('units')) {

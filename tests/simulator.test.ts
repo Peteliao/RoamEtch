@@ -15,7 +15,7 @@ vi.mock('../src/core/recorder', () => ({
 }));
 vi.mock('../src/core/settings', () => ({ get: vi.fn(() => 20) }));
 vi.mock('../src/core/events', () => ({ emit: mocks.emit }));
-vi.mock('../src/core/i18n', () => ({ t: vi.fn((key) => key) }));
+vi.mock('../src/core/i18n', () => ({ t: vi.fn((key) => key), currentLang: () => 'zh' }));
 vi.mock('../src/core/demo', () => ({ buildDemoPoints: vi.fn(() => []) }));
 
 beforeEach(() => {

@@ -32,9 +32,9 @@ test('meetup join accepts a camera QR scan and an image QR scan', async ({ page 
   await expect(page.locator('.modal-backdrop .modal')).toBeVisible();
   const codeInp = page.locator('.modal-backdrop .m-body input[type="text"]').first();
 
-  const { invite: cameraInvite, link: cameraLink } = await page.evaluate(() => {
+  const cameraLink = await page.evaluate(() => {
     const invite = window.__lt.meetLink.generateMeetInvite();
-    return { invite, link: window.__lt.meetLink.meetLinkFor(invite) };
+    return window.__lt.meetLink.meetLinkFor(invite);
   });
   await page.evaluate(async (url) => {
     const img = new Image();
@@ -84,13 +84,13 @@ test('meetup join accepts a camera QR scan and an image QR scan', async ({ page 
   await expect(page.locator('.modal-backdrop .modal')).toBeVisible();
   await page.getByRole('button', { name: '相机扫码', exact: true }).click();
   await expect(page.locator('.qr-scan-overlay')).toBeVisible();
-  await expect(codeInp).toHaveValue(cameraInvite, { timeout: 20_000 });
+  await expect(codeInp).toHaveValue(cameraLink, { timeout: 20_000 });
   await expect(page.locator('.qr-scan-overlay')).toHaveCount(0);
   await page.evaluate(() => (window as any).__restoreMeetGum?.());
 
-  const { invite: imageInvite, link: imageLink } = await page.evaluate(() => {
+  const imageLink = await page.evaluate(() => {
     const invite = window.__lt.meetLink.generateMeetInvite();
-    return { invite, link: window.__lt.meetLink.meetLinkFor(invite) };
+    return window.__lt.meetLink.meetLinkFor(invite);
   });
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: '图片扫码', exact: true }).click();
@@ -99,7 +99,7 @@ test('meetup join accepts a camera QR scan and an image QR scan', async ({ page 
     mimeType: 'image/png',
     buffer: await qrPngBuffer(page, imageLink)
   });
-  await expect(codeInp).toHaveValue(imageInvite);
+  await expect(codeInp).toHaveValue(imageLink);
   await expect(page.locator('.toast').filter({ hasText: '已识别组队邀请' }).first()).toBeVisible();
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await expect(page.locator('.modal-backdrop')).toBeHidden();

@@ -12,31 +12,31 @@ const TIANDITU = (layer, key) =>
 export const BASEMAPS = [
   // ---- CN profile ----
   {
-    id: 'amap-vec', profile: 'cn', kind: 'street', name: '高德街道', nameEn: 'AMap Street',
+    id: 'amap-vec', profile: 'cn', kind: 'street', name: '高德街道', nameZhTw: '高德街道', nameEn: 'AMap Street',
     coordSystem: 'GCJ02', maxzoom: 18,
     tiles: ['https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}'],
     subdomains: ['1', '2', '3', '4'], attribution: '© 高德软件'
   },
   {
-    id: 'amap-sat', profile: 'cn', kind: 'satellite', name: '高德卫星', nameEn: 'AMap Satellite',
+    id: 'amap-sat', profile: 'cn', kind: 'satellite', name: '高德卫星', nameZhTw: '高德衛星', nameEn: 'AMap Satellite',
     coordSystem: 'GCJ02', maxzoom: 18,
     tiles: ['https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}'],
     subdomains: ['1', '2', '3', '4'], attribution: '© 高德软件'
   },
   {
-    id: 'tianditu-vec', profile: 'cn', kind: 'street', name: '天地图街道', nameEn: 'Tianditu Street',
+    id: 'tianditu-vec', profile: 'cn', kind: 'street', name: '天地图街道', nameZhTw: '天地圖街道', nameEn: 'Tianditu Street',
     coordSystem: 'WGS84', maxzoom: 18, requiresKey: 'tiandituKey',
     tiles: (k) => [TIANDITU('vec', k)], overlay: (k) => TIANDITU('cva', k),
     subdomains: ['0', '1', '2', '3', '4', '5', '6', '7'], attribution: '© 天地图 CGCS2000'
   },
   {
-    id: 'tianditu-ter', profile: 'cn', kind: 'terrain', name: '天地图地形', nameEn: 'Tianditu Terrain',
+    id: 'tianditu-ter', profile: 'cn', kind: 'terrain', name: '天地图地形', nameZhTw: '天地圖地形', nameEn: 'Tianditu Terrain',
     coordSystem: 'WGS84', maxzoom: 14, requiresKey: 'tiandituKey',
     tiles: (k) => [TIANDITU('ter', k)], overlay: (k) => TIANDITU('cta', k),
     subdomains: ['0', '1', '2', '3', '4', '5', '6', '7'], attribution: '© 天地图 CGCS2000'
   },
   {
-    id: 'tianditu-img', profile: 'cn', kind: 'satellite', name: '天地图影像', nameEn: 'Tianditu Imagery',
+    id: 'tianditu-img', profile: 'cn', kind: 'satellite', name: '天地图影像', nameZhTw: '天地圖影像', nameEn: 'Tianditu Imagery',
     coordSystem: 'WGS84', maxzoom: 18, requiresKey: 'tiandituKey',
     tiles: (k) => [TIANDITU('img', k)], overlay: (k) => TIANDITU('cia', k),
     subdomains: ['0', '1', '2', '3', '4', '5', '6', '7'], attribution: '© 天地图 CGCS2000'
@@ -55,14 +55,14 @@ export const BASEMAPS = [
     subdomains: ['a', 'b', 'c'], attribution: '© OpenTopoMap (CC-BY-SA) · © OpenStreetMap'
   },
   {
-    id: 'esri-sat', profile: 'global', kind: 'satellite', name: 'Esri 影像', nameEn: 'Esri Imagery',
+    id: 'esri-sat', profile: 'global', kind: 'satellite', name: 'Esri 影像', nameZhTw: 'Esri 影像', nameEn: 'Esri Imagery',
     coordSystem: 'WGS84', maxzoom: 19,
     tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
     attribution: '© Esri · Maxar · Earthstar Geographics'
   },
   // OSM also offered inside CN as a WGS-84 fallback (may be slow without proxy)
   {
-    id: 'osm-cn', profile: 'cn', kind: 'street', name: 'OSM（国际）', nameEn: 'OSM (intl.)',
+    id: 'osm-cn', profile: 'cn', kind: 'street', name: 'OSM（国际）', nameZhTw: 'OSM（國際）', nameEn: 'OSM (intl.)',
     coordSystem: 'WGS84', maxzoom: 19,
     tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
     attribution: '© OpenStreetMap contributors'

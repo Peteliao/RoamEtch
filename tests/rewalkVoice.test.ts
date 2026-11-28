@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { initI18n, setLanguage, t } from '../src/core/i18n';
 import { set } from '../src/core/settings';
 import { loadTripFull } from '../src/core/store';
-import { feedFix, getRewalkNavigation, markExternalNavigation, rewalk, startRewalk, stopRewalk } from '../src/core/rewalk';
+import { feedFix, getRewalkNavigation, markExternalNavigation, rewalk, speak, startRewalk, stopRewalk } from '../src/core/rewalk';
 
 vi.mock('../src/core/store', () => ({ loadTripFull: vi.fn() }));
 vi.mock('../src/core/recorder', () => ({ rec: { status: 'idle' } }));
@@ -58,6 +58,7 @@ beforeEach(async () => {
   spoken.length = 0;
   speechSynthesisMock.speak.mockClear();
   speechSynthesisMock.cancel.mockClear();
+  speechSynthesisMock.getVoices.mockReset().mockReturnValue([]);
   vi.stubGlobal('SpeechSynthesisUtterance', FakeUtterance);
   vi.stubGlobal('speechSynthesis', speechSynthesisMock);
   Object.defineProperty(navigator, 'geolocation', {
@@ -112,6 +113,32 @@ describe('re-walk TTS wording', () => {
     feedFix(points[0].lat, points[0].lon);
     feedFix(points[2].lat, points[2].lon);
     expect(voiceTexts().at(-1)).toBe('This walk is complete. You have reached the end.');
+  });
+
+  it('prefers an exact Traditional Chinese voice over a Simplified Chinese voice', async () => {
+    const traditional = { lang: 'zh-TW', name: 'Traditional Chinese' };
+    speechSynthesisMock.getVoices.mockReturnValue([
+      { lang: 'zh-CN', name: 'Simplified Chinese' },
+      traditional
+    ]);
+    await setLanguage('zh-TW');
+
+    speak('繁體中文語音');
+
+    expect(spoken.at(-1)?.lang).toBe('zh-TW');
+    expect(spoken.at(-1)?.voice).toBe(traditional);
+  });
+
+  it('does not force a Simplified Chinese voice for Traditional Chinese speech', async () => {
+    speechSynthesisMock.getVoices.mockReturnValue([
+      { lang: 'zh-CN', name: 'Simplified Chinese' }
+    ]);
+    await setLanguage('zh-TW');
+
+    speak('繁體中文語音');
+
+    expect(spoken.at(-1)?.lang).toBe('zh-TW');
+    expect(spoken.at(-1)?.voice).toBeNull();
   });
 
   it('offers driving navigation for a distant approach without repeating local guidance', async () => {

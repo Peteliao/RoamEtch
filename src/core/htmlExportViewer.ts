@@ -743,13 +743,13 @@ function openLightbox(items,index){
     lightbox.setAttribute('role','dialog');
     lightbox.setAttribute('aria-modal','true');
     var close=document.createElement('button');
-    close.type='button';close.className='round close';close.setAttribute('aria-label','Close');close.textContent='×';
+    close.type='button';close.className='round close';close.setAttribute('aria-label',L.close);close.textContent='×';
     close.addEventListener('click',closeLightbox);
     var prev=document.createElement('button');
-    prev.type='button';prev.className='round nav prev';prev.setAttribute('aria-label','Previous');prev.textContent='‹';
+    prev.type='button';prev.className='round nav prev';prev.setAttribute('aria-label',L.previous);prev.textContent='‹';
     prev.addEventListener('click',function(){lightboxStep(-1);});
     var next=document.createElement('button');
-    next.type='button';next.className='round nav next';next.setAttribute('aria-label','Next');next.textContent='›';
+    next.type='button';next.className='round nav next';next.setAttribute('aria-label',L.next);next.textContent='›';
     next.addEventListener('click',function(){lightboxStep(1);});
     var im=document.createElement('img');
     im.alt='';

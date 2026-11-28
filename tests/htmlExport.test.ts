@@ -57,6 +57,7 @@ describe('self-contained HTML export', () => {
     expect(data.trackWidth).toBe(9.5);
     expect(data.wps[0].n).toBe('Viewpoint');
     expect(data.wps[0].de).toBe('Open ridge');
+    expect(data.labels).toMatchObject({ close: expect.any(String), previous: expect.any(String), next: expect.any(String) });
   });
 
   it('leaves theme-colored tracks to the active palette', async () => {
@@ -76,6 +77,9 @@ describe('self-contained HTML export', () => {
   it('ships a parseable dependency-free viewer script', () => {
     expect(VIEWER_JS).toContain('function setReplay');
     expect(VIEWER_JS).toContain('function openLightbox');
+    expect(VIEWER_JS).toContain("setAttribute('aria-label',L.close)");
+    expect(VIEWER_JS).toContain("setAttribute('aria-label',L.previous)");
+    expect(VIEWER_JS).toContain("setAttribute('aria-label',L.next)");
     expect(() => new Function(VIEWER_JS)).not.toThrow();
   });
 });

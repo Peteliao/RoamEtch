@@ -4,6 +4,30 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.10.0] - 2026-11-28
+
+### Added
+
+- Added complete Traditional Chinese, Japanese, Korean and Spanish UI
+  localization alongside Simplified Chinese and English, including browser
+  language detection, localized dates, exported pages and re-walk speech.
+- Added translation coverage tests for all six languages, including key and
+  interpolation-placeholder parity.
+
+### Changed
+
+- Each localized slogan now renders in full on one proportional line in
+  Settings and is included on every generic promotional image.
+- Promotional captions and documentation now advertise all six UI languages.
+
+### Fixed
+
+- Corrected singular and plural English and Spanish backup, export and story
+  counts, and made re-walk speech prefer an exact Chinese locale or script voice.
+- Calibrated Chromium startup and recovery node budgets for the overlapping
+  outgoing map and incoming shell during reload, while retaining the stricter
+  post-garbage-collection growth limit.
+
 ## [3.9.1] - 2026-11-28
 
 ### Changed

@@ -1,6 +1,7 @@
 // Live meetup view: create/join codes, encrypted peer map, distance/bearing list,
 // meetup routing, QR sharing, kick/reset and self-destruct countdown.
-import { t } from '../core/i18n';
+import { currentLang, t } from '../core/i18n';
+import { languageTag } from '../core/language';
 import { get, set } from '../core/settings';
 import { on } from '../core/events';
 import { meet, getMeetSnapshot, MEET_CHAT_MAX_LEN } from '../core/meet';
@@ -544,7 +545,7 @@ export function createMeetView(navigate) {
     chatImageViewer = null;
     const url = original ? cacheOriginal(msg.img.fileId, original) : await chatImageUrl(msg);
     if (!url) return;
-    const time = new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const time = new Date(msg.ts).toLocaleTimeString(languageTag(currentLang()), { hour: '2-digit', minute: '2-digit', hour12: false });
     const coords = msg.lat != null && msg.lon != null
       ? `${msg.lat.toFixed(5)}, ${msg.lon.toFixed(5)} (WGS-84)`
       : t('meet.chatImageNoFix');
@@ -607,7 +608,7 @@ export function createMeetView(navigate) {
         el('span', {}, systemChatText(msg)));
     }
     const own = !!msg.self || msg.fromId === s.self?.id;
-    const time = new Date(msg.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    const time = new Date(msg.ts).toLocaleTimeString(languageTag(currentLang()), { hour: '2-digit', minute: '2-digit', hour12: false });
     let bubble;
     if (msg.img) {
       const img = el('img', { alt: t('meet.chatImageView') });
@@ -1430,12 +1431,12 @@ export function createMeetView(navigate) {
     const expiry = s.inviteExpiresAt
       ? el('div', {
         class: 'meet-invite-expiry' + (s.inviteExpired ? ' expired' : ''),
-        title: new Date(s.inviteExpiresAt).toLocaleString()
+        title: new Date(s.inviteExpiresAt).toLocaleString(languageTag(currentLang()))
       }, icon(s.inviteExpired ? 'warn' : 'clock', 13),
       s.inviteExpired
         ? t('meet.inviteExpired')
         : t('meet.inviteExpiresAt', {
-          time: new Date(s.inviteExpiresAt).toLocaleString([], {
+          time: new Date(s.inviteExpiresAt).toLocaleString(languageTag(currentLang()), {
             month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'
           })
         }))
@@ -1627,7 +1628,7 @@ export function createMeetView(navigate) {
         el('div', {},
           s.inviteExpired
             ? t('meet.inviteExpired')
-            : t('meet.inviteExpiresAt', { time: new Date(s.inviteExpiresAt).toLocaleString() }),
+            : t('meet.inviteExpiresAt', { time: new Date(s.inviteExpiresAt).toLocaleString(languageTag(currentLang())) }),
           el('div', { class: 'min' }, t('meet.inviteExpiryHint'))))
       : null;
     const sharingNote = el('div', { class: 'meet-invite-note' },

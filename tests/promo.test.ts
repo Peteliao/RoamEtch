@@ -40,6 +40,9 @@ const copyFields = [
 let promo: typeof import('../src/core/promo');
 let i18n: typeof import('../src/core/i18n');
 
+const promoLanguages = ['zh', 'zh-TW', 'ja', 'ko', 'es', 'en'] as const;
+const resourceKeys = { zh: 'zh', 'zh-TW': 'zhTW', ja: 'ja', ko: 'ko', es: 'es', en: 'en' } as const;
+
 beforeEach(async () => {
   vi.resetModules();
   installStorage();
@@ -120,7 +123,7 @@ describe('promo variants', () => {
   });
 
   it('provides 25 distinct localized captions with the site URL', async () => {
-    for (const lang of ['zh', 'en'] as const) {
+    for (const lang of promoLanguages) {
       await i18n.setLanguage(lang);
       const captions = Array.from({ length: promo.PROMO_VARIANT_COUNT }, (_, variant) => promo.promoCaption(variant));
       expect(new Set(captions).size).toBe(promo.PROMO_VARIANT_COUNT);
@@ -136,10 +139,10 @@ describe('promo variants', () => {
     }
   });
 
-  it('has complete Chinese and English copy for every audience', async () => {
-    for (const lang of ['zh', 'en'] as const) {
+  it('has complete localized copy for every audience', async () => {
+    for (const lang of promoLanguages) {
       await i18n.setLanguage(lang);
-      const audience = i18n[lang].promo.audience as Record<string, Record<string, string>>;
+      const audience = i18n[resourceKeys[lang]].promo.audience as Record<string, Record<string, string>>;
       expect(Object.keys(audience)).toEqual(audienceKeys);
       for (const key of audienceKeys) {
         for (const field of copyFields) {
@@ -162,6 +165,18 @@ describe('promo variants', () => {
       const audience = i18n[lang].promo.audience as Record<string, Record<string, string>>;
       const audienceCopy = audienceKeys.flatMap((key) => copyFields.map((field) => audience[key][field]));
       for (const text of [...captions, ...audienceCopy]) expect(text).not.toMatch(banned);
+    }
+  });
+
+  it('renders both localized slogan lines on promotional images', async () => {
+    const { texts } = installCanvasMock();
+    for (const lang of promoLanguages) {
+      await i18n.setLanguage(lang);
+      const textStart = texts.length;
+      await promo.generatePromo(0);
+      const rendered = texts.slice(textStart);
+      expect(rendered).toContain(i18n.t('app.slogan1'));
+      expect(rendered).toContain(i18n.t('app.slogan2'));
     }
   });
 

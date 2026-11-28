@@ -141,6 +141,15 @@ function drawHeader(ctx: CanvasRenderingContext2D, P, highContrast: boolean) {
   ctx.font = `500 20px ${FONT}`;
   ctx.fillText(t('app.tagline'), M + 85, 130);
 
+  const sloganX = M + 85;
+  const sloganWidth = W - M - sloganX;
+  ctx.fillStyle = P.accent;
+  ctx.font = `600 19px ${FONT}`;
+  ctx.fillText(fitText(ctx, t('app.slogan1'), sloganWidth), sloganX, 170);
+  ctx.fillStyle = P.muted;
+  ctx.font = `500 18px ${FONT}`;
+  ctx.fillText(fitText(ctx, t('app.slogan2'), sloganWidth), sloganX, 196);
+
   const pill = t('promo.pill', { version: APP_VERSION });
   ctx.font = `600 21px ${FONT}`;
   const pw = ctx.measureText(pill).width + 40;

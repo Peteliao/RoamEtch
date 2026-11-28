@@ -1,5 +1,6 @@
 // Shared backup / restore flow: one download path and one verified restore preview.
-import { t } from '../core/i18n';
+import { currentLang, t } from '../core/i18n';
+import { languageTag } from '../core/language';
 import { get, set } from '../core/settings';
 import { emit } from '../core/events';
 import { exportBackup, inspectBackup, restoreBackup } from '../core/backup';
@@ -55,12 +56,12 @@ function historyRecord({
 function formatDate(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
-  return isNaN(d.getTime()) ? '—' : d.toLocaleString();
+  return isNaN(d.getTime()) ? '—' : d.toLocaleString(languageTag(currentLang()));
 }
 
 function restoreErrorMessage(error) {
   return error?.code === 'backup-limit-exceeded'
-    ? error.message
+    ? t('backup.limitExceeded')
     : t(error?.code === 'backup-encrypted-unsupported' ? 'backup.unsupported' : 'trips.restoreErr');
 }
 
@@ -203,7 +204,7 @@ export async function exportBackupFlow({
     encrypted, manifest: { format: 'localtrace-backup', tripSchemaVersion: TRIP_SCHEMA_VERSION, counts }, source: historySource
   });
   emit('backup:exported', { tripCount, counts, encrypted });
-  toast(t(encrypted ? 'backup.encryptedOk' : 'trips.backupOk', { n: tripCount }), 'ok');
+  toast(t(encrypted ? 'backup.encryptedOk' : 'trips.backupOk', { n: tripCount, count: tripCount }), 'ok');
   return true;
 }
 
@@ -336,7 +337,7 @@ export async function restoreBackupFlow(file, { onRestored = null } = {}) {
     mediaChecked: integrity.checked || 0, mediaFailed: integrity.failed?.length || 0
   });
   emit('backup:restored', { restored, filename: file?.name || '' });
-  toast(t('trips.restoreOk', { n: restored }), 'ok');
+  toast(t('trips.restoreOk', { n: restored, count: restored }), 'ok');
   onRestored?.(restored);
   return true;
 }

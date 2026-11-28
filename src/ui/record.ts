@@ -1,6 +1,7 @@
 // Record view: map + live panel + controls + OLED power-save lock.
 import { t, currentLang } from '../core/i18n';
 import { get, set } from '../core/settings';
+import { languageTag } from '../core/language';
 import { on, emit } from '../core/events';
 import { rec, startRecording, pauseRecording, resumeRecording, stopRecording, continueTrip, findRecoverableTrip, retryGeolocation, setRecordingActivity, flushBuffer } from '../core/recorder';
 import { armKeepAlive, disarmKeepAlive, isKeepAliveActive } from '../core/keepalive';
@@ -118,7 +119,10 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
 
   // ---------- layers (one entry, bottom sheet) ----------
   function basemapLabel(b) {
-    return get('language') === 'en' || (get('language') === 'auto' && !navigator.language.startsWith('zh')) ? b.nameEn : b.name;
+    if (b.id === 'custom' && !get('customTileName')) return t('map.customSource');
+    if (currentLang() === 'zh') return b.name;
+    if (currentLang() === 'zh-TW' && b.nameZhTw) return b.nameZhTw;
+    return b.nameEn || b.name;
   }
   function renderMapLayer() {
     const list = availableBasemaps();
@@ -533,7 +537,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     } else {
       pSave.textContent = t('record.saveOkShort');
       pSave.title = s.lastSavedAt
-        ? `${t('record.saveOk')} · ${new Date(s.lastSavedAt).toLocaleTimeString()}`
+        ? `${t('record.saveOk')} · ${new Date(s.lastSavedAt).toLocaleTimeString(languageTag(currentLang()))}`
         : t('record.saveOk');
     }
   }
@@ -1094,7 +1098,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     const activity = tr?.activity && tr.activity !== 'auto'
       ? t(`record.activities.${tr.activity}`)
       : t('record.newTripName');
-    const locale = currentLang().startsWith('zh') ? 'zh-CN' : 'en-US';
+    const locale = languageTag(currentLang());
     const when = new Date(tr?.createdAt || Date.now()).toLocaleString(locale, {
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
     });

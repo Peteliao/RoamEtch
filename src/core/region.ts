@@ -141,9 +141,17 @@ export function isOfflineSim() {
 }
 export function isCorsFailSim() { return regionState.simulated === 'corsfail'; }
 
+export function simulationModeLabel(mode: string) {
+  if (mode === 'cn') return t('region.simCn');
+  if (mode === 'global') return t('region.simGlobal');
+  if (mode === 'offline') return t('region.simOffline');
+  if (mode === 'corsfail') return t('region.simCorsFail');
+  return mode;
+}
+
 export function regionLabel() {
   const s = regionState;
-  if (s.simulated) return t('region.simActive', { mode: s.simulated });
+  if (s.simulated) return t('region.simActive', { mode: simulationModeLabel(s.simulated) });
   if (s.source === 'manual') return s.effective === 'cn' ? t('region.manualCn') : t('region.manualGlobal');
   return s.effective === 'cn' ? t('region.autoCn') : t('region.autoGlobal');
 }

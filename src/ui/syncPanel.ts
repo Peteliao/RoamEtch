@@ -1,7 +1,8 @@
 // Settings panel and pairing flow for cross-device trip sync.
 // Pairing is out-of-band (QR/code). Signaling is encrypted through a blind
 // relay; trip bytes move only over the authenticated WebRTC data channel.
-import { t } from '../core/i18n';
+import { currentLang, t } from '../core/i18n';
+import { languageTag } from '../core/language';
 import { get, set } from '../core/settings';
 import { emit } from '../core/events';
 import { drawQr } from '../core/brand';
@@ -224,7 +225,7 @@ export function createSyncPanel() {
           el('div', { class: 'sync-peer-name' }, peer.name || t('sync.unnamed')),
           el('div', { class: 'small mono faint' }, peer.fingerprint),
           el('div', { class: 'small faint' },
-            `${t('sync.lastSync', { when: new Date(peer.lastSyncAt).toLocaleString() })} · ${t('sync.recordCount', { n: peer.records })}`)),
+            `${t('sync.lastSync', { when: new Date(peer.lastSyncAt).toLocaleString(languageTag(currentLang())) })} · ${t('sync.recordCount', { n: peer.records })}`)),
         remove));
     }
   }

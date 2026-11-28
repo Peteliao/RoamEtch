@@ -1,6 +1,7 @@
 // Share & export view: privacy sanitization, poster (WeChat-aware), GPX/GeoJSON/KML,
 // self-contained HTML, lightweight share link.
-import { t } from '../core/i18n';
+import { currentLang, t } from '../core/i18n';
+import { languageTag } from '../core/language';
 import { get, set } from '../core/settings';
 import { on } from '../core/events';
 import { applyPrivacy, countPrivacyCrops } from '../core/privacy';
@@ -62,7 +63,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       await pending;
     } catch (e) {
       console.error(e);
-      toast(String(e?.message || e), 'err');
+      toast(t('export.failed'), 'err');
     }
     if (!destroyed) {
       syncActiveSelection();
@@ -285,7 +286,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     } catch (e) {
       if (destroyed) return;
       if (generating ? !isSnapshotCurrent(generating) : appState.activeTripId !== startId || outputVersion !== startVersion) notifyStale();
-      else { console.error(e); toast(String(e?.message || e), 'err'); }
+      else { console.error(e); toast(t('export.failed'), 'err'); }
     } finally {
       posterBusy = false;
       if (!destroyed) {
@@ -533,7 +534,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       else if (e?.name === 'AbortError') vNote.textContent = videoBlob ? videoReadyNote : '';
       else if (e?.message === 'no-track') toast(t('export.videoNoTrack'), 'warn');
       else if (e?.message === 'video-unsupported') toast(t('export.videoUnsupported'), 'warn');
-      else { console.error(e); toast(String(e?.message || e), 'err'); }
+      else { console.error(e); toast(t('export.failed'), 'err'); }
     } finally {
       if (videoAbort === abort) {
         videoAbort = null;
@@ -680,7 +681,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     } catch (e) {
       if (destroyed) return;
       if (generating ? !isSnapshotCurrent(generating) : appState.activeTripId !== startId || outputVersion !== startVersion) notifyStale();
-      else { console.error(e); toast(String(e?.message || e), 'err'); }
+      else { console.error(e); toast(t('export.failed'), 'err'); }
     } finally {
       htmlBusy = false;
       if (!destroyed) {
@@ -905,7 +906,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     const activeExists = trips.some((tr) => tr.id === active);
     tripSel.innerHTML = '';
     tripSel.append(el('option', { value: '' }, '—'));
-    for (const tr of trips) tripSel.append(el('option', { value: tr.id }, tr.name || new Date(tr.createdAt).toLocaleString()));
+    for (const tr of trips) tripSel.append(el('option', { value: tr.id }, tr.name || new Date(tr.createdAt).toLocaleString(languageTag(currentLang()))));
     tripSel.value = activeExists ? active : '';
     if (active && !activeExists) {
       await setActiveTrip(null);

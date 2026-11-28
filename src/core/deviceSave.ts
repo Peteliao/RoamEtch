@@ -1,3 +1,5 @@
+import { t } from './i18n';
+
 // The web platform has no silent "save to Photos". A full-resolution capture is
 // handed to the system share sheet (which can store it in the device gallery),
 // then to the File System Access picker, and finally to a plain download.
@@ -44,7 +46,7 @@ export async function saveOriginalPhoto(blob: Blob, takenAt = Date.now()): Promi
     try {
       const handle = await picker({
         suggestedName: name,
-        types: [{ description: 'JPEG image', accept: { [type || 'image/jpeg']: ['.jpg', '.jpeg'] } }]
+        types: [{ description: t('common.jpegImage'), accept: { [type || 'image/jpeg']: ['.jpg', '.jpeg'] } }]
       });
       const writable = await handle.createWritable();
       await writable.write(file);

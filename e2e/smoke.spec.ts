@@ -5,11 +5,71 @@ import { blockExternal, gotoTab, gotoTripSection, openDemo } from './utils';
 test('RoamEtch record view starts directly without manual creation', async ({ page }) => {
   await blockExternal(page);
   await page.goto('/');
-  await expect(page).toHaveTitle('RoamEtch迹刻 · 行程记录');
+  await expect(page).toHaveTitle(/RoamEtch迹刻/);
   await gotoTab(page, 'record');
   await expect(page.locator('#view-record .rec-pill.start')).toBeVisible();
   await expect(page.locator('#view-record .rec-pill.ghost')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '手动', exact: true })).toHaveCount(0);
+});
+
+test('six UI languages keep each complete slogan readable on one line', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error' && !message.text().includes('Failed to load resource')) errors.push(message.text());
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
+  await blockExternal(page);
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.goto('/');
+  await gotoTab(page, 'settings');
+
+  const languages = [
+    { code: 'zh', tag: 'zh-CN', label: '简体中文', record: '记录', slogan: '漫游有迹，刻入舆图；数据归己，不寄云端。' },
+    { code: 'zh-TW', tag: 'zh-TW', label: '繁體中文', record: '記錄', slogan: '漫遊有跡，刻入輿圖；資料歸己，不寄雲端。' },
+    { code: 'en', tag: 'en', label: 'English', record: 'Record', slogan: 'Roam free, etched into your map. Data stays yours—never in the cloud.' },
+    { code: 'ja', tag: 'ja', label: '日本語', record: '記録', slogan: '自由に旅し、地図に刻もう。データは手元に、クラウドには預けない。' },
+    { code: 'ko', tag: 'ko', label: '한국어', record: '기록', slogan: '자유롭게 여행해, 지도에 새겨요. 데이터는 내 것, 클라우드엔 없이.' },
+    { code: 'es', tag: 'es', label: 'Español', record: 'Registro', slogan: 'Viaja libre, deja tu huella en el mapa. Tus datos son tuyos: nunca en la nube.' }
+  ];
+
+  for (const language of languages) {
+    await page.getByRole('button', { name: language.label, exact: true }).click();
+    await expect(page.locator('html')).toHaveAttribute('lang', language.tag);
+    await expect(page.locator('.tabbar button[data-tab="record"]')).toContainText(language.record);
+    const slogans = page.locator('.promo-slogan');
+    await expect(slogans).toHaveCount(1);
+    await expect(slogans.first()).toHaveText(language.slogan);
+    await expect(page.locator('#view-settings')).toHaveClass(/active/);
+    await expect(page.locator('.promo-hero')).toBeVisible();
+    await page.locator('.promo-hero').scrollIntoViewIfNeeded();
+    const layout = await page.locator('.promo-hero').evaluate((card) => {
+      const headline = card.querySelector('.promo-headline') as HTMLElement;
+      const brand = card.querySelector('.promo-brand-line') as HTMLElement;
+      const lines = [...card.querySelectorAll('.promo-slogan')] as HTMLElement[];
+      return {
+        cardOverflow: card.scrollWidth - card.clientWidth,
+        lineOverflows: lines.map((line) => line.scrollWidth - line.clientWidth),
+        lineCounts: lines.map((line) => {
+          const range = document.createRange();
+          range.selectNodeContents(line);
+          return range.getClientRects().length;
+        }),
+        headlineSize: parseFloat(getComputedStyle(headline).fontSize),
+        brandSize: parseFloat(getComputedStyle(brand).fontSize)
+      };
+    });
+    expect(layout.cardOverflow, language.code).toBeLessThanOrEqual(1);
+    expect(layout.lineOverflows, language.code).toEqual([0]);
+    expect(layout.lineCounts, language.code).toEqual([1]);
+    expect(layout.headlineSize, language.code).toBeGreaterThanOrEqual(layout.brandSize * 0.6);
+    expect(layout.headlineSize, language.code).toBeLessThanOrEqual(layout.brandSize + 4);
+  }
+
+  await page.locator('.promo-card .btn.primary').click();
+  const preview = page.locator('.promo-preview-img');
+  await expect(preview).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => preview.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBe(1080);
+  expect(errors).toEqual([]);
 });
 
 test('promo preview lists 25 designs, advances and switches audiences', async ({ page }) => {

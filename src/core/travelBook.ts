@@ -3,6 +3,7 @@
 // the exported file. Weather is disclosed separately from offline sun times.
 import { t, currentLang } from './i18n';
 import { get } from './settings';
+import { languageTag } from './language';
 import { applyPrivacy } from './privacy';
 import { fmtDistance, fmtDuration, fmtAltitude } from './geo';
 import { buildStoryDays, normalizeStory, storyTitle, storySummary } from './story';
@@ -86,7 +87,7 @@ function routeSvg(segments, { showStart = true, showEnd = true } = {}) {
 }
 
 function fmtClock(ms, lang) {
-  return new Date(ms).toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' });
+  return new Date(ms).toLocaleTimeString(languageTag(lang), { hour: '2-digit', minute: '2-digit' });
 }
 
 function dayStats(day: StoryDay, units) {
@@ -163,6 +164,7 @@ function sunBlock(day: StoryDay) {
 
 export async function buildTravelBook(full: any, opts: TravelBookOptions = {}) {
   const lang = currentLang();
+  const locale = languageTag(lang);
   const units = get('units');
   const privacy = opts.privacy || {};
   const cropped = applyPrivacy(full, privacy);
@@ -179,7 +181,7 @@ export async function buildTravelBook(full: any, opts: TravelBookOptions = {}) {
   const title = storyTitle(full.trip, story) || t('record.newTripName');
   const activity = t(`record.activities.${full.trip?.activity || 'auto'}`);
   const dateRange = days.length
-    ? `${new Date(`${days[0].day}T12:00:00`).toLocaleDateString(lang === 'zh' ? 'zh-CN' : 'en-US', { year: 'numeric', month: 'short', day: 'numeric' })}${days.length > 1 ? ` — ${new Date(`${days[days.length - 1].day}T12:00:00`).toLocaleDateString(lang === 'zh' ? 'zh-CN' : 'en-US', { year: 'numeric', month: 'short', day: 'numeric' })}` : ''}`
+    ? `${new Date(`${days[0].day}T12:00:00`).toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' })}${days.length > 1 ? ` — ${new Date(`${days[days.length - 1].day}T12:00:00`).toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' })}` : ''}`
     : '';
 
   const photoCache = new Map<string, string>();
@@ -237,7 +239,7 @@ export async function buildTravelBook(full: any, opts: TravelBookOptions = {}) {
   const dist = fmtDistance(total.distance, units);
   const asc = fmtAltitude(total.ascent, units);
 
-  return `<!doctype html><html lang="${lang === 'zh' ? 'zh-CN' : 'en'}"><head><meta charset="utf-8">
+  return `<!doctype html><html lang="${locale}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)} · ${esc(t('story.bookTitle'))}</title>
 <style>
@@ -286,7 +288,7 @@ export async function buildTravelBook(full: any, opts: TravelBookOptions = {}) {
 <header class="cover">
   <div class="brand">RoamEtch · ${esc(t('story.bookTitle'))}</div>
   <h1>${esc(title)}</h1>
-  <div class="meta">${esc(dateRange)} · ${esc(activity)}${days.length ? ` · ${esc(t('story.dayCount', { n: total.days }))}` : ''}</div>
+  <div class="meta">${esc(dateRange)} · ${esc(activity)}${days.length ? ` · ${esc(t('story.dayCount', { n: total.days, count: total.days }))}` : ''}</div>
   ${story.intro.trim() ? `<div class="intro">${esc(story.intro.trim()).replace(/\n/g, '<br>')}</div>` : ''}
   <div class="cover-stats">
     <span><b>${esc(dist.v)}</b>${esc(dist.u)} ${esc(t('story.distance'))}</span>

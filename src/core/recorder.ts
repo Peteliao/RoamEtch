@@ -2,7 +2,8 @@
 // incremental live stats. Storage is always WGS-84 regardless of region profile.
 import { get } from './settings';
 import { emit } from './events';
-import { t } from './i18n';
+import { currentLang, t } from './i18n';
+import { languageTag } from './language';
 import { haversine, physicsFor, uuid } from './geo';
 import { createJumpGate, speedLimitFor } from './trackFilter';
 import * as store from './store';
@@ -338,7 +339,7 @@ export async function startRecording({ tripId = null, name = '', activity = null
       if (!trip) return false;
     } else {
       trip = await store.createTrip({
-        name: name || `${t('record.newTripName')} ${new Date().toLocaleString()}`,
+        name: name || `${t('record.newTripName')} ${new Date().toLocaleString(languageTag(currentLang()))}`,
         activity: activity || get('activity'),
         status: 'recording'
       });

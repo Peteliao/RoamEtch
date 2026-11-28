@@ -21,7 +21,7 @@ vi.mock('../src/core/settings', () => ({
   })[key])
 }));
 vi.mock('../src/core/events', () => ({ emit: mocks.emit }));
-vi.mock('../src/core/i18n', () => ({ t: vi.fn((key) => key) }));
+vi.mock('../src/core/i18n', () => ({ t: vi.fn((key) => key), currentLang: () => 'zh' }));
 vi.mock('../src/core/store', () => ({
   createTrip: mocks.createTrip,
   getTrip: mocks.getTrip,

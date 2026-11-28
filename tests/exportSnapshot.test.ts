@@ -35,7 +35,8 @@ vi.mock('../src/core/i18n', () => ({
   t: (key: string, vars: Record<string, any> = {}) => {
     const values = Object.values(vars).map(String);
     return values.length ? `${key} ${values.join(' ')}` : key;
-  }
+  },
+  currentLang: () => 'zh'
 }));
 vi.mock('../src/core/settings', () => ({
   get: (key: string) => ({ privacyRadius: 0, videoMusic: 'random' } as any)[key],

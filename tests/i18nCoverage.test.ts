@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { en, zh } from '../src/core/i18n';
+import { zh, en, zhTW, ja, ko, es } from '../src/core/i18n';
+
+const locales = { zh, en, 'zh-TW': zhTW, ja, ko, es };
 
 function flatten(value: any, prefix = '', out: Record<string, string> = {}) {
   for (const [key, child] of Object.entries(value)) {
@@ -10,6 +12,10 @@ function flatten(value: any, prefix = '', out: Record<string, string> = {}) {
     else out[full] = String(child);
   }
   return out;
+}
+
+function placeholders(value: string) {
+  return [...value.matchAll(/{{\s*([^}]+?)\s*}}/g)].map((match) => match[1]).sort();
 }
 
 function walk(dir: string, files: string[] = []) {
@@ -25,7 +31,6 @@ function staticKeys() {
   const keys = new Set<string>();
   for (const file of walk(path.resolve(process.cwd(), 'src'))) {
     const source = fs.readFileSync(file, 'utf8');
-    // Skip concatenated/dynamic expressions such as t('score.verdict' + grade).
     const pattern = /\bt\(\s*(['"])([^'"]*)\1(\s*[,)])/g;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(source))) {
@@ -36,20 +41,33 @@ function staticKeys() {
 }
 
 describe('translation coverage', () => {
-  it('provides every statically referenced key in both languages', () => {
-    const zhKeys = flatten(zh);
-    const enKeys = flatten(en);
-    const missing = staticKeys().flatMap((key) => [
-      ...(key in zhKeys ? [] : [`zh:${key}`]),
-      ...(key in enKeys ? [] : [`en:${key}`])
-    ]);
+  it('provides every statically referenced key in all six UI languages', () => {
+    const flattened = Object.fromEntries(Object.entries(locales).map(([lang, resource]) => [lang, flatten(resource)]));
+    const missing = staticKeys().flatMap((key) =>
+      Object.entries(flattened).flatMap(([lang, values]) => key in values ? [] : [`${lang}:${key}`])
+    );
     expect(missing).toEqual([]);
   });
 
-  it('keeps the Chinese and English key sets identical', () => {
-    const zhKeys = Object.keys(flatten(zh)).sort();
+  it('keeps every locale key set identical to English', () => {
     const enKeys = Object.keys(flatten(en)).sort();
-    expect(enKeys.filter((key) => !zhKeys.includes(key))).toEqual([]);
-    expect(zhKeys.filter((key) => !enKeys.includes(key))).toEqual([]);
+    for (const [lang, resource] of Object.entries(locales)) {
+      const keys = Object.keys(flatten(resource)).sort();
+      expect(keys.filter((key) => !enKeys.includes(key)), `${lang}: extra keys`).toEqual([]);
+      expect(enKeys.filter((key) => !keys.includes(key)), `${lang}: missing keys`).toEqual([]);
+    }
+  });
+
+  it('preserves interpolation placeholders in every locale', () => {
+    const enValues = flatten(en);
+    for (const [lang, resource] of Object.entries(locales)) {
+      const values = flatten(resource);
+      const mismatches = Object.keys(enValues).flatMap((key) =>
+        JSON.stringify(placeholders(values[key] ?? '')) === JSON.stringify(placeholders(enValues[key]))
+          ? []
+          : [`${lang}:${key}: ${placeholders(values[key] ?? '').join(',')} != ${placeholders(enValues[key]).join(',')}`]
+      );
+      expect(mismatches).toEqual([]);
+    }
   });
 });

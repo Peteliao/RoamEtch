@@ -154,7 +154,7 @@ Open it in any modern mobile browser. On iPhone and iPad, use Safari and choose 
 ### Themes and languages
 
 - OLED-friendly true-black dark, light, high-contrast sunlight, and a hacker-inspired **Matrix** theme. Matrix adds terminal typography, fluorescent green, grids, scanlines, and subtle digital rain, honors reduced-motion preferences, and suppresses all decoration in OLED pocket lock. Automatic mode still switches only between light and dark at local sunrise and sunset.
-- Simplified Chinese and English UI, metric and imperial units. UI language is independent from the map service region.
+- Six UI languages: Simplified Chinese, Traditional Chinese, English, Japanese, Korean and Spanish, with metric and imperial units. UI language is independent from the map service region.
 
 ## Install on your phone or desktop
 

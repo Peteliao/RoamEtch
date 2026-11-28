@@ -6,6 +6,7 @@ import { haversine, bearing, fmtDistance, fmtDuration } from './geo';
 import { emit } from './events';
 import { t, currentLang } from './i18n';
 import { get, set } from './settings';
+import { languageTag } from './language';
 import { rec } from './recorder';
 import { navigationLinks, type NavigationLinks, type NavigationPlatform } from './navigation';
 
@@ -131,10 +132,23 @@ export function primeSpeech() {
 export function speak(text) {
   if (rewalk.externalNav || rewalk.muted || get('rewalkVoice') === false || !text || !('speechSynthesis' in window)) return;
   const u = new SpeechSynthesisUtterance(text);
-  const zh = String(currentLang()).toLowerCase().startsWith('zh');
-  u.lang = zh ? 'zh-CN' : 'en-US';
-  const voice = speechSynthesis.getVoices().find((v) => v.lang.replace('_', '-').toLowerCase().startsWith(zh ? 'zh' : 'en'));
-  if (voice) u.voice = voice;
+  const locale = languageTag(currentLang());
+  const normalizedLocale = locale.toLowerCase();
+  const base = normalizedLocale.split('-')[0];
+  const voices = speechSynthesis.getVoices().map((voice) => ({
+    voice,
+    lang: voice.lang.replace(/_/g, '-').toLowerCase()
+  }));
+  const exact = voices.find(({ lang }) => lang === normalizedLocale);
+  const chineseScript = normalizedLocale === 'zh-tw'
+    ? /^zh-(?:hant|tw|hk|mo)(?:-|$)/
+    : normalizedLocale === 'zh-cn' ? /^zh-(?:hans|cn)(?:-|$)/ : null;
+  const compatible = chineseScript
+    ? voices.find(({ lang }) => chineseScript.test(lang))
+    : voices.find(({ lang }) => lang.split('-')[0] === base);
+  const voice = exact || compatible;
+  if (voice) u.voice = voice.voice;
+  u.lang = locale;
   u.rate = 1.05;
   try {
     if (speechSynthesis.paused) speechSynthesis.resume();
@@ -302,10 +316,9 @@ function localizedEta(seconds) {
   const total = Math.round(seconds);
   const unit = total < 60 ? 'second' : total < 3600 ? 'minute' : 'hour';
   const value = Math.max(1, Math.round(total / (unit === 'second' ? 1 : unit === 'minute' ? 60 : 3600)));
-  const zh = String(currentLang()).toLowerCase().startsWith('zh');
   try {
-    const text = new Intl.RelativeTimeFormat(zh ? 'zh-CN' : 'en-US', { numeric: 'always' }).format(value, unit);
-    return zh ? text.replace(/后$/, '') : text.replace(/^in\s+/i, '');
+    const text = new Intl.RelativeTimeFormat(languageTag(currentLang()), { numeric: 'always' }).format(value, unit);
+    return text.replace(/^(?:in\s+|dentro de\s+)/i, '').replace(/[后後후]$/, '');
   } catch {
     return fmtDuration(seconds * 1000, { compact: true });
   }

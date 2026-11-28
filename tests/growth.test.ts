@@ -22,7 +22,8 @@ vi.mock('../src/core/settings', () => ({
 vi.mock('../src/core/i18n', () => ({
   t: (key: string, params: Record<string, any> = {}) => key === 'growth.shareText'
     ? `${params.year}|${params.activity}|${params.trips}|${params.distance}|${params.ascent}|${params.duration}|${params.moving}|${params.days}|${params.months}`
-    : key
+    : key,
+  currentLang: () => 'zh'
 }));
 vi.mock('../src/ui/helpers', () => {
   const el = (tag: string, attrs: Record<string, any> = {}, ...children: any[]) => {

@@ -5,7 +5,8 @@ import { simplifyAsync } from '../core/workerBridge';
 import { resolveAltitude } from '../core/elevation';
 import { haversine, mergeWgs84Bounds, wgs84TrackBounds } from '../core/geo';
 import { fromDisplay } from '../core/coords';
-import { t } from '../core/i18n';
+import { currentLang, t } from '../core/i18n';
+import { languageTag } from '../core/language';
 
 export const MAP_TOOLS_STORAGE_KEY = 'roametch.mapTools.v1';
 export const MAP_TOOLS_SIMPLIFY_TOLERANCE_M = 5;
@@ -535,7 +536,7 @@ export function openMapTools(trips: readonly any[]): MapToolsHandle {
       el('p', { class: 'mt-slope-hint' }, t('mapTools.slopeHint')),
       retry);
     const date = Number.isFinite(trip.createdAt) && trip.createdAt > 0
-      ? new Date(trip.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short' })
+      ? new Date(trip.createdAt).toLocaleDateString(languageTag(currentLang()), { year: 'numeric', month: 'short' })
       : '';
     const root = el('div', { class: 'mt-layer', role: 'listitem', 'data-trip-id': layer.id },
       el('div', { class: 'mt-layer-head' },
@@ -707,7 +708,7 @@ export function openMapTools(trips: readonly any[]): MapToolsHandle {
       if (destroyed || sequence !== elevationSequence) return;
       const available = result?.alt != null && Number.isFinite(result.alt);
       const value = available
-        ? new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(result.alt)
+        ? new Intl.NumberFormat(languageTag(currentLang()), { maximumFractionDigits: 1 }).format(result.alt)
         : '--';
       elevationResult.className = 'mt-elevation-result';
       elevationResult.replaceChildren(

@@ -39,7 +39,7 @@ export async function gotoTripSection(page: Page, section: 'overview' | 'data' |
 
 export async function configureWsRelay(page: Page, relayUrl: string) {
   await gotoTab(page, 'settings');
-  const block = page.locator('.relay-settings-block').first();
+  const block = page.locator('.relay-settings-block').filter({ hasText: '中继通道' });
   await revealSettingsBlock(page, block);
   await block.getByRole('button', { name: '自建 WS 中继', exact: true }).click();
   const input = block.locator('input[type="text"]');

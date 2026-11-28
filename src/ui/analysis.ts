@@ -2,7 +2,8 @@
 // slope distribution, segment table, timeline, difficulty & fatigue advisories.
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
-import { t } from '../core/i18n';
+import { currentLang, t } from '../core/i18n';
+import { languageTag } from '../core/language';
 import { get } from '../core/settings';
 import { on } from '../core/events';
 import { getTrackSnapshotSummary, listTrackRepairVersions, listTrips } from '../core/store';
@@ -133,7 +134,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     tripSel.innerHTML = '';
     tripSel.append(el('option', { value: '' }, '—'));
     for (const tr of trips) {
-      tripSel.append(el('option', { value: tr.id }, tr.name || new Date(tr.createdAt).toLocaleString()));
+      tripSel.append(el('option', { value: tr.id }, tr.name || new Date(tr.createdAt).toLocaleString(languageTag(currentLang()))));
     }
     tripSel.value = appState.activeTripId || '';
   }
@@ -208,11 +209,11 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
     for (const version of versions.slice(0, 20)) {
       const categories = version.selectedCategories.map((id) => t(`analysis.repairCategory.${id}`)).join(' · ');
       const row = addRow(t('analysis.repairVersionLabel', {
-        n: version.version, date: new Date(version.createdAt).toLocaleString()
+        n: version.version, date: new Date(version.createdAt).toLocaleString(languageTag(currentLang()))
       }), version.metrics || {}, version);
       row.classList.add('repair-version-saved');
       row.title = categories;
-      row.setAttribute('aria-label', `${t('analysis.repairVersionLabel', { n: version.version, date: new Date(version.createdAt).toLocaleString() })} · ${categories}`);
+      row.setAttribute('aria-label', `${t('analysis.repairVersionLabel', { n: version.version, date: new Date(version.createdAt).toLocaleString(languageTag(currentLang())) })} · ${categories}`);
     }
     return el('div', { class: 'gps-snapshot repair-versions' },
       el('strong', {}, t('analysis.repairVersionsTitle')),
@@ -508,7 +509,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
           el('strong', {}, t('analysis.qualityOriginalSnapshot')),
           el('div', { class: 'small faint' }, t('analysis.qualitySnapshotInfo', {
             n: snapshot.points, segments: snapshot.segments,
-            date: new Date(snapshot.createdAt).toLocaleString()
+            date: new Date(snapshot.createdAt).toLocaleString(languageTag(currentLang()))
           }))),
         restore,
         recording ? el('div', { class: 'small faint' }, t('analysis.qualityRestoreRecording')) : null));
@@ -962,11 +963,11 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
       el('span', { style: { fontSize: '18px' }, 'aria-hidden': 'true' }, WP_ICONS[w.type] || '📍'),
       el('div', { class: 'txt' },
         el('div', { class: 't' }, w.name || t(`wp.types.${w.type}`)),
-        el('div', { class: 'd' }, [w.time ? new Date(w.time).toLocaleString() : '', w.desc].filter(Boolean).join(' · '))),
+        el('div', { class: 'd' }, [w.time ? new Date(w.time).toLocaleString(languageTag(currentLang())) : '', w.desc].filter(Boolean).join(' · '))),
       w.hidden ? el('span', { class: 'tag', title: t('wp.hidden'), 'aria-label': t('wp.hidden') }, '🚫') : null);
       const details = el('div', { class: 'timeline-details', id: detailsId, hidden: true },
         detail(t('wp.desc'), w.desc || t('common.none')),
-        detail(t('wp.time'), w.time ? new Date(w.time).toLocaleString() : t('common.none')),
+        detail(t('wp.time'), w.time ? new Date(w.time).toLocaleString(languageTag(currentLang())) : t('common.none')),
         detail(t('wp.hidden'), t(w.hidden ? 'common.yes' : 'common.no')),
         el('button', {
           type: 'button', class: 'btn sm timeline-view-map',

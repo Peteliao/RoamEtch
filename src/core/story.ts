@@ -2,6 +2,7 @@
 // recording segments so a midnight-spanning track still reads as two days.
 import { computeStats } from './stats';
 import { sunTimes } from './solar';
+import { languageTag } from './language';
 import type { ManualWeather } from './weather';
 
 export type Story = {
@@ -75,7 +76,7 @@ export function dayKeyOf(time: number | null | undefined, fallback = Date.now())
 export function storyDayLabel(day: string, lang = 'zh') {
   const date = new Date(`${day}T12:00:00`);
   if (!Number.isFinite(date.getTime())) return day;
-  return date.toLocaleDateString(lang === 'zh' ? 'zh-CN' : 'en-US', { month: 'short', day: 'numeric' });
+  return date.toLocaleDateString(languageTag(lang), { month: 'short', day: 'numeric' });
 }
 
 function validPoint(point: any) {
@@ -85,7 +86,7 @@ function validPoint(point: any) {
 
 function fmtClock(date: Date | undefined, lang: string) {
   if (!date || !Number.isFinite(date.getTime())) return null;
-  return date.toLocaleTimeString(lang === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleTimeString(languageTag(lang), { hour: '2-digit', minute: '2-digit' });
 }
 
 function sunFor(day: string, point: { lat: number; lon: number } | null, lang: string) {

@@ -317,20 +317,21 @@ test('P2P settings keep the default off and persist custom STUN and TURN values'
   await openP2PSettings(page);
   await expect(p2pSwitch(page)).not.toBeChecked();
 
-  const stun = page.locator('.field').filter({ hasText: 'STUN 地址' }).locator('textarea');
+  const meetSettings = page.locator('#view-settings .card').filter({ has: page.getByRole('heading', { name: '实时组队', exact: true }) });
+  const stun = meetSettings.locator('.field').filter({ hasText: 'STUN 地址' }).locator('textarea');
   await expect(stun).toHaveValue(/stun:stun\.miwifi\.com:3478/);
   await expect(stun).toHaveValue(/stun:stun\.chat\.bilibili\.com:3478/);
   await expect(stun).toHaveValue(/stun:stun\.cloudflare\.com:3478/);
   await stun.fill('stun:stun.example.com:3478\nstuns:stun.example.com:5349');
   await stun.press('Tab');
 
-  const turn = page.locator('.field').filter({ hasText: 'TURN 地址' }).locator('textarea');
+  const turn = meetSettings.locator('.field').filter({ hasText: 'TURN 地址' }).locator('textarea');
   await turn.fill('turn:turn.example.com:3478\nturns:turn.example.com:5349');
   await turn.press('Tab');
-  const user = page.locator('.field').filter({ hasText: 'TURN 用户名' }).locator('input');
+  const user = meetSettings.locator('.field').filter({ hasText: 'TURN 用户名' }).locator('input');
   await user.fill('localtrace-user');
   await user.press('Tab');
-  const pass = page.locator('.field').filter({ hasText: 'TURN 密码' }).locator('input');
+  const pass = meetSettings.locator('.field').filter({ hasText: 'TURN 密码' }).locator('input');
   await pass.fill('localtrace-pass');
   await pass.press('Tab');
 

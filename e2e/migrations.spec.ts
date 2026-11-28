@@ -5,7 +5,7 @@ test.use({ serviceWorkers: 'block' });
 
 async function createHistoricalDatabase(page: Page, version: number, schemaVersion?: number) {
   await blockExternal(page);
-  await page.route('**/src/main.ts', (route) => route.abort());
+  await page.route('**/src/main.ts*', (route) => route.abort());
   await page.goto('/');
   await page.evaluate(async () => {
     await new Promise<void>((resolve, reject) => {
@@ -67,7 +67,7 @@ async function createHistoricalDatabase(page: Page, version: number, schemaVersi
       };
     });
   }, { version, schemaVersion });
-  await page.unroute('**/src/main.ts');
+  await page.unroute('**/src/main.ts*');
 }
 
 async function readRawDatabase(page: Page) {
