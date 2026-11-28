@@ -28,6 +28,8 @@ const DEFAULTS = {
   weightKg: 65,                // used for calorie estimates
   accuracyLimit: 50,           // metres, worse fixes flagged invalid
   privacyRadius: 300,          // metres, start/end privacy circle
+  privacyMode: 'all',          // all crossings | only the leading/trailing portions
+  privacyOffset: true,         // deterministic circle offset; expanded to preserve coverage
   tiandituKey: '',             // BYOK
   maptilerKey: '',             // BYOK (P1 reserved)
   customTileUrl: '',           // advanced: {z}/{x}/{y} template, WGS84 assumed

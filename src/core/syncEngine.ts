@@ -108,8 +108,13 @@ export class SyncSession {
   private localReady = false;
   private wantsSent = false;
   private completeSent = false;
+  private completeAckSent = false;
+  private remoteCompleteAck = false;
+  private peerSupportsAck = false;
   private remoteComplete: Extract<SyncWireMessage, { type: 'complete' }> | null = null;
   private localDigest = '';
+  private verified = false;
+  private peerSaved = false;
   private done = false;
   private finishing = false;
   private failed = false;
@@ -135,7 +140,13 @@ export class SyncSession {
       this.rejectDone = reject;
     });
     this.options.channel.setMessageHandler((message) => this.enqueue(message));
-    this.options.channel.onClose((reason) => this.fail(syncError(reason === 'timeout' ? 'sync-timeout' : 'sync-disconnected')));
+    this.options.channel.onClose((reason) => {
+      if (this.done || this.failed) return;
+      this.queue = this.queue.then(() => {
+        if (this.done || this.failed || this.remoteCompleteAck) return;
+        this.fail(syncError(reason === 'timeout' ? 'sync-timeout' : 'sync-disconnected'));
+      });
+    });
     if (this.options.signal) {
       this.abortHandler = () => this.fail(abortError());
       if (this.options.signal.aborted) this.abortHandler();
@@ -158,7 +169,7 @@ export class SyncSession {
         pv: SYNC_PROTOCOL_VERSION,
         deviceId: this.options.identity.deviceId,
         name: this.options.identity.name,
-        features: ['media', 'tombstones', 'incremental']
+        features: ['media', 'tombstones', 'incremental', 'completion-ack']
       });
       await this.indexLocal();
       if (this.failed) return;
@@ -214,6 +225,7 @@ export class SyncSession {
     if (message.pv !== SYNC_PROTOCOL_VERSION) throw syncError('sync-version');
     if (message.deviceId !== this.options.peer.deviceId) throw syncError('sync-peer');
     this.remoteHello = true;
+    this.peerSupportsAck = message.features.includes('completion-ack');
     this.resetIdle();
   }
 
@@ -678,8 +690,15 @@ export class SyncSession {
   }
 
   private handleComplete(message: Extract<SyncWireMessage, { type: 'complete' }>) {
-    this.remoteComplete = message;
-    this.remoteThrough = Math.max(this.remoteThrough, message.through);
+    if (message.ack) {
+      if (!this.completeSent || !this.localDigest || message.digest !== this.localDigest) {
+        throw syncError('sync-verify');
+      }
+      this.remoteCompleteAck = true;
+    } else {
+      this.remoteComplete = message;
+      this.remoteThrough = Math.max(this.remoteThrough, message.through);
+    }
     if (this.completeSent && this.localDigest) void this.finish(this.localDigest).catch((error) => this.fail(error));
     else this.tryComplete();
   }
@@ -704,35 +723,58 @@ export class SyncSession {
   }
 
   private async finish(localDigest: string) {
-    if (this.done || this.failed || this.finishing) return;
+    if (this.done || this.failed) return;
     const remote = this.remoteComplete;
     if (!remote) return;
-    this.finishing = true;
-    if (remote.digest !== localDigest) {
-      const previous = await this.options.ledger.getPeer(this.options.peer.deviceId);
-      if (previous) await this.options.ledger.putPeer({ ...previous, peerCursor: 0 });
-      throw syncError('sync-verify');
+    if (!this.verified) {
+      if (remote.digest !== localDigest) {
+        const previous = await this.options.ledger.getPeer(this.options.peer.deviceId);
+        if (previous) await this.options.ledger.putPeer({ ...previous, peerCursor: 0 });
+        throw syncError('sync-verify');
+      }
+      this.verified = true;
+    }
+    if (!this.peerSaved) {
+      if (this.finishing) return;
+      this.finishing = true;
+      const peerRecord: SyncPeerRecord = {
+        deviceId: this.options.peer.deviceId,
+        name: this.options.peer.name,
+        publicJwk: this.options.peer.publicJwk,
+        fingerprint: this.options.peer.fingerprint,
+        lastSyncAt: Date.now(),
+        peerCursor: remote.through,
+        direction: this.options.direction,
+        records: this.received,
+        bytes: this.bytes
+      };
+      try {
+        await this.options.ledger.putPeer(peerRecord);
+      } catch (error) {
+        this.finishing = false;
+        throw error;
+      }
+      this.finishing = false;
+      this.peerSaved = true;
+    }
+    if (this.failed) return;
+    if (this.peerSupportsAck) {
+      if (!this.completeAckSent) {
+        this.completeAckSent = true;
+        try {
+          await this.send({
+            type: 'complete', ack: true, digest: localDigest, through: this.localThrough,
+            applied: this.applied, received: this.received, sent: this.sent
+          });
+        } catch (error) {
+          this.completeAckSent = false;
+          throw error;
+        }
+      }
+      if (!this.remoteCompleteAck) return;
     }
     clearTimeout(this.idleTimer);
     this.cleanupAbort();
-    const peerRecord: SyncPeerRecord = {
-      deviceId: this.options.peer.deviceId,
-      name: this.options.peer.name,
-      publicJwk: this.options.peer.publicJwk,
-      fingerprint: this.options.peer.fingerprint,
-      lastSyncAt: Date.now(),
-      peerCursor: remote.through,
-      direction: this.options.direction,
-      records: this.received,
-      bytes: this.bytes
-    };
-    try {
-      await this.options.ledger.putPeer(peerRecord);
-    } catch (error) {
-      this.finishing = false;
-      throw error;
-    }
-    if (this.failed) return;
     this.done = true;
     this.emitProgress('done');
     this.resolveDone({

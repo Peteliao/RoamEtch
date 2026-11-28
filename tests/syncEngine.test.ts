@@ -63,7 +63,11 @@ class Channel implements SyncChannel {
     for (const message of pending) handler(message);
   }
   onClose(handler: (reason?: string) => void) { this.closeHandler = handler; }
-  close() { this.closed = true; }
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    this.peer.closeHandler?.('closed');
+  }
 }
 
 function pair() {
@@ -114,7 +118,8 @@ function session(
     direction: identity.deviceId === identityA.deviceId ? 'sent' : 'received',
     signal
   });
-  return store.start();
+  const promise = store.start();
+  return promise.finally(() => channel.close());
 }
 
 async function settle(promises: Promise<SyncSummary>[]) {
@@ -235,6 +240,41 @@ describe('sync engine', () => {
     const bManifest = cb.sent.filter((message) => message.type === 'manifest') as any[];
     expect(bManifest.flatMap((message) => message.entries).length).toBeLessThan(5);
     expect(summaries[0].applied).toBe(1);
+  });
+
+  it('waits for the peer to persist before reporting completion and closing', async () => {
+    const dataA = new MemoryData();
+    const dataB = new MemoryData();
+    const ledgerA = new MemoryLedger();
+    const ledgerB = new MemoryLedger();
+    await addTrip(dataA, trip());
+    let releasePeer!: () => void;
+    let peerWriteStarted!: () => void;
+    const peerGate = new Promise<void>((resolve) => { releasePeer = resolve; });
+    const peerWriting = new Promise<void>((resolve) => { peerWriteStarted = resolve; });
+    const putPeer = ledgerB.putPeer.bind(ledgerB);
+    ledgerB.putPeer = async (peer) => {
+      peerWriteStarted();
+      await peerGate;
+      await putPeer(peer);
+    };
+    const [ca, cb] = pair();
+    let resolved = false;
+    const first = session(identityA, peerB, dataA, ledgerA, ca).then((summary) => {
+      resolved = true;
+      return summary;
+    });
+    const second = session(identityB, peerA, dataB, ledgerB, cb);
+    await peerWriting;
+    expect(resolved).toBe(false);
+    expect(ca.closed).toBe(false);
+    expect(cb.closed).toBe(false);
+    releasePeer();
+    const [summaryA, summaryB] = await settle([first, second]);
+    expect(summaryA.digest).toBe(summaryB.digest);
+    expect(ledgerB.peers.get(identityA.deviceId)).toBeTruthy();
+    expect(ca.sent.some((message) => message.type === 'complete' && message.ack)).toBe(true);
+    expect(cb.sent.some((message) => message.type === 'complete' && message.ack)).toBe(true);
   });
 
   it('rejects a peer whose pinned identity changed', async () => {

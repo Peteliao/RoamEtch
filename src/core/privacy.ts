@@ -4,6 +4,9 @@ import { haversine } from './geo';
 
 export type PrivacyOptions = {
   radius?: number;
+  mode?: 'all' | 'ends';
+  offset?: boolean;
+  seed?: string;
   hideSensitive?: boolean;
   hideStartIcon?: boolean;
   hideEndIcon?: boolean;
@@ -41,15 +44,39 @@ function outsideCircle(lat: number, lon: number, circle: any, radius: number) {
   return haversineLowerBound > Math.sin(radius / (2 * EARTH_RADIUS)) ** 2;
 }
 
-function insideCircles(lat: number, lon: number, circles: any[], radius: number) {
-  return circles.some((circle) => !outsideCircle(lat, lon, circle, radius)
-    && haversine(lat, lon, circle.lat, circle.lon) <= radius);
+function insideCircle(lat: number, lon: number, circle: any, radius: number) {
+  return !outsideCircle(lat, lon, circle, radius)
+    && haversine(lat, lon, circle.lat, circle.lon) <= radius;
 }
 
-function resolveCircles(full: any, radius: number, anchorStart?: any, anchorEnd?: any) {
+function insideCircles(lat: number, lon: number, circles: any[], radius: number) {
+  return circles.some((circle) => insideCircle(lat, lon, circle, radius));
+}
+
+function seedHash(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function offsetCircle(point: any, radius: number, seed: string) {
+  const hash = seedHash(seed);
+  const angle = (hash % 3600) / 3600 * Math.PI * 2;
+  const distance = radius * 0.25;
+  const lat = point.lat + Math.sin(angle) * distance / EARTH_RADIUS / RADIANS;
+  const lon = wrapLongitude(point.lon + Math.cos(angle) * distance / EARTH_RADIUS / RADIANS
+    / Math.max(0.15, Math.cos(point.lat * RADIANS)));
+  return { ...point, lat, lon };
+}
+
+function resolveCircles(full: any, radius: number, anchorStart?: any, anchorEnd?: any, offset = false, seed = '') {
   let start = anchorStart;
   let end = anchorEnd;
-  const safeRadius = Number.isFinite(radius) && radius > 0 ? radius : 0;
+  const requestedRadius = Number.isFinite(radius) && radius > 0 ? radius : 0;
+  const safeRadius = offset && requestedRadius > 0 ? requestedRadius * 1.25 : requestedRadius;
   if (safeRadius > 0 && (!start || !end)) {
     for (const segment of full.segments) {
       if (!segment.points.length) continue;
@@ -57,7 +84,7 @@ function resolveCircles(full: any, radius: number, anchorStart?: any, anchorEnd?
       if (!anchorEnd) end = segment.points[segment.points.length - 1];
     }
   }
-  const circles: any[] = [];
+  const anchors: any[] = [];
   let invalidAnchor = false;
   for (const point of [start, end]) {
     if (!point) continue;
@@ -66,12 +93,16 @@ function resolveCircles(full: any, radius: number, anchorStart?: any, anchorEnd?
       invalidAnchor = true;
       continue;
     }
-    if (!circles.some((circle) => circle.lat === point.lat && circle.lon === point.lon)) circles.push(point);
+    if (!anchors.some((anchor) => anchor.lat === point.lat && anchor.lon === point.lon)) anchors.push(point);
   }
-  return { safeRadius, circles: safeRadius > 0 ? circles : [], start, invalidAnchor };
+  const tripSeed = seed || String(full.trip?.id || '');
+  const circles = safeRadius > 0
+    ? anchors.map((point, index) => offset ? offsetCircle(point, requestedRadius, `${tripSeed}:${index}`) : point)
+    : [];
+  return { safeRadius, circles, start, invalidAnchor };
 }
 
-function collectCircleBreaks(from: any, to: any, circle: any, radius: number, breaks: number[], hidden: Array<[number, number]>) {
+function collectCircleBreaks(from: any, to: any, circle: any, radius: number, breaks: number[], hidden: Array<[number, number]>, offset = 0) {
   const latitudeLimit = radius / EARTH_RADIUS / RADIANS;
   if ((from.lat > circle.lat + latitudeLimit && to.lat > circle.lat + latitudeLimit)
     || (from.lat < circle.lat - latitudeLimit && to.lat < circle.lat - latitudeLimit)) return;
@@ -104,10 +135,10 @@ function collectCircleBreaks(from: any, to: any, circle: any, radius: number, br
           if (distanceAt(candidate) <= radius) inside = candidate;
           else outside = candidate;
         }
-        breaks.push((inside + outside) / 2);
+        breaks.push(offset + (inside + outside) / 2);
       } else if (insideA !== insideMiddle) {
-        breaks.push(a, b);
-        hidden.push([a, b]);
+        breaks.push(offset + a, offset + b);
+        hidden.push([offset + a, offset + b]);
       }
       return;
     }
@@ -119,11 +150,103 @@ function collectCircleBreaks(from: any, to: any, circle: any, radius: number, br
   visit(0, 1, distanceAt(0), distanceAt(1), 0);
 }
 
-export function countPrivacyCrops(full: any, { radius = 300, hideSensitive = true, start: anchorStart, end: anchorEnd }: PrivacyOptions = {}) {
-  let croppedWaypoints = 0;
+function pointAtPosition(points: any[], position: number) {
+  if (Number.isInteger(position)) return points[Math.min(points.length - 1, position)];
+  const index = Math.min(points.length - 2, Math.floor(position));
+  return interpolatePoint(points[index], points[index + 1], position - index);
+}
+
+function circleBreaks(points: any[], circle: any, radius: number) {
+  const breaks: number[] = [];
+  const hidden: Array<[number, number]> = [];
+  for (let index = 0; index < points.length - 1; index++) {
+    collectCircleBreaks(points[index], points[index + 1], circle, radius, breaks, hidden, index);
+  }
+  return breaks.sort((a, b) => a - b).filter((value, index, list) => index === 0 || value - list[index - 1] > 1e-10);
+}
+
+function sliceTrack(points: any[], from: number, to: number) {
+  const out: any[] = [];
+  let kept = 0;
+  for (let index = 0; index < points.length; index++) {
+    if (index >= from - 1e-10 && index <= to + 1e-10) kept++;
+  }
+  if (!Number.isInteger(from)) out.push(pointAtPosition(points, from));
+  for (let index = Math.ceil(from); index <= Math.floor(to); index++) out.push(points[index]);
+  if (!Number.isInteger(to) && to > from) out.push(pointAtPosition(points, to));
+  return { points: out, kept };
+}
+
+function trimTrackStart(points: any[], circle: any, radius: number) {
+  if (!insideCircle(points[0].lat, points[0].lon, circle, radius)) return { points, kept: points.length };
+  for (const position of circleBreaks(points, circle, radius)) {
+    const before = pointAtPosition(points, Math.max(0, position - 1e-7));
+    const after = pointAtPosition(points, Math.min(points.length - 1, position + 1e-7));
+    if (insideCircle(before.lat, before.lon, circle, radius) && !insideCircle(after.lat, after.lon, circle, radius)) {
+      return sliceTrack(points, position, points.length - 1);
+    }
+  }
+  return { points: [], kept: 0 };
+}
+
+function trimTrackEnd(points: any[], circle: any, radius: number) {
+  if (!insideCircle(points[points.length - 1].lat, points[points.length - 1].lon, circle, radius)) {
+    return { points, kept: points.length };
+  }
+  const breaks = circleBreaks(points, circle, radius);
+  for (let index = breaks.length - 1; index >= 0; index--) {
+    const position = breaks[index];
+    const before = pointAtPosition(points, Math.max(0, position - 1e-7));
+    const after = pointAtPosition(points, Math.min(points.length - 1, position + 1e-7));
+    if (!insideCircle(before.lat, before.lon, circle, radius) && insideCircle(after.lat, after.lon, circle, radius)) {
+      return sliceTrack(points, 0, position);
+    }
+  }
+  return { points: [], kept: 0 };
+}
+
+function cropTrackEnds(full: any, circles: any[], radius: number) {
+  const usable = full.segments.filter((segment: any) => (segment.points?.length || 0) >= 2);
+  if (!usable.length || !circles.length) return { segments: usable, croppedPoints: 0 };
+  const prepared = usable.map((segment: any) => ({
+    segment, points: segment.points, kept: segment.points.length
+  }));
+  let trimmingStart = true;
+  for (const item of prepared) {
+    if (!trimmingStart || !circles[0]) continue;
+    const result = trimTrackStart(item.points, circles[0], radius);
+    item.points = result.points;
+    item.kept = result.kept;
+    if (result.points.length >= 2) trimmingStart = false;
+  }
+  let trimmingEnd = true;
+  for (let index = prepared.length - 1; index >= 0; index--) {
+    const item = prepared[index];
+    if (item.points.length < 2 || !trimmingEnd || !circles[circles.length - 1]) continue;
+    const beforeLength = item.points.length;
+    const result = trimTrackEnd(item.points, circles[circles.length - 1], radius);
+    item.kept = Math.max(0, item.kept - (beforeLength - result.kept));
+    item.points = result.points;
+    if (result.points.length >= 2) trimmingEnd = false;
+  }
+  const segments: any[] = [];
+  let croppedPoints = 0;
+  for (const item of prepared) {
+    croppedPoints += item.segment.points.length - item.kept;
+    if (item.points.length >= 2) {
+      const changed = item.kept < item.segment.points.length;
+      segments.push({ ...item.segment, id: changed ? `${item.segment.id}-p${segments.length}` : item.segment.id, points: item.points });
+    }
+  }
+  return { segments, croppedPoints };
+}
+
+export function countPrivacyCrops(full: any, {
+  radius = 300, mode = 'all', offset = false, seed = '', hideSensitive = true, start: anchorStart, end: anchorEnd
+}: PrivacyOptions = {}) {
   const hasPoints = full.segments.some((segment) => segment.points.length);
   const { safeRadius, circles, start, invalidAnchor } = hasPoints
-    ? resolveCircles(full, radius, anchorStart, anchorEnd)
+    ? resolveCircles(full, radius, anchorStart, anchorEnd, offset, seed)
     : { safeRadius: 0, circles: [], start: null, invalidAnchor: false };
   const blocked = hasPoints && safeRadius > 0 && (invalidAnchor || circles.length === 0);
   if (blocked) {
@@ -136,22 +259,27 @@ export function countPrivacyCrops(full: any, { radius = 300, hideSensitive = tru
   if (!cropWaypoints) return { croppedPoints: 0, croppedWaypoints: 0 };
   const inCircle = (lat, lon) => insideCircles(lat, lon, circles, safeRadius);
   let croppedPoints = 0;
-  if (cropWaypoints) {
+  if (mode === 'ends' && safeRadius > 0) {
+    croppedPoints = cropTrackEnds(full, circles, safeRadius).croppedPoints;
+  } else if (cropWaypoints) {
     for (const segment of full.segments) {
       for (const point of segment.points || []) if (inCircle(point.lat, point.lon)) croppedPoints++;
     }
   }
+  let croppedWaypoints = 0;
   for (const waypoint of full.waypoints) {
     if ((hideSensitive && waypoint.hidden) || (cropWaypoints && inCircle(waypoint.lat, waypoint.lon))) croppedWaypoints++;
   }
   return { croppedPoints, croppedWaypoints };
 }
 
-export function applyPrivacy(full, { radius = 300, hideSensitive = true, start: anchorStart, end: anchorEnd }: PrivacyOptions = {}) {
+export function applyPrivacy(full, {
+  radius = 300, mode = 'all', offset = false, seed = '', hideSensitive = true, start: anchorStart, end: anchorEnd
+}: PrivacyOptions = {}) {
   if (!full.segments.some((segment) => segment.points.length)) {
     return { segments: [], waypoints: hideSensitive ? full.waypoints.filter((w) => !w.hidden) : full.waypoints, croppedPoints: 0, croppedWaypoints: 0 };
   }
-  const { safeRadius, circles, invalidAnchor } = resolveCircles(full, radius, anchorStart, anchorEnd);
+  const { safeRadius, circles, invalidAnchor } = resolveCircles(full, radius, anchorStart, anchorEnd, offset, seed);
   if (safeRadius > 0 && (invalidAnchor || circles.length === 0)) {
     return {
       segments: [],
@@ -163,8 +291,13 @@ export function applyPrivacy(full, { radius = 300, hideSensitive = true, start: 
   const inCircle = (lat, lon) => insideCircles(lat, lon, circles, safeRadius);
 
   let croppedPoints = 0;
-  const segments = [];
-  if (safeRadius > 0 && circles.length) {
+  let segments: any[] = [];
+  if (mode === 'ends' && safeRadius > 0 && circles.length) {
+    const cropped = cropTrackEnds(full, circles, safeRadius);
+    segments = cropped.segments;
+    croppedPoints = cropped.croppedPoints;
+  } else if (safeRadius > 0 && circles.length) {
+    segments = [];
     for (const seg of full.segments) {
       const points = seg.points || [];
       if (points.length < 2) continue;
@@ -173,7 +306,7 @@ export function applyPrivacy(full, { radius = 300, hideSensitive = true, start: 
       const hidden: Array<[number, number]> = [];
       for (let index = 0; index < points.length - 1; index++) {
         for (const circle of circles) {
-          collectCircleBreaks(points[index], points[index + 1], circle, safeRadius, breaks, hidden);
+          collectCircleBreaks(points[index], points[index + 1], circle, safeRadius, breaks, hidden, index);
         }
       }
       breaks.sort((a, b) => a - b);

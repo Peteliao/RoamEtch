@@ -1488,6 +1488,12 @@ export function createTripsView(navigate, getRecordMap = () => null) {
     refresh: render,
     closeDetail,
     setSection: (section) => setDetailSection(section),
+    focusAnchor: (intent) => {
+      if (!appState.tripDetail.open || (intent?.tripId && intent.tripId !== appState.tripDetail.tripId)) return;
+      if (intent?.section) setDetailSection(intent.section);
+      const panel: any = activeDetailPanel();
+      void panel.focus?.(intent);
+    },
     resize: () => {
       if (appState.tripDetail.open) activeDetailPanel().resize?.();
       else footprintMap?.resize();
@@ -1505,7 +1511,10 @@ export function createTripsView(navigate, getRecordMap = () => null) {
       } else {
         trip = appState.activeTripFull?.trip || allTrips[0] || null;
       }
-      if (trip) await openTrip(trip, intent.section || 'overview');
+      if (trip) {
+        await openTrip(trip, intent.section || 'overview');
+        if (intent.anchor) void (activeDetailPanel() as any).focus?.(intent);
+      }
     },
     destroy: () => {
       viewDestroyed = true;

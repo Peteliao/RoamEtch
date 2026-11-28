@@ -74,7 +74,7 @@ export type SyncWireMessage =
   | { type: 'media-chunk'; t: 'media'; id: string; part: 'blob' | 'thumb'; index: number; data: string }
   | { type: 'media-end'; t: 'media'; id: string }
   | { type: 'missing'; keys: { t: SyncTable; id: string }[] }
-  | { type: 'complete'; digest: string; through: number; applied: number; received: number; sent: number }
+  | { type: 'complete'; digest: string; through: number; applied: number; received: number; sent: number; ack?: true }
   | { type: 'error'; code: string };
 
 export interface SyncManifestEntry extends SyncVersion {
@@ -312,7 +312,11 @@ export function parseSyncWire(raw: string): SyncWireMessage {
       const applied = Math.max(0, Math.floor(Number(value.applied) || 0));
       const received = Math.max(0, Math.floor(Number(value.received) || 0));
       const sent = Math.max(0, Math.floor(Number(value.sent) || 0));
-      return { type: 'complete', digest: value.digest, through: value.through, applied, received, sent };
+      if (value.ack != null && value.ack !== true) throw new Error('sync-message');
+      return {
+        type: 'complete', digest: value.digest, through: value.through, applied, received, sent,
+        ...(value.ack === true ? { ack: true as const } : {})
+      };
     }
     case 'error':
       if (typeof value.code !== 'string' || !/^[a-z0-9-]{3,64}$/.test(value.code)) throw new Error('sync-message');

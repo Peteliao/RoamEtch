@@ -4,6 +4,29 @@ All notable changes to RoamEtch are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions use
 [Semantic Versioning](https://semver.org/).
 
+## [3.11.0] - 2026-11-28
+
+### Added
+
+- Added stable privacy-circle center offsets and an optional start/end-only
+  cropping mode, with clear warnings and coverage across recording segments.
+- Added recording/privacy break labels, optional dashed recording-gap links,
+  direction arrows, 1×/2×/5× replay, speed/slope profiles, and waypoint-centered
+  map/replay synchronization to standalone HTML exports.
+- Added a large-gap repair prompt after driving and cycling recordings, linked
+  directly to the Data tab's track-repair card.
+
+### Fixed
+
+- Added a negotiated, persist-before-ack completion handshake so synchronization
+  no longer reports a false incomplete result when the connection closes immediately
+  after the final protocol message.
+- Unified exported distance, waypoint distance/progress, profile axes and replay
+  on the final simplified geometry, including segment boundaries and overlapping
+  out-and-back routes.
+- Fixed privacy intersections on multi-edge tracks and continued end-only trimming
+  across fully hidden segments without exposing the next segment's hidden prefix.
+
 ## [3.10.0] - 2026-11-28
 
 ### Added

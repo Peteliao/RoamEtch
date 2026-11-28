@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   loadTripPreview: vi.fn(),
   listWaypoints: vi.fn(),
   loadTripFull: vi.fn(),
+  findTrackGaps: vi.fn(),
   updateTrip: vi.fn(),
   addPhotoWaypoint: vi.fn(),
   deletePhotoWaypoint: vi.fn(),
@@ -43,7 +44,13 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn()
 }));
 
-vi.mock('../src/core/i18n', () => ({ t: (key: string) => key, currentLang: () => 'en' }));
+vi.mock('../src/core/i18n', () => ({
+  t: (key: string, vars: Record<string, any> = {}) => {
+    const values = Object.values(vars).map(String);
+    return values.length ? `${key} ${values.join(' ')}` : key;
+  },
+  currentLang: () => 'en'
+}));
 vi.mock('../src/core/settings', () => ({
   get: (key: string) => ({
     language: 'en', activity: 'hike', units: 'metric', weightKg: 65,
@@ -88,6 +95,7 @@ vi.mock('../src/core/store', () => ({
   addPhotoWaypoint: mocks.addPhotoWaypoint,
   deletePhotoWaypoint: mocks.deletePhotoWaypoint
 }));
+vi.mock('../src/core/gapRepair', () => ({ findTrackGaps: mocks.findTrackGaps }));
 vi.mock('../src/core/locks', () => ({ onBroadcast: () => vi.fn() }));
 vi.mock('../src/core/history', () => ({ clearHistory: vi.fn() }));
 vi.mock('../src/core/waypointMeta', () => ({ WP_ICONS: {} }));
@@ -207,6 +215,7 @@ beforeEach(() => {
   mocks.listWaypoints.mockResolvedValue(waypoints);
   mocks.loadTripPreview.mockResolvedValue(preview);
   mocks.loadTripFull.mockResolvedValue({ ...track, waypoints, media: [{ blob: new Blob(['photo']) }] });
+  mocks.findTrackGaps.mockReturnValue([]);
   mocks.updateTrip.mockResolvedValue(undefined);
   mocks.findRecoverableTrip.mockResolvedValue(null);
   mocks.refreshActiveTrip.mockResolvedValue(null);
@@ -268,6 +277,25 @@ describe('record view bounded loading', () => {
     (view.view.querySelector('[data-result-action="analysis"]') as HTMLButtonElement).click();
 
     await vi.waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('analysis'));
+    expect(mocks.setActiveTrip).toHaveBeenCalledWith('trip-1');
+    expect(mocks.loadTripFull).toHaveBeenCalledTimes(1);
+  });
+
+  it('prompts driving trips with large gaps and deep-links to track repair', async () => {
+    const view = await mount();
+    mocks.loadTripTrack.mockResolvedValue({
+      trip: { ...trip, activity: 'drive' },
+      segments: [{ id: 'seg-1', points }, { id: 'seg-2', points }]
+    });
+    mocks.findTrackGaps.mockReturnValue([{ index: 0, distance: 640 }]);
+    await finish(view.view);
+
+    const sheet = view.view.querySelector('.record-result-sheet')!;
+    expect(sheet.textContent).toContain('record.gapRepairTitle');
+    expect(sheet.textContent).toContain('640 m');
+    (sheet.querySelector('[data-result-gap-repair]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('analysis', { section: 'data', anchor: 'track-gaps' }));
     expect(mocks.setActiveTrip).toHaveBeenCalledWith('trip-1');
     expect(mocks.loadTripFull).toHaveBeenCalledTimes(1);
   });

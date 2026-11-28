@@ -156,7 +156,7 @@ export function createShell(root) {
     if (normalized.fit === true) validated.fit = true;
     if (typeof normalized.anchor === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(normalized.anchor)) validated.anchor = normalized.anchor;
     if (name === 'analysis' || name === 'export') {
-      return { ...validated, detail: true, section: name === 'analysis' ? 'overview' : 'share' };
+      return { ...validated, detail: true, section: name === 'analysis' ? (validated.section === 'data' ? 'data' : 'overview') : 'share' };
     }
     return validated;
   }
@@ -197,7 +197,8 @@ export function createShell(root) {
         if (intent?.detail) {
           const tripId = intent.tripId || appState.tripDetail.tripId || appState.activeTripId;
           if (appState.tripDetail.open && appState.tripDetail.tripId === tripId) {
-            views.trips.setSection?.(intent.section || 'overview');
+            if (intent.anchor) views.trips.focusAnchor?.(intent);
+            else views.trips.setSection?.(intent.section || 'overview');
           } else {
             views.trips.focus?.({ ...intent, tripId });
           }

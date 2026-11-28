@@ -2,8 +2,8 @@
 // - warm offline layout, optional online CN/Global basemap
 // - full stats, elevation profile, waypoint timeline + embedded thumbs
 // - interactive pan/zoom, replay, theme switch, branded footer
-import { simplify, fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, haversine, sampleTrackSegments } from './geo';
-import { applyPrivacy } from './privacy';
+import { simplify, fmtDistance, fmtDuration, fmtSpeed, fmtPace, fmtAltitude, haversine, sampleTrackSegments, usableTrackPoints, interpolateLongitude } from './geo';
+import { applyPrivacy, type PrivacyOptions } from './privacy';
 import { computeStats } from './stats';
 import { get } from './settings';
 import { languageTag } from './language';
@@ -95,47 +95,122 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
   });
 }
 
-function buildProfile(series) {
-  const d = series?.d || [];
-  const alt = series?.alt || [];
-  if (alt.length < 2) return [];
-  const step = Math.max(1, Math.ceil(alt.length / 240));
+function buildProfile(series, value: 'alt' | 'speed' | 'slope', scale = 1, distances: number[] = []) {
+  const sourceD = series?.d || [];
+  const values = series?.[value] || [];
+  const d = distances.length === values.length ? distances : sourceD;
+  if (values.length < 2) return [];
+  const step = Math.max(1, Math.ceil(values.length / 240));
   const out = [];
-  for (let i = 0; i < alt.length; i += step) {
-    if (alt[i] == null || !isFinite(alt[i])) continue;
-    out.push([Math.round(d[i] || 0), Math.round(alt[i] * 10) / 10]);
+  for (let i = 0; i < values.length; i += step) {
+    if (values[i] == null || !isFinite(values[i])) continue;
+    out.push([Math.round(d[i] || 0), Math.round(values[i] * scale * 10) / 10]);
   }
-  const lastIdx = alt.length - 1;
-  if (alt[lastIdx] != null && isFinite(alt[lastIdx])) {
-    const last = [Math.round(d[lastIdx] || 0), Math.round(alt[lastIdx] * 10) / 10];
+  const lastIdx = values.length - 1;
+  if (values[lastIdx] != null && isFinite(values[lastIdx])) {
+    const last = [Math.round(d[lastIdx] || 0), Math.round(values[lastIdx] * scale * 10) / 10];
     if (!out.length || out[out.length - 1][0] !== last[0]) out.push(last);
   }
   return out.length >= 2 ? out : [];
 }
 
 function fullPointTrack(full) {
-  const pts = full.segments.flatMap((s) => s.points || []);
-  if (!pts.length) return { pts: [], cum: [] };
-  const stride = Math.max(1, Math.ceil(pts.length / 20000));
-  const sample = [];
-  for (let i = 0; i < pts.length; i += stride) sample.push(pts[i]);
-  if (sample[sample.length - 1] !== pts[pts.length - 1]) sample.push(pts[pts.length - 1]);
-  const cum = [0];
-  for (let i = 1; i < sample.length; i++) {
-    cum.push(cum[i - 1] + haversine(sample[i - 1].lat, sample[i - 1].lon, sample[i].lat, sample[i].lon));
+  const tracks = [];
+  const distances = [];
+  let total = 0;
+  for (const segment of full.segments || []) {
+    const points = usableTrackPoints(segment.points || []);
+    if (points.length < 2) continue;
+    const cum = [0];
+    distances.push(total);
+    for (let index = 1; index < points.length; index++) {
+      const step = haversine(points[index - 1].lat, points[index - 1].lon, points[index].lat, points[index].lon);
+      cum.push(cum[index - 1] + step);
+      distances.push(total + cum[index]);
+    }
+    tracks.push({ points, cum, offset: total });
+    total += cum[cum.length - 1];
   }
-  return { pts: sample, cum };
+  return { tracks, distances, total };
 }
 
-function nearestTrackDistance(track, lat, lon) {
-  if (!track.pts.length) return null;
-  let best = Infinity, idx = 0;
-  for (let i = 0; i < track.pts.length; i++) {
-    const p = track.pts[i];
-    const d = haversine(lat, lon, p.lat, p.lon);
-    if (d < best) { best = d; idx = i; }
+function wrapLongitude(value: number) {
+  return ((value + 180) % 360 + 360) % 360 - 180;
+}
+
+function nearestTrackDistance(track, waypoint) {
+  if (!track.tracks.length) return null;
+  const cosine = Math.max(0.01, Math.cos(waypoint.lat * Math.PI / 180));
+  const candidates = [];
+  for (const { points, cum, offset } of track.tracks) {
+    for (let index = 0; index < points.length - 1; index++) {
+      const from = points[index], to = points[index + 1];
+      const ax = wrapLongitude(from.lon - waypoint.lon) * cosine;
+      const ay = from.lat - waypoint.lat;
+      const bx = wrapLongitude(to.lon - waypoint.lon) * cosine;
+      const by = to.lat - waypoint.lat;
+      const dx = bx - ax, dy = by - ay;
+      const fraction = dx * dx + dy * dy > 0
+        ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / (dx * dx + dy * dy)))
+        : 0;
+      const lat = from.lat + (to.lat - from.lat) * fraction;
+      const lon = interpolateLongitude(from.lon, to.lon, fraction);
+      const spatial = haversine(waypoint.lat, waypoint.lon, lat, lon);
+      const time = Number.isFinite(from.t) && Number.isFinite(to.t) && to.t > from.t
+        ? from.t + (to.t - from.t) * fraction
+        : null;
+      const timeDelta = Number.isFinite(waypoint.time) && time != null
+        ? Math.abs(waypoint.time - time)
+        : Number.POSITIVE_INFINITY;
+      candidates.push({
+        spatial,
+        timeDelta,
+        distance: offset + cum[index] + (cum[index + 1] - cum[index]) * fraction
+      });
+    }
   }
-  return track.cum[idx];
+  if (!candidates.length) return null;
+  const nearest = candidates.reduce((best, candidate) => candidate.spatial < best.spatial ? candidate : best);
+  const timed = candidates.filter((candidate) => candidate.spatial <= nearest.spatial + 25
+    && Number.isFinite(candidate.timeDelta));
+  const chosen = timed.length
+    ? timed.reduce((best, candidate) => candidate.timeDelta < best.timeDelta ? candidate : best)
+    : nearest;
+  return {
+    distance: chosen.distance,
+    progress: track.total > 0 ? Math.max(0, Math.min(1, chosen.distance / track.total)) : 0
+  };
+}
+
+function sameTrackPoint(a, b) {
+  return !!a && !!b && haversine(a.lat, a.lon, b.lat, b.lon) < 0.05;
+}
+
+function buildExportGaps(segments, originalSegments, units) {
+  const boundaries = [];
+  for (let index = 0; index < originalSegments.length - 1; index++) {
+    const from = originalSegments[index]?.points?.at(-1);
+    const to = originalSegments[index + 1]?.points?.[0];
+    if (from && to) boundaries.push({ from, to });
+  }
+  const gaps = [];
+  for (let index = 0; index < segments.length - 1; index++) {
+    const from = segments[index].points.at(-1), to = segments[index + 1].points[0];
+    const distance = haversine(from.lat, from.lon, to.lat, to.lon);
+    const recording = boundaries.some((boundary) => sameTrackPoint(from, boundary.from) && sameTrackPoint(to, boundary.to));
+    if (distance < 2 && recording) continue;
+    const dt = Number.isFinite(from.t) && Number.isFinite(to.t) && to.t > from.t ? to.t - from.t : null;
+    const formatted = fmtDistance(distance, units);
+    gaps.push({
+      a: [Math.round(from.lon * 1e6) / 1e6, Math.round(from.lat * 1e6) / 1e6],
+      b: [Math.round(to.lon * 1e6) / 1e6, Math.round(to.lat * 1e6) / 1e6],
+      d: Math.round(distance),
+      dt,
+      kind: recording ? 'recording' : 'privacy',
+      text: `${formatted.v} ${formatted.u}${dt ? ` · ${fmtDuration(dt, { compact: true })}` : ''}`
+    });
+  }
+  return gaps;
 }
 
 async function attachPhotos(nodes, media, enabled, cfg) {
@@ -181,7 +256,7 @@ function clockText(ts, locale, sameDayAs) {
 type BuildOpts = {
   tier?: string;
   style?: any;
-  privacy?: { radius?: number; hideSensitive?: boolean; hideStartIcon?: boolean; hideEndIcon?: boolean };
+  privacy?: PrivacyOptions;
   includePhotos?: boolean;
   places?: string[];
   onProgress?: (p: number) => void;
@@ -214,13 +289,15 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
     .filter((segment) => segment.length >= 2);
   const totalSimplified = simplified.reduce((sum, segment) => sum + segment.length, 0);
   const stride = Math.max(1, Math.ceil(totalSimplified / pointLimit));
-  const segs = simplified
+  const exportSegments = simplified
     .map((segment) => segment.filter((_, index) => index % stride === 0 || index === segment.length - 1))
     .filter((segment) => segment.length >= 2)
-    .map((segment) => segment.map((p) => [Math.round(p.lon * 1e6) / 1e6, Math.round(p.lat * 1e6) / 1e6]));
+    .map((points) => ({ points }));
+  const segs = exportSegments
+    .map((segment) => segment.points.map((p) => [Math.round(p.lon * 1e6) / 1e6, Math.round(p.lat * 1e6) / 1e6]));
   const pts = segs.flat();
   const trackColor = trackColorValue(style.trackColor, '');
-  const stats = computeStats(cropped.segments, {
+  const stats = computeStats(exportSegments, {
     ascentThreshold: get('ascentThreshold'),
     activity: full.trip.activity,
     weightKg: get('weightKg')
@@ -230,7 +307,8 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
   const lang = locale;
   const initialTheme = effectiveTheme();
   const ti = tripTimeInfo(full);
-  const track = fullPointTrack(cropped);
+  const track = fullPointTrack({ segments: exportSegments });
+  const gaps = buildExportGaps(exportSegments, full.segments, units);
   const sameDay = ti ? new Date(ti.ts) : null;
 
   onProgress?.(0.15);
@@ -245,7 +323,8 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
     .map((w, i) => {
       const type = w.type || 'custom';
       const typeLabel = t(`wp.types.${type}`);
-      const dist = nearestTrackDistance(track, w.lat, w.lon);
+      const match = nearestTrackDistance(track, w);
+      const dist = match?.distance ?? null;
       return {
         wp: w,
         idx: i,
@@ -258,6 +337,7 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
         tm: clockText(w.time, locale, sameDay),
         dst: dist == null ? '' : (() => { const v = fmtDistance(dist, units); return `${v.v} ${v.u}`; })(),
         dNum: dist ?? Number.MAX_SAFE_INTEGER,
+        pr: match?.progress ?? null,
         de: String(w.desc || '').slice(0, 600),
         pc: (w.mediaIds || []).length,
         img: '',
@@ -271,7 +351,7 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
   const places = (await placePromise).filter(Boolean).slice(0, 6);
   onProgress?.(0.8);
 
-  const dist = fmtDistance(stats.distance, units);
+  const dist = fmtDistance(track.total, units);
   const asc = fmtAltitude(stats.ascent, units);
   const desc = fmtAltitude(stats.descent, units);
   const maxAlt = stats.maxAlt == null ? null : fmtAltitude(stats.maxAlt, units);
@@ -281,8 +361,13 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
   const avgPace = fmtPace(stats.avgSpeed, units);
   const durationMs = stats.duration || ti?.durationMs || 0;
   const durationShort = durationMs > 0 ? fmtDuration(durationMs, { compact: true }) : '--';
-  const profile = buildProfile(stats.series);
-  const profileEndObj = profile.length ? fmtDistance(profile[profile.length - 1][0], units) : null;
+  const profiles = {
+    elevation: buildProfile(stats.series, 'alt', units === 'imperial' ? 3.28084 : 1, track.distances),
+    speed: buildProfile(stats.series, 'speed', units === 'imperial' ? 2.23694 : 3.6, track.distances),
+    slope: buildProfile(stats.series, 'slope', 1, track.distances)
+  };
+  const profile = profiles.elevation;
+  const profileEndObj = fmtDistance(track.total, units);
 
   const title = full.trip.name || t('record.newTripName');
   const activity = t(`record.activities.${full.trip.activity || 'auto'}`);
@@ -291,9 +376,15 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
   const startText = ti ? clockText(ti.ts, locale, sameDay) : '';
   const endText = ti ? clockText(ti.te, locale, sameDay) : '';
   const privacyRadius = Math.max(0, +privacy.radius || 0);
-  const privacyText = privacyRadius > 0
-    ? t('export.htmlPrivacyOn', { r: privacyRadius })
-    : t('export.htmlPrivacyOff');
+  const privacyParts = privacyRadius > 0
+    ? [privacy.mode === 'ends'
+      ? t('export.htmlPrivacyEnds', { r: privacyRadius })
+      : t('export.htmlPrivacyOn', { r: privacyRadius })]
+    : [t('export.htmlPrivacyOff')];
+  if (privacyRadius > 0 && privacy.offset) {
+    privacyParts.push(t('export.htmlPrivacyOffset', { r: Math.round(privacyRadius * 1.25) }));
+  }
+  const privacyText = privacyParts.join(' · ');
   const privacyIcons = privacy.hideStartIcon || privacy.hideEndIcon
     ? (privacy.hideStartIcon && privacy.hideEndIcon ? t('export.htmlIconsBothHidden')
       : privacy.hideStartIcon ? t('export.htmlStartIconHidden') : t('export.htmlEndIconHidden'))
@@ -321,23 +412,39 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
     replay: t('export.htmlReplay'),
     pause: t('export.htmlPause'),
     vector: t('export.htmlVector'),
+    direction: t('export.htmlDirection'),
+    speed: t('export.htmlSpeed'),
+    elevation: t('export.htmlElevation'),
+    speedProfile: t('export.htmlSpeedProfile'),
+    slopeProfile: t('export.htmlSlopeProfile'),
+    gaps: t('export.htmlGaps'),
+    gapRecording: t('export.htmlGapRecording'),
+    gapPrivacy: t('export.htmlGapPrivacy'),
+    gapNone: t('export.htmlGapNone'),
+    gapConnect: t('export.htmlGapConnect'),
+    gapConnectHint: t('export.htmlGapConnectHint'),
     close: t('common.close'),
     previous: t('common.previous'),
     next: t('common.next')
   };
 
   const data = {
-    v: 3,
+    v: 4,
     tier,
+    distance: track.total,
     segs,
     pts: pts.map((p) => [p[0], p[1]]),
     wps: nodes.map((n) => ({
       n: n.name, ty: n.type, tl: n.typeLabel, ic: n.icon,
-      la: n.la, lo: n.lo, tm: n.tm, dst: n.dst, de: n.de, ph: n.imgs
+      la: n.la, lo: n.lo, tm: n.tm, dst: n.dst, pr: n.pr, de: n.de, ph: n.imgs
     })),
     profile,
-    profileEnd: profileEndObj ? `${profileEndObj.v} ${profileEndObj.u}` : '',
+    profiles,
+    profileEnd: `${profileEndObj.v} ${profileEndObj.u}`,
     altUnit: fmtAltitude(0, units).u,
+    speedUnit: fmtSpeed(0, units).u,
+    slopeUnit: '%',
+    gaps,
     labels,
     palettes: canvasPalettes(),
     css: Object.fromEntries(CONCRETE_THEME_IDS.map((th) => [th, cssVars(th)])),
@@ -355,14 +462,29 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
   const placesHtml = places.length
     ? `<div class="places">${places.map((p) => `<span class="place">${esc(p)}</span>`).join('')}</div>`
     : '';
-  const profileHtml = profile.length
-    ? '<div class="chartwrap"><canvas id="prof"></canvas></div>'
+  const hasProfile = Object.values(profiles).some((points) => points.length >= 2);
+  const profileHtml = hasProfile
+    ? `<div class="profile-tools"><select id="profileSel" aria-label="${esc(t('export.htmlProfile'))}">
+        <option value="elevation"${profiles.elevation.length >= 2 ? '' : ' disabled'}>${esc(t('export.htmlElevation'))}</option>
+        <option value="speed"${profiles.speed.length >= 2 ? '' : ' disabled'}>${esc(t('export.htmlSpeedProfile'))}</option>
+        <option value="slope"${profiles.slope.length >= 2 ? '' : ' disabled'}>${esc(t('export.htmlSlopeProfile'))}</option>
+      </select><span id="profileValue"></span></div>
+      <div class="chartwrap"><canvas id="prof"></canvas></div>`
     : `<div class="empty">${esc(t('analysis.noAlt'))}</div>`;
+  const gapsHtml = gaps.length
+    ? `<div class="gap-list">${gaps.map((gap) => `<div class="gap-item ${gap.kind}">
+        <span class="gap-dot"></span><div><div class="gap-kind">${esc(t(`export.htmlGap${gap.kind === 'recording' ? 'Recording' : 'Privacy'}`))}</div>
+        <div class="gap-meta">${esc(gap.text)}</div></div>
+      </div>`).join('')}</div>
+      ${gaps.some((gap) => gap.kind === 'recording')
+        ? `<label class="checkrow"><input id="gapConnect" type="checkbox"><span>${esc(t('export.htmlGapConnect'))}</span></label><div class="hint">${esc(t('export.htmlGapConnectHint'))}</div>`
+        : ''}`
+    : `<div class="hint gap-none">${esc(t('export.htmlGapNone'))}</div>`;
   const nodeHtml = nodes.length
-    ? `<div class="nodes">${nodes.map((n) => {
+    ? `<div class="nodes">${nodes.map((n, i) => {
         const bits = [n.tm, n.dst, n.pc > 1 ? t('export.htmlPhotoCount', { n: n.pc }) : n.pc === 1 ? t('wp.photos') : '']
           .filter(Boolean);
-        return `<article class="node">
+        return `<article class="node" data-node="${i}" tabindex="0" role="button" aria-label="${esc(n.name)}">
           <div class="node-ico">${esc(n.icon)}</div>
           <div class="node-body">
             <div class="node-title"><span>${esc(n.name)}</span><span class="nbadge">${esc(n.typeLabel)}</span></div>
@@ -422,6 +544,9 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
     <button class="round" id="zreset" type="button" aria-label="${esc(t('export.htmlResetView'))}" title="${esc(t('export.htmlResetView'))}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.6 9A8 8 0 1 1 4 12"/><path d="M4 4v5h5"/></svg>
     </button>
+    <button class="round active" id="directionBtn" type="button" aria-label="${esc(t('export.htmlDirection'))}" title="${esc(t('export.htmlDirection'))}" aria-pressed="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19 19 5M10 5h9v9"/></svg>
+    </button>
   </div>
   <div class="wp-pop" id="wpPop" hidden></div>
   <footer class="dock">
@@ -435,6 +560,7 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
     <div class="dock-actions">
       <span class="guide">${esc(t('export.htmlGuide'))}</span>
       <span class="bm" id="bm">${esc(t('export.htmlVector'))}</span>
+      <label class="speed-control"><span class="sr-only">${esc(t('export.htmlSpeed'))}</span><select id="speedSel" aria-label="${esc(t('export.htmlSpeed'))}"><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option></select></label>
       <button class="btn" id="playBtn" type="button"><span id="playIc"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></span><span id="playTxt">${esc(t('export.htmlReplay'))}</span></button>
       <button class="btn primary" id="detailBtn" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>${esc(t('export.htmlDetail'))}</button>
     </div>
@@ -453,8 +579,10 @@ export async function buildSelfContainedHTML(full, opts: BuildOpts = {}) {
     </div>
     <div class="sheet-body">
       <div class="statgrid">${statsHtml}</div>
-      <div class="sec">${esc(t('analysis.elevProfile'))}</div>
+      <div class="sec">${esc(t('export.htmlProfile'))}</div>
       ${profileHtml}
+      <div class="sec">${esc(t('export.htmlGaps'))} ${gaps.length ? `<span class="count">${gaps.length}</span>` : ''}</div>
+      ${gapsHtml}
       <div class="sec">${esc(t('export.htmlTimeline'))} ${nodes.length ? `<span class="count">${nodes.length}</span>` : ''}</div>
       ${nodeHtml}
       ${brandFoot}

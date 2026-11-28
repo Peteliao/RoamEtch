@@ -74,6 +74,24 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
 
   // ---- privacy ----
   const radiusInput = el('input', { type: 'number', min: '0', max: '5000', step: '50', value: get('privacyRadius') });
+  const privacyModeSelect = el('select');
+  for (const mode of ['all', 'ends']) {
+    const option = el('option', { value: mode }, t(`export.privacyMode${mode === 'all' ? 'All' : 'Ends'}`));
+    option.selected = get('privacyMode') === mode;
+    privacyModeSelect.append(option);
+  }
+  privacyModeSelect.onchange = () => {
+    set('privacyMode', privacyModeSelect.value);
+    invalidateGenerated();
+    updatePrivacySummary(); updateLink(true); updateHtmlEstimate(); warmExport(curFull);
+  };
+  const privacyOffsetCb = el('input', { type: 'checkbox' });
+  privacyOffsetCb.checked = get('privacyOffset') !== false;
+  privacyOffsetCb.onchange = () => {
+    set('privacyOffset', privacyOffsetCb.checked);
+    invalidateGenerated();
+    updatePrivacySummary(); updateLink(true); updateHtmlEstimate(); warmExport(curFull);
+  };
   radiusInput.onchange = () => {
     radiusInput.value = String(Math.max(0, +radiusInput.value || 0));
     set('privacyRadius', +radiusInput.value);
@@ -81,7 +99,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     updatePrivacySummary(); updateLink(true); updateHtmlEstimate(); warmExport(curFull);
   };
   radiusInput.oninput = () => updatePrivacySummary();
-  const hideCb = el('input', { type: 'checkbox' });
+  const hideCb = el('input', { type: 'checkbox', class: 'hide-sensitive' });
   hideCb.checked = true;
   hideCb.onchange = () => { invalidateGenerated(); updatePrivacySummary(); updateLink(true); updateHtmlEstimate(); warmExport(curFull); };
   const startIconCb = el('input', { type: 'checkbox', class: 'hide-start-icon' });
@@ -100,10 +118,14 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
   vectorCb.onchange = () => { invalidateGenerated(); updatePrivacySummary(); warmExport(curFull); };
   const privacySummary = el('div', { class: 'privacy-summary small muted', role: 'status', 'aria-live': 'polite' });
   const privacyCrop = el('div', { class: 'privacy-crop small faint', style: { marginTop: '8px' } });
+  const privacyModeNote = el('div', { class: 'small faint privacy-mode-note', style: { marginTop: '8px' } });
   const privacyControls = el('div', { class: 'privacy-controls', id: 'export-privacy-controls', hidden: true, style: { display: 'none' } },
     el('div', { class: 'setting-row' },
       el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.privacyRadius')), el('div', { class: 'd' }, t('export.privacyRadiusHint'))),
       el('div', { class: 'inline-num' }, radiusInput, el('span', { class: 'small faint' }, 'm'))),
+    el('div', { class: 'field' }, el('label', {}, t('export.privacyMode')), privacyModeSelect),
+    el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.privacyOffset')), el('div', { class: 'd' }, t('export.privacyOffsetHint'))), labelSwitch(privacyOffsetCb)),
+    privacyModeNote,
     el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.hideSensitive'))), labelSwitch(hideCb)),
     el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.hideStartIcon'))), labelSwitch(startIconCb)),
     el('div', { class: 'setting-row' }, el('div', { class: 'txt' }, el('div', { class: 't' }, t('export.hideEndIcon'))), labelSwitch(endIconCb)),
@@ -154,6 +176,8 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
   function privacyOpts() {
     const opts: any = {
       radius: Math.max(0, +radiusInput.value || 0),
+      mode: privacyModeSelect.value,
+      offset: privacyOffsetCb.checked,
       hideSensitive: hideCb.checked
     };
     if (hideStartIcon) opts.hideStartIcon = true;
@@ -165,12 +189,15 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     if (!full || full.trip.id !== appState.activeTripId) {
       privacySummary.textContent = '';
       privacyCrop.textContent = '';
+      privacyModeNote.textContent = '';
       return;
     }
     const privacy = privacyOpts();
     const c = countPrivacyCrops(full, privacy);
     privacySummary.textContent = [
       privacy.radius > 0 ? `${t('export.checkCircle')} · ${privacy.radius} m` : t('export.privacyRadiusOff'),
+      t(privacy.mode === 'ends' ? 'export.privacyModeEnds' : 'export.privacyModeAll'),
+      privacy.radius > 0 && privacy.offset ? t('export.privacyOffsetOn') : '',
       hideCb.checked ? t('export.sensitiveHidden') : t('export.sensitiveVisible'),
       hideStartIcon || hideEndIcon
         ? (hideStartIcon && hideEndIcon ? t('export.iconsBothHidden')
@@ -179,6 +206,9 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       t(vectorCb.checked ? 'export.vectorOnlyOn' : 'export.vectorOnlyOff')
     ].join(' · ');
     privacyCrop.textContent = t('export.cropNote', { n: c.croppedPoints, m: c.croppedWaypoints });
+    privacyModeNote.textContent = privacy.mode === 'ends'
+      ? t('export.privacyEndsWarning')
+      : privacy.radius > 0 && privacy.offset ? t('export.privacyOffsetNote') : '';
   }
 
   function shareSectionActive() {
@@ -198,7 +228,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
     if (full.trip.id !== appState.activeTripId || curFull?.trip.id !== full.trip.id || curFull.trip.updatedAt !== full.trip.updatedAt) return;
     const privacy = privacyOpts();
     const base = getRecordMap?.()?.basemapId || '';
-    const key = [full.trip.id, full.trip.updatedAt, base, privacy.radius, privacy.hideSensitive, vectorCb.checked].join('|');
+    const key = [full.trip.id, full.trip.updatedAt, base, privacy.radius, privacy.mode, privacy.offset, privacy.hideSensitive, vectorCb.checked].join('|');
     if (key === warmKey) return;
     warmKey = key;
     clearTimeout(warmTimer);
@@ -719,7 +749,7 @@ export function createExportView(getRecordMap: () => any, navigate = () => {}) {
       return false;
     }
     const privacy = privacyOpts();
-    const key = JSON.stringify([full.trip.id, full.trip.updatedAt || 0, privacy.radius, privacy.hideSensitive]);
+    const key = JSON.stringify([full.trip.id, full.trip.updatedAt || 0, privacy.radius, privacy.mode, privacy.offset, privacy.hideSensitive]);
     if (key === linkCacheKey && linkCache) {
       if (linkCache.ok) {
         linkInput.value = linkCache.url;

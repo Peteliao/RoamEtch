@@ -98,6 +98,11 @@ describe('sync manifests and digests', () => {
     expect(() => parseSyncWire(JSON.stringify({
       type: 'record', record: { t: 'trips', id: 'trip-1', h: 'bad', data: { id: 'trip-1' } }
     }))).toThrow('sync-verify');
+    const complete = {
+      type: 'complete', digest: 'a'.repeat(64), through: 4, applied: 1, received: 2, sent: 3
+    };
+    expect(parseSyncWire(JSON.stringify({ ...complete, ack: true }))).toEqual({ ...complete, ack: true });
+    expect(() => parseSyncWire(JSON.stringify({ ...complete, ack: false }))).toThrow('sync-message');
   });
 });
 

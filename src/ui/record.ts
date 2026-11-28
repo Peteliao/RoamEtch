@@ -14,6 +14,7 @@ import { estimateCalories } from '../core/calories';
 import { altSourceShortKey, altSourceTagClass } from '../core/elevation';
 import { loadTripPreview, listWaypoints, updateTrip, getTrip, addPhotoWaypoint, deletePhotoWaypoint } from '../core/store';
 import { routeRepository } from '../core/routeRepository';
+import { findTrackGaps } from '../core/gapRepair';
 import { onBroadcast } from '../core/locks';
 import { clearHistory } from '../core/history';
 import { TrackMap } from './map';
@@ -1156,7 +1157,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     sheet.node.remove();
     if (resultSheet === sheet) resultSheet = null;
   }
-  function closeResultSheet(action = 'done') {
+  function closeResultSheet(action = 'done', intent = null) {
     const sheet = resultSheet;
     if (!sheet || sheet.closed) return Promise.resolve(false);
     if (sheet.closePromise) return sheet.closePromise;
@@ -1178,7 +1179,8 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
         await removeOverlayState(sheet.historyId);
         if (action === 'analysis' || action === 'export') {
           try {
-            await navigate(action);
+            if (intent) await navigate(action, intent);
+            else await navigate(action);
           } catch (e) {
             sheet.historyId = pushOverlayState(() => dismissResultSheet(sheet));
             console.error('result navigation failed', e);
@@ -1199,7 +1201,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     sheet.closePromise = close;
     return close;
   }
-  function showResultSheet({ tripId, defaultName, savedName, initialError = false }) {
+  function showResultSheet({ tripId, defaultName, savedName, initialError = false, gapCount = 0, gapDistance = '' }) {
     if (resultSheet) return false;
     const titleId = 'record-result-title';
     const inputId = 'record-result-name';
@@ -1231,6 +1233,18 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
         style: { flex: '1 1 0' }, onclick: () => { void closeResultSheet('done'); }
       }, t('common.save'))
     ];
+    const gapNotice = gapCount > 0
+      ? el('div', {
+        class: 'card', role: 'status',
+        style: { margin: '12px 0', padding: '12px', borderColor: 'var(--warn)' }
+      },
+        el('div', { style: { fontWeight: '650', marginBottom: '4px' } }, t('record.gapRepairTitle', { n: gapCount })),
+        el('p', { class: 'small muted', style: { margin: '0 0 10px' } }, t('record.gapRepairHint', { d: gapDistance })),
+        el('button', {
+          type: 'button', class: 'btn primary sm', 'data-result-gap-repair': '',
+          onclick: () => { void closeResultSheet('analysis', { section: 'data', anchor: 'track-gaps' }); }
+        }, icon('routeFwd', 15), t('analysis.gapFill')))
+      : null;
     const node = el('section', {
       class: 'record-result-sheet', role: 'dialog', 'aria-modal': 'false',
       'aria-labelledby': titleId,
@@ -1253,6 +1267,7 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
         input,
         el('div', { id: hintId, class: 'hint' }, t('record.nameTripHint')),
         error),
+      gapNotice,
       el('div', { style: { display: 'flex', gap: '8px' } }, actions)
     );
     const sheet = {
@@ -1342,7 +1357,13 @@ export function createRecordView(navigate: (name: 'analysis' | 'export' | 'setti
     renderBanners();
     renderViewBar();
     toast(t('record.stopped'), 'ok');
-    showResultSheet({ tripId: id, defaultName, savedName, initialError: initialNameError });
+    const saveGaps = full && (full.trip.activity === 'drive' || full.trip.activity === 'bike')
+      ? findTrackGaps(full.segments || [], { minDist: 300 })
+      : [];
+    const saveGapDistance = saveGaps.length
+      ? (() => { const d = fmtDistance(saveGaps.reduce((sum, gap) => sum + gap.distance, 0), get('units')); return `${d.v} ${d.u}`; })()
+      : '';
+    showResultSheet({ tripId: id, defaultName, savedName, initialError: initialNameError, gapCount: saveGaps.length, gapDistance: saveGapDistance });
   }
   function onStop() {
     if (stopFlowPromise) return stopFlowPromise;

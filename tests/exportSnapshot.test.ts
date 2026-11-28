@@ -219,7 +219,7 @@ describe('export snapshots', () => {
     expect(mocks.loadTripFull).toHaveBeenCalledTimes(1);
     expect(mocks.loadTripFull).toHaveBeenCalledWith('a', { trackSnapshot: mocks.state.activeTripFull });
     expect(mocks.generatePoster.mock.calls[0][0]).toBe(latest);
-    expect(mocks.generatePoster.mock.calls[0][1].privacy).toEqual({ radius: 0, hideSensitive: true });
+    expect(mocks.generatePoster.mock.calls[0][1].privacy).toEqual({ radius: 0, mode: 'all', offset: true, hideSensitive: true });
   });
 
   it('does not let a pending selector load overwrite a newer active event', async () => {
@@ -252,7 +252,7 @@ describe('export snapshots', () => {
 
     await vi.waitFor(() => expect(mocks.generateTrackVideo).toHaveBeenCalledTimes(1));
     expect(mocks.generateTrackVideo.mock.calls[0][0]).toBe(latest);
-    expect(mocks.generateTrackVideo.mock.calls[0][1].privacy).toEqual({ radius: 0, hideSensitive: true });
+    expect(mocks.generateTrackVideo.mock.calls[0][1].privacy).toEqual({ radius: 0, mode: 'all', offset: true, hideSensitive: true });
     expect(mocks.generateTrackVideo.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
     await vi.waitFor(() => expect(card(view, 'export.video').querySelector('video')!.style.display).toBe(''));
   });
@@ -467,7 +467,7 @@ describe('export snapshots', () => {
     posterCard.querySelector<HTMLButtonElement>('.btn.primary')!.click();
     await vi.waitFor(() => expect(preview.querySelector('img')).not.toBeNull());
     const posterOpts = mocks.generatePoster.mock.calls[0][1];
-    expect(posterOpts.privacy).toEqual({ radius: 0, hideSensitive: true, hideStartIcon: true });
+    expect(posterOpts.privacy).toEqual({ radius: 0, mode: 'all', offset: true, hideSensitive: true, hideStartIcon: true });
     expect(posterOpts.style).toMatchObject({ background: 'theme', trackColor: 'theme', trackWidth: 6.5, layout: 'stack' });
 
     const background = posterCard.querySelector<HTMLSelectElement>('.share-style select')!;
@@ -487,7 +487,7 @@ describe('export snapshots', () => {
 
     await vi.waitFor(() => expect(mocks.generateTrackVideo).toHaveBeenCalledTimes(1));
     const videoOpts = mocks.generateTrackVideo.mock.calls[0][1];
-    expect(videoOpts.privacy).toEqual({ radius: 0, hideSensitive: true, hideStartIcon: true });
+    expect(videoOpts.privacy).toEqual({ radius: 0, mode: 'all', offset: true, hideSensitive: true, hideStartIcon: true });
     expect(videoOpts.style).toMatchObject({ background: 'night', camera: 'follow', photoCutIn: false });
   });
 
@@ -500,7 +500,7 @@ describe('export snapshots', () => {
     emitActive(full);
     const privacyCard = card(view, 'export.privacy');
     const radius = privacyCard.querySelector<HTMLInputElement>('input[type="number"]')!;
-    const hide = privacyCard.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    const hide = privacyCard.querySelector<HTMLInputElement>('input.hide-sensitive')!;
     const summary = privacyCard.querySelector<HTMLElement>('.privacy-summary')!;
     const crop = privacyCard.querySelector<HTMLElement>('.privacy-crop')!;
     const controls = privacyCard.querySelector<HTMLElement>('.privacy-controls')!;

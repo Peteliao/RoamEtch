@@ -147,6 +147,94 @@ describe('privacy cropping', () => {
     });
   });
 
+  it('keeps mid-trip passes through the start circle in ends-only mode', () => {
+    const start = { lat: 30, lon: 120 };
+    const end = { lat: 30.03, lon: 120 };
+    const full = {
+      trip: { id: 'return-loop' }, waypoints: [],
+      segments: [{ id: 'loop', points: [120, 120.005, 120.01, 120.005, 120, 120.005, 120.01]
+        .map((lon) => ({ lat: 30, lon })) }]
+    };
+    const options = { radius: 300, start, end };
+    const all = applyPrivacy(full, options);
+    const ends = applyPrivacy(full, { ...options, mode: 'ends' });
+    expect(all.segments.length).toBeGreaterThan(1);
+    expect(ends.segments).toHaveLength(1);
+    expect(ends.segments[0].points.some((point) => point.lon === 120)).toBe(true);
+    expect(ends.croppedPoints).toBeLessThan(all.croppedPoints);
+    expect(countPrivacyCrops(full, { ...options, mode: 'ends' })).toEqual({
+      croppedPoints: ends.croppedPoints, croppedWaypoints: 0
+    });
+  });
+
+  it('offsets circles deterministically without weakening the requested radius', () => {
+    const full = {
+      trip: { id: 'offset-trip' }, waypoints: [],
+      segments: [{ id: 'offset', points: [120, 120.005, 120.01, 120.015, 120.02].map((lon) => ({ lat: 30, lon })) }]
+    };
+    const options = { radius: 300, offset: true, seed: 'stable-trip' };
+    const first = applyPrivacy(full, options);
+    const second = applyPrivacy(full, options);
+    const plain = applyPrivacy(full, { ...options, offset: false });
+    expect(first.segments).toEqual(second.segments);
+    expect(first.segments).not.toEqual(plain.segments);
+    const anchor = full.segments[0].points[0];
+    for (const segment of first.segments) {
+      for (const point of segment.points) {
+        expect(haversine(point.lat, point.lon, anchor.lat, anchor.lon)).toBeGreaterThanOrEqual(300 - 0.01);
+      }
+    }
+  });
+
+  it('trims ends-only privacy across fully hidden segments', () => {
+    const start = { lat: 30, lon: 120 };
+    const end = { lat: 30, lon: 120.02 };
+    const full = {
+      trip: { id: 'segment-ends' }, waypoints: [],
+      segments: [
+        { id: 'start-hidden', points: [{ lat: 30, lon: 120 }, { lat: 30, lon: 120.001 }] },
+        { id: 'start-exit', points: [{ lat: 30, lon: 120.0015 }, { lat: 30, lon: 120.004 }, { lat: 30, lon: 120.006 }] },
+        { id: 'middle', points: [{ lat: 30, lon: 120.008 }, { lat: 30, lon: 120.012 }] },
+        { id: 'end-enter', points: [{ lat: 30, lon: 120.018 }, { lat: 30, lon: 120.019 }] },
+        { id: 'end-hidden', points: [{ lat: 30, lon: 120.019 }, { lat: 30, lon: 120.0195 }] }
+      ]
+    };
+    const result = applyPrivacy(full, { radius: 300, mode: 'ends', start, end });
+    const retained = result.segments.flatMap((segment) => segment.points);
+    expect(retained.length).toBeGreaterThanOrEqual(4);
+    expect(retained.every((point) => haversine(point.lat, point.lon, start.lat, start.lon) >= 300 - 0.01)).toBe(true);
+    expect(retained.every((point) => haversine(point.lat, point.lon, end.lat, end.lon) >= 300 - 0.01)).toBe(true);
+    expect(retained.some((point) => point.lon > 120.004)).toBe(true);
+    expect(retained.some((point) => point.lon < 120.018)).toBe(true);
+    expect(countPrivacyCrops(full, { radius: 300, mode: 'ends', start, end })).toEqual({
+      croppedPoints: result.croppedPoints,
+      croppedWaypoints: 0
+    });
+  });
+
+  it('splits a diagonal return through an offset privacy circle', () => {
+    const center = { lat: 30, lon: 120 };
+    const full = {
+      trip: { id: 'offset-return' }, waypoints: [],
+      segments: [{ id: 'return', points: [
+        center,
+        { lat: 30.001, lon: 120.003 },
+        { lat: 30.004, lon: 120.006 },
+        { lat: 30.0005, lon: 120.0005 },
+        { lat: 30.006, lon: 120.009 }
+      ] }]
+    };
+    const result = applyPrivacy(full, {
+      radius: 150, offset: true, start: center, end: { lat: 31, lon: 121 }
+    });
+    expect(result.segments.length).toBeGreaterThan(1);
+    for (const segment of result.segments) {
+      for (const point of segment.points) {
+        expect(haversine(point.lat, point.lon, center.lat, center.lon)).toBeGreaterThanOrEqual(150 - 0.01);
+      }
+    }
+  });
+
   it('handles an empty track', () => {
     const result = applyPrivacy({ trip: {}, segments: [], waypoints: [] }, { radius: 300 });
     expect(result.segments).toEqual([]);

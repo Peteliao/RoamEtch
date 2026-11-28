@@ -48,7 +48,7 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
   const qualityBox = el('div', { class: 'analysis-data' });
   const advisory = el('div', { class: 'analysis-overview' });
   const gapBody = el('div', {});
-  const gapCard = el('div', { class: 'card analysis-data', style: { display: 'none' } },
+  const gapCard = el('div', { class: 'card analysis-data', 'data-anchor': 'track-gaps', style: { display: 'none' } },
     el('h3', {}, icon('routeFwd', 18), t('analysis.gapTitle')), gapBody);
   const miniMapBox = el('div', { class: 'analysis-map analysis-overview' });
   const chartWrap = el('div', { class: 'chart-wrap', 'aria-label': t('analysis.chartTitle') });
@@ -1225,6 +1225,19 @@ export function createAnalysisView(navigate, { embedded = false } = {}) {
   return {
     view,
     refresh: renderAll,
+    focus: async (intent) => {
+      const anchor = typeof intent === 'string' ? intent : intent?.anchor;
+      if (anchor !== 'track-gaps') return;
+      await renderAll();
+      requestAnimationFrame(() => {
+        if (gapCard.style.display === 'none') return;
+        gapCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        gapCard.classList.remove('settings-focus');
+        void gapCard.offsetWidth;
+        gapCard.classList.add('settings-focus');
+        setTimeout(() => gapCard.classList.remove('settings-focus'), 2000);
+      });
+    },
     resize: () => {
       miniMap?.resize();
       const w = chartWidth();
