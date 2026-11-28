@@ -2596,7 +2596,7 @@ html.oled-lock { color-scheme: dark; }
 .promo-brand-line { min-width: 0; }
 .promo-headline {
   display: grid; grid-column: 1 / -1; gap: 2px; min-width: 0;
-  font-family: var(--font-num); font-size: clamp(7px, 2.4vw, 13px); font-weight: 700; letter-spacing: -0.01em; line-height: 1.45; color: var(--text);
+  font-family: var(--font-num); font-size: clamp(7.2px, 2.25vw, 13px); font-weight: 700; letter-spacing: -0.02em; line-height: 1.45; color: var(--text);
 }
 .promo-slogan { display: block; white-space: nowrap; }
 .promo-preview-note { margin-bottom: 8px; }

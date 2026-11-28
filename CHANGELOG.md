@@ -24,6 +24,8 @@ All notable changes to RoamEtch are documented here. The format follows
 
 - Corrected singular and plural English and Spanish backup, export and story
   counts, and made re-walk speech prefer an exact Chinese locale or script voice.
+- Kept every localized slogan within narrow mobile cards across platform font
+  fallbacks without reducing it below the proportional readability threshold.
 - Calibrated Chromium startup and recovery node budgets for the overlapping
   outgoing map and incoming shell during reload, while retaining the stricter
   post-garbage-collection growth limit.
